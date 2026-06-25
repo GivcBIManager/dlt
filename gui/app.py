@@ -17,9 +17,10 @@ from pathlib import Path
 # directory is importable for the flat module imports below.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from flask import Flask, jsonify, render_template, request  # noqa: E402
+from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
 
 import commands  # noqa: E402
+import connections  # noqa: E402
 import cron_manager  # noqa: E402
 import iceberg_browser  # noqa: E402
 import tables_store  # noqa: E402
@@ -90,6 +91,11 @@ def page_iceberg():
     return render_template("iceberg.html", active="iceberg")
 
 
+@app.route("/connections")
+def page_connections():
+    return render_template("connections.html", active="connections")
+
+
 # --------------------------------------------------------------------------- #
 # Workspace / dashboard API
 # --------------------------------------------------------------------------- #
@@ -117,6 +123,45 @@ def api_branches():
 @api
 def api_control():
     return jsonify({"summary": workspace.control_summary(), "rows": workspace.control_rows()})
+
+
+@app.put("/api/settings")
+@api
+def api_settings_put():
+    return jsonify(workspace.update_etl_settings(_body()))
+
+
+# --------------------------------------------------------------------------- #
+# Connections API (Oracle branches in secrets.toml)
+# --------------------------------------------------------------------------- #
+@app.get("/api/connections")
+@api
+def api_conn_list():
+    return jsonify(connections.list_connections())
+
+
+@app.post("/api/connections")
+@api
+def api_conn_add():
+    return jsonify(connections.add_connection(_body()))
+
+
+@app.put("/api/connections/<key>")
+@api
+def api_conn_update(key):
+    return jsonify(connections.update_connection(key, _body()))
+
+
+@app.delete("/api/connections/<key>")
+@api
+def api_conn_delete(key):
+    return jsonify({"deleted": connections.delete_connection(key)})
+
+
+@app.post("/api/connections/<key>/test")
+@api
+def api_conn_test(key):
+    return jsonify(connections.test_connection(key))
 
 
 # --------------------------------------------------------------------------- #
@@ -173,6 +218,13 @@ def api_log_one(name):
     return jsonify({"name": name, "content": workspace.read_log_file(name)})
 
 
+@app.post("/api/logs/purge")
+@api
+def api_logs_purge():
+    b = _body()
+    return jsonify(workspace.purge_logs(before=b.get("before"), days=b.get("days")))
+
+
 # --------------------------------------------------------------------------- #
 # Tables API
 # --------------------------------------------------------------------------- #
@@ -218,13 +270,44 @@ def api_ib_overview(table):
 def api_ib_sample(table):
     limit = request.args.get("limit", 50, type=int)
     branch_id = request.args.get("branch_id", None, type=int)
-    return jsonify(iceberg_browser.sample_rows(table, limit=min(limit, 500), branch_id=branch_id))
+    snapshot_id = request.args.get("snapshot_id", None, type=int)
+    return jsonify(iceberg_browser.sample_rows(
+        table, limit=min(limit, 500), branch_id=branch_id, snapshot_id=snapshot_id,
+        date_col=request.args.get("date_col") or None,
+        date_from=request.args.get("date_from") or None,
+        date_to=request.args.get("date_to") or None))
+
+
+@app.get("/api/iceberg/tables/<table>/export")
+@api
+def api_ib_export(table):
+    branch_id = request.args.get("branch_id", None, type=int)
+    snapshot_id = request.args.get("snapshot_id", None, type=int)
+    fname = f"{table}" + (f"_branch{branch_id}" if branch_id is not None else "") + ".csv"
+    return Response(
+        iceberg_browser.iter_csv(
+            table, branch_id=branch_id, snapshot_id=snapshot_id,
+            date_col=request.args.get("date_col") or None,
+            date_from=request.args.get("date_from") or None,
+            date_to=request.args.get("date_to") or None),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @app.get("/api/iceberg/tables/<table>/branch-counts")
 @api
 def api_ib_branch_counts(table):
     return jsonify(iceberg_browser.branch_counts(table))
+
+
+@app.get("/api/iceberg/tables/<table>/aggregate")
+@api
+def api_ib_aggregate(table):
+    by = request.args.get("by", "branch")
+    date_col = request.args.get("date_col") or None
+    gran = request.args.get("gran", "day")
+    return jsonify(iceberg_browser.aggregate(table, by=by, date_col=date_col, gran=gran))
 
 
 @app.get("/api/iceberg/system/<table>")

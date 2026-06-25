@@ -13,17 +13,35 @@
 </div>
 
 <section data-panel="files">
-  <div class="grid-side">
-    <div class="panel">
-      <div class="panel-head"><h2>Files</h2><button class="btn sm ghost" id="refresh-files">↻</button></div>
-      <ul class="list" id="file-list"></ul>
-    </div>
-    <div class="panel">
-      <div class="panel-head">
-        <h2 id="file-title">Select a file</h2>
+  <div class="panel" id="file-panel">
+    <div class="panel-head">
+      <h2 id="file-title">Select a file</h2>
+      <div class="row-flex">
+        <button class="btn sm ghost" id="toggle-raw"><i class="fa-solid fa-terminal"></i> Raw log</button>
         <label class="checkbox" style="margin:0"><input type="checkbox" id="auto"><span>auto-refresh</span></label>
       </div>
-      <div id="file-content" class="console">—</div>
+    </div>
+
+    <!-- parsed progress dashboard (built from the selected log file) -->
+    {% include "_dash.html" %}
+
+    <div id="file-content" class="console">—</div>
+  </div>
+
+  <div class="panel" style="margin-top:18px">
+    <div class="panel-head">
+      <h2>Files</h2>
+      <button class="btn sm ghost" id="refresh-files">↻</button>
+    </div>
+    <div class="filter-bar" style="margin-bottom:12px">
+      <div><label>Delete logs modified before</label><input type="date" id="purge-date"></div>
+      <button class="btn bad sm" id="purge-btn" style="align-self:flex-end"><i class="fa-solid fa-trash"></i> Clear older</button>
+    </div>
+    <div class="table-wrap" style="max-height:340px">
+      <table id="files-table">
+        <thead><tr><th>Name</th><th class="num">Size</th><th>Modified</th></tr></thead>
+        <tbody id="file-list"></tbody>
+      </table>
     </div>
   </div>
 </section>
@@ -31,6 +49,10 @@
 <section data-panel="dq" hidden>
   <div class="panel">
     <div class="panel-head"><h2>etl_dq_results <small>(latest)</small></h2><button class="btn sm ghost" id="refresh-dq">↻</button></div>
+    <div class="filter-bar" id="dq-bar"></div>
+    <h2 style="font-size:.95rem;margin:6px 0 10px">Summary by branch × table</h2>
+    <div id="dq-summary"></div>
+    <h2 style="font-size:.95rem;margin:18px 0 10px">Detail</h2>
     <div id="dq"></div>
   </div>
 </section>
@@ -38,6 +60,7 @@
 <section data-panel="runlog" hidden>
   <div class="panel">
     <div class="panel-head"><h2>etl_run_log <small>(latest)</small></h2><button class="btn sm ghost" id="refresh-runlog">↻</button></div>
+    <div class="filter-bar" id="runlog-bar"></div>
     <div id="runlog"></div>
   </div>
 </section>
@@ -45,6 +68,7 @@
 <section data-panel="control" hidden>
   <div class="panel">
     <div class="panel-head"><h2>etl_control</h2><button class="btn sm ghost" id="refresh-control">↻</button></div>
+    <div class="filter-bar" id="control-bar"></div>
     <div id="control"></div>
   </div>
 </section>
@@ -54,28 +78,156 @@
 <script>
 let curFile = null, autoTimer = null;
 
+// Parse the selected log file into the same progress dashboard as the Run page.
+const fileDash = createLogDash();
+
+// ---------- column-role detection for the system tables ----------
+const TABLE_COLS  = ["table_name","table","source_table","target_table"];
+const BRANCH_COLS = ["branch","branch_id","branch_key","branch_name"];
+const STATUS_COLS = ["status","result","outcome"];
+// Ordered by preference — first match wins (check_time for DQ, start_time for run-log/control).
+const DATE_COLS   = ["check_time","start_time","started_at","run_started_at","recorded_at",
+                     "updated_at","window_start","window_end","window_until","window_from",
+                     "last_run_at","run_date","check_date","created_at","insert_at","end_time"];
+
+function pickCol(columns, candidates) {
+  const lower = columns.map(c => c.toLowerCase());
+  for (const cand of candidates) { const i = lower.indexOf(cand); if (i >= 0) return columns[i]; }
+  return null;
+}
+const dateOnly = (v) => v ? String(v).slice(0, 10) : "";
+
+// A filterable view over a system table (date / table / branch / status).
+function SysTable(cfg) {
+  let DATA = { columns: [], rows: [] };
+  let roles = {};
+  const state = { table: "", branch: "", status: "", from: "", to: "" };
+
+  function distinct(col) {
+    return [...new Set(DATA.rows.map(r => r[col]).filter(v => v != null && v !== ""))]
+      .map(String).sort();
+  }
+  function selHtml(field, label, values) {
+    return `<div><label>${esc(label)}</label><select data-f="${field}"><option value="">All</option>` +
+      values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("") + `</select></div>`;
+  }
+  function buildBar() {
+    const bar = el(cfg.barId);
+    const parts = [];
+    if (roles.table)  parts.push(selHtml("table", "Table", distinct(roles.table)));
+    if (roles.branch) parts.push(selHtml("branch", "Branch", distinct(roles.branch)));
+    if (roles.status) parts.push(selHtml("status", "Status", distinct(roles.status)));
+    if (roles.date) {
+      parts.push(`<div><label>From <small>(${esc(roles.date)})</small></label><input type="date" data-f="from"></div>`);
+      parts.push(`<div><label>To</label><input type="date" data-f="to"></div>`);
+    }
+    parts.push(`<button class="btn ghost sm" data-f="clear" style="align-self:flex-end">Clear</button>`);
+    parts.push(`<span class="spacer"></span><span class="muted" data-f="count"></span>`);
+    bar.innerHTML = parts.join("") || `<span class="muted">No filterable columns.</span>`;
+    bar.querySelectorAll("select,input").forEach(node =>
+      node.addEventListener("input", () => { state[node.dataset.f] = node.value; render(); }));
+    const clr = bar.querySelector('[data-f="clear"]');
+    if (clr) clr.onclick = () => {
+      Object.keys(state).forEach(k => state[k] = "");
+      bar.querySelectorAll("select,input").forEach(n => { if (n.dataset.f !== "clear") n.value = ""; });
+      render();
+    };
+  }
+  function filtered() {
+    return DATA.rows.filter(r => {
+      if (state.table && roles.table && String(r[roles.table]) !== state.table) return false;
+      if (state.branch && roles.branch && String(r[roles.branch]) !== state.branch) return false;
+      if (state.status && roles.status && String(r[roles.status]) !== state.status) return false;
+      if (roles.date && (state.from || state.to)) {
+        const d = dateOnly(r[roles.date]);
+        if (state.from && d < state.from) return false;
+        if (state.to && d > state.to) return false;
+      }
+      return true;
+    });
+  }
+  function render() {
+    const rows = filtered();
+    el(cfg.outId).innerHTML = renderTable(DATA.columns, rows, { pillCols: cfg.pillCols, numCols: cfg.numCols });
+    const cnt = el(cfg.barId).querySelector('[data-f="count"]');
+    if (cnt) cnt.textContent = `${rows.length} of ${DATA.rows.length} rows`;
+    if (cfg.summaryOutId) renderSummary(rows);
+  }
+  function renderSummary(rows) {
+    const box = el(cfg.summaryOutId);
+    if (!roles.branch && !roles.table) { box.innerHTML = `<div class="muted">No branch/table columns to summarize.</div>`; return; }
+    const map = new Map();
+    for (const r of rows) {
+      const b = roles.branch ? r[roles.branch] : "—";
+      const t = roles.table ? r[roles.table] : "—";
+      const key = b + " | " + t;
+      let e = map.get(key);
+      if (!e) { e = { branch: b, table_name: t, checks: 0, statuses: {} }; map.set(key, e); }
+      e.checks++;
+      const st = (roles.status ? r[roles.status] : "") || "";
+      if (st) e.statuses[st] = (e.statuses[st] || 0) + 1;
+    }
+    const sumRows = [...map.values()].map(e => ({
+      branch: e.branch, table_name: e.table_name, checks: e.checks,
+      status_breakdown: Object.entries(e.statuses).map(([k, v]) => `${k}: ${v}`).join("   ") || "—",
+    })).sort((a, b) => String(a.branch).localeCompare(String(b.branch)) ||
+                       String(a.table_name).localeCompare(String(b.table_name)));
+    box.innerHTML = renderTable(["branch", "table_name", "checks", "status_breakdown"], sumRows, { numCols: ["checks"] });
+  }
+  async function load() {
+    try {
+      DATA = await apiGet(cfg.endpoint);
+      roles = {
+        table: pickCol(DATA.columns, TABLE_COLS),
+        branch: pickCol(DATA.columns, BRANCH_COLS),
+        status: pickCol(DATA.columns, STATUS_COLS),
+        date: pickCol(DATA.columns, DATE_COLS),
+      };
+      buildBar();
+      render();
+    } catch (e) { el(cfg.outId).innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+  }
+  return { load };
+}
+
+const dqView = SysTable({
+  endpoint: "/api/iceberg/system/etl_dq_results?limit=2000", barId: "dq-bar", outId: "dq",
+  summaryOutId: "dq-summary", pillCols: ["status"],
+  numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta"],
+});
+const runlogView = SysTable({
+  endpoint: "/api/iceberg/system/etl_run_log?limit=2000", barId: "runlog-bar", outId: "runlog",
+  pillCols: ["status"], numCols: ["row_count","duration_ms","attempts"],
+});
+const controlView = SysTable({
+  endpoint: "/api/iceberg/system/etl_control?limit=2000", barId: "control-bar", outId: "control",
+  pillCols: ["status"], numCols: ["row_count","duration_ms"],
+});
+
 function showTab(tab) {
   $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
   $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
-  if (tab === "dq") loadDq();
-  if (tab === "runlog") loadRunlog();
-  if (tab === "control") loadControl();
+  if (tab === "dq") dqView.load();
+  if (tab === "runlog") runlogView.load();
+  if (tab === "control") controlView.load();
 }
 
+// ---------- log files ----------
 async function loadFiles() {
   try {
     const files = await apiGet("/api/logs");
     el("file-list").innerHTML = files.map(f => `
-      <li>
-        <a href="#" onclick="openFile('${esc(f.name)}');return false;">${esc(f.name)}</a>
-        <span class="muted">${fmtBytes(f.size)} · ${fmtDate(f.modified)}</span>
-      </li>`).join("") || `<li class="muted">No log files yet.</li>`;
+      <tr class="clickable ${f.name === curFile ? "selected" : ""}" data-f="${esc(f.name)}" onclick="openFile('${esc(f.name)}')">
+        <td class="mono">${esc(f.name)}</td>
+        <td class="num">${fmtBytes(f.size)}</td>
+        <td class="mono">${fmtDate(f.modified)}</td>
+      </tr>`).join("") || `<tr><td colspan="3" class="muted">No log files yet.</td></tr>`;
   } catch (e) { err(e.message); }
 }
-
 async function openFile(name) {
   curFile = name;
   el("file-title").textContent = name;
+  $$("#files-table tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.f === name));
   await refreshFile();
 }
 async function refreshFile() {
@@ -86,36 +238,27 @@ async function refreshFile() {
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
     c.textContent = r.content || "(empty)";
     if (atBottom) c.scrollTop = c.scrollHeight;
+    fileDash.load(r.content || "");
+  } catch (e) { err(e.message); }
+}
+async function purgeLogs() {
+  const before = el("purge-date").value;
+  if (!before) return err("Pick a date first");
+  if (!confirm(`Delete all run_logs modified before ${before}? Files are removed from disk.`)) return;
+  try {
+    const r = await apiPost("/api/logs/purge", { before });
+    ok(`Deleted ${r.count} file(s), freed ${fmtBytes(r.freed_bytes)}`);
+    loadFiles();
   } catch (e) { err(e.message); }
 }
 
-async function loadDq() {
-  try {
-    const d = await apiGet("/api/iceberg/system/etl_dq_results?limit=300");
-    el("dq").innerHTML = renderTable(d.columns, d.rows,
-      { pillCols: ["status"], numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta"] });
-  } catch (e) { el("dq").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
-}
-async function loadRunlog() {
-  try {
-    const d = await apiGet("/api/iceberg/system/etl_run_log?limit=300");
-    el("runlog").innerHTML = renderTable(d.columns, d.rows,
-      { pillCols: ["status"], numCols: ["row_count","duration_ms","attempts"] });
-  } catch (e) { el("runlog").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
-}
-async function loadControl() {
-  try {
-    const d = await apiGet("/api/iceberg/system/etl_control?limit=500");
-    el("control").innerHTML = renderTable(d.columns, d.rows,
-      { pillCols: ["status"], numCols: ["row_count","duration_ms"] });
-  } catch (e) { el("control").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
-}
-
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+el("toggle-raw").onclick = () => el("file-panel").classList.toggle("raw-hidden");
 el("refresh-files").onclick = loadFiles;
-el("refresh-dq").onclick = loadDq;
-el("refresh-runlog").onclick = loadRunlog;
-el("refresh-control").onclick = loadControl;
+el("purge-btn").onclick = purgeLogs;
+el("refresh-dq").onclick = () => dqView.load();
+el("refresh-runlog").onclick = () => runlogView.load();
+el("refresh-control").onclick = () => controlView.load();
 el("auto").onchange = (e) => {
   clearInterval(autoTimer);
   if (e.target.checked) autoTimer = setInterval(() => { refreshFile(); loadFiles(); }, 3000);

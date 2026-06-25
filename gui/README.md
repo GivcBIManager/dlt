@@ -36,20 +36,36 @@ python gui/app.py
 
 ## Pages
 
-- **Dashboard** — workspace health from `control_state.json`, branches, `[etl]` settings.
+- **Dashboard** — workspace health from `control_state.json`, branches, `[etl]`
+  settings. The per-table/branch state table has table/branch/status dropdown
+  filters, and the `[etl]` settings cards are editable in place (writes
+  `.dlt/config.toml`, keeping a timestamped backup).
+- **Connections** — create / edit / delete the Oracle branch connections in
+  `.dlt/secrets.toml` and test connectivity. Edits are surgical (only the
+  `[oracle_branches.*]` block is rewritten; comments and other sections are
+  preserved) and a backup is kept. Passwords are write-only — never sent back to
+  the browser.
 - **Run** — build an `oracle_to_iceberg` / `dq_check` / `snapshot_diff` / custom
-  command (mode, category, branch/table filters, …), run it, and watch live output.
-- **Schedule** — define recurring jobs and install them into the Ubuntu `crontab`.
-  Job definitions live in `gui/state/schedules.json` (the source of truth); on a
-  host with `cron`, **Apply to crontab** renders them into a managed block
-  (hand-written cron lines are preserved). On Windows the block is shown for you
-  to copy onto the Ubuntu host.
-- **Monitor** — tail run/cron log files (`run_logs/`) and view the Iceberg
-  observability tables `etl_run_log`, `etl_dq_results`, `etl_control`.
+  command (mode, category, branch/table filters, extra-args picker, …), run it,
+  and watch live output. **Command generation lives here**: *Schedule this…*
+  carries the built command to the Schedule page.
+- **Schedule** — pick *when* a command (built on the Run page) recurs via a
+  per-field cron builder (no presets), and review **All schedules** with their
+  status (enabled, live-in-crontab, last log write/size). Job definitions live in
+  `gui/state/schedules.json`; **Apply** renders enabled jobs into a managed
+  crontab block (hand-written lines preserved). On Windows the block is shown to
+  copy onto the Ubuntu host.
+- **Monitor** — tail run/cron log files (`run_logs/`), purge logs older than a
+  chosen date, and view the Iceberg observability tables. `etl_dq_results` adds a
+  date filter and a branch × table summary; `etl_run_log` / `etl_control` add
+  date/table/branch/status filters.
 - **Tables** — structured add/edit/delete + raw-JSON editor for `tables.json`,
-  with validation that mirrors the pipeline loader. Saves keep a timestamped backup.
-- **Iceberg** — list datasets under `iceberg_output/oasis`; inspect schema,
-  partition spec, snapshot history, sample rows, and per-branch counts.
+  with validation that mirrors the pipeline loader. The masters/transactions
+  containers scroll and have a wildcard name filter. Saves keep a backup.
+- **Iceberg** — datasets under `iceberg_output/oasis` as a table; inspect schema,
+  partition spec and snapshot history (snapshot ids link to the sample tab),
+  sample rows (branch dropdown + date filter, horizontal scroll, CSV export that
+  ignores the preview row limit), and branch/date/both count aggregation.
 
 ## Notes
 

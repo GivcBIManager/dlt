@@ -64,6 +64,13 @@ def _ms_to_iso(ms: int | None) -> str | None:
     return dt.datetime.fromtimestamp(ms / 1000).isoformat(timespec="seconds")
 
 
+def _id_str(snapshot_id: Any) -> str | None:
+    # Snapshot ids are 64-bit ints that exceed JS Number.MAX_SAFE_INTEGER, so
+    # they must cross the JSON boundary as strings or the browser rounds them
+    # (e.g. ...950847 -> ...950000) and the round-trip snapshot lookup fails.
+    return None if snapshot_id is None else str(snapshot_id)
+
+
 def list_tables() -> list[dict[str, Any]]:
     """All Iceberg datasets with headline numbers, data tables first."""
     if not ICEBERG_ROOT.is_dir():
@@ -143,7 +150,7 @@ def table_overview(table: str) -> dict[str, Any]:
         summary = s.get("summary", {})
         snaps.append(
             {
-                "snapshot_id": s.get("snapshot-id"),
+                "snapshot_id": _id_str(s.get("snapshot-id")),
                 "committed": _ms_to_iso(s.get("timestamp-ms")),
                 "operation": summary.get("operation"),
                 "added_records": int(summary.get("added-records", 0) or 0),
@@ -161,7 +168,7 @@ def table_overview(table: str) -> dict[str, Any]:
         "location": meta.get("location"),
         "format_version": meta.get("format-version"),
         "updated": _ms_to_iso(meta.get("last-updated-ms")),
-        "current_snapshot_id": meta.get("current-snapshot-id"),
+        "current_snapshot_id": _id_str(meta.get("current-snapshot-id")),
         "rows": int(cur_summary.get("total-records", 0) or 0),
         "files": int(cur_summary.get("total-data-files", 0) or 0),
         "size_bytes": int(cur_summary.get("total-files-size", 0) or 0),
@@ -210,25 +217,138 @@ def _jsonable(v: Any) -> Any:
     return str(v)
 
 
-def sample_rows(table: str, limit: int = 50, branch_id: int | None = None) -> dict[str, Any]:
-    """First ``limit`` rows (optionally one branch partition) as dicts."""
-    tbl = _open_static(table)
+def _scan_kwargs(branch_id: int | None, snapshot_id: int | None) -> dict[str, Any]:
+    # branch_id is a partition value -> push it down as a row filter (prunes
+    # files). Date filtering is applied in Python below (robust across the date /
+    # timestamp / numeric-Julian columns this lake mixes).
     kwargs: dict[str, Any] = {}
     if branch_id is not None:
         kwargs["row_filter"] = f"branch_id = {int(branch_id)}"
-    scan = tbl.scan(**kwargs)
+    if snapshot_id is not None:
+        kwargs["snapshot_id"] = int(snapshot_id)
+    return kwargs
 
+
+def _date_ok(value: Any, date_from: str | None, date_to: str | None) -> bool:
+    d = "" if value is None else str(value)[:10]
+    if date_from and d < date_from:
+        return False
+    if date_to and d > date_to:
+        return False
+    return True
+
+
+def sample_rows(table: str, limit: int = 50, branch_id: int | None = None,
+                snapshot_id: int | None = None, date_col: str | None = None,
+                date_from: str | None = None, date_to: str | None = None) -> dict[str, Any]:
+    """First ``limit`` rows after branch / snapshot / date-range filtering."""
+    tbl = _open_static(table)
+    scan = tbl.scan(**_scan_kwargs(branch_id, snapshot_id))
     columns = [f.name for f in tbl.schema().fields]
+    by_date = bool(date_col and (date_from or date_to))
+
     rows: list[dict[str, Any]] = []
     for batch in scan.to_arrow_batch_reader():
         if not batch.num_rows:
             continue
-        take = min(batch.num_rows, limit - len(rows))
-        sub = batch.slice(0, take).to_pylist()
-        rows.extend({k: _jsonable(v) for k, v in r.items()} for r in sub)
+        for r in batch.to_pylist():
+            jr = {k: _jsonable(v) for k, v in r.items()}
+            if by_date and not _date_ok(jr.get(date_col), date_from, date_to):
+                continue
+            rows.append(jr)
+            if len(rows) >= limit:
+                break
         if len(rows) >= limit:
             break
-    return {"columns": columns, "rows": rows}
+    return {"columns": columns, "rows": rows, "snapshot_id": snapshot_id}
+
+
+def iter_csv(table: str, branch_id: int | None = None, snapshot_id: int | None = None,
+             date_col: str | None = None, date_from: str | None = None,
+             date_to: str | None = None):
+    """Stream the *entire* filtered table as CSV rows — ignores any row limit."""
+    import csv
+    import io
+
+    tbl = _open_static(table)
+    columns = [f.name for f in tbl.schema().fields]
+    scan = tbl.scan(**_scan_kwargs(branch_id, snapshot_id))
+    by_date = bool(date_col and (date_from or date_to))
+
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+
+    def flush() -> str:
+        out = buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        return out
+
+    writer.writerow(columns)
+    yield flush()
+    for batch in scan.to_arrow_batch_reader():
+        if not batch.num_rows:
+            continue
+        for r in batch.to_pylist():
+            jr = {c: _jsonable(r.get(c)) for c in columns}
+            if by_date and not _date_ok(jr.get(date_col), date_from, date_to):
+                continue
+            writer.writerow([jr[c] for c in columns])
+        yield flush()
+
+
+def aggregate(table: str, by: str = "branch", date_col: str | None = None,
+              gran: str = "day") -> dict[str, Any]:
+    """Row counts grouped by ``branch_id``, a truncated date column, or both."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    tbl = _open_static(table)
+    names = [f.name for f in tbl.schema().fields]
+    want_branch = by in ("branch", "both") and "branch_id" in names
+    want_date = by in ("date", "both")
+    if want_date and (not date_col or date_col not in names):
+        raise ValueError("A valid date column is required to aggregate by date")
+
+    select = [c for c in (("branch_id" if want_branch else None), (date_col if want_date else None)) if c]
+    if not select:
+        return {"columns": [], "rows": []}
+
+    arrow = tbl.scan(selected_fields=tuple(select)).to_arrow()
+    cols: dict[str, Any] = {}
+    group_keys: list[str] = []
+    out_cols: list[str] = []
+    if want_branch:
+        cols["branch_id"] = arrow.column("branch_id")
+        group_keys.append("branch_id")
+        out_cols.append("branch_id")
+    if want_date:
+        cols["period"] = _date_bucket(arrow.column(date_col), gran, pa, pc)
+        group_keys.append("period")
+        out_cols.append("period")
+    out_cols.append("rows")
+
+    if arrow.num_rows == 0:
+        return {"columns": out_cols, "rows": []}
+
+    gt = pa.table(cols)
+    grouped = gt.group_by(group_keys).aggregate([(group_keys[0], "count")])
+    count_name = f"{group_keys[0]}_count"
+    rows = []
+    for rec in grouped.to_pylist():
+        row = {k: _jsonable(rec.get(k)) for k in group_keys}
+        row["rows"] = rec.get(count_name)
+        rows.append(row)
+    rows.sort(key=lambda r: tuple((r[k] is None, r[k]) for k in group_keys))
+    return {"columns": out_cols, "rows": rows}
+
+
+def _date_bucket(arr, gran: str, pa, pc):
+    fmt = {"year": "%Y", "month": "%Y-%m", "day": "%Y-%m-%d"}.get(gran, "%Y-%m-%d")
+    if pa.types.is_temporal(arr.type):
+        return pc.strftime(arr, format=fmt)
+    n = {"year": 4, "month": 7, "day": 10}.get(gran, 10)
+    return pc.utf8_slice_codeunits(pc.cast(arr, pa.string()), 0, n)
 
 
 def branch_counts(table: str) -> list[dict[str, Any]]:

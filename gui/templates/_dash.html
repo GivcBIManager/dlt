@@ -1,0 +1,29 @@
+{# Parsed live progress dashboard. Rendered by static/runparse.js (createLogDash).
+   Included by run.html (live tail) and logs.html (whole-file). #}
+<div id="run-dash" class="run-dash" hidden>
+  <div class="rd-overall">
+    <div class="rd-overall-top">
+      <span id="rd-stage" class="rd-stage">starting</span>
+      <span class="rd-metrics">
+        <i class="fa-regular fa-clock"></i> <span id="rd-elapsed">0:00:00</span>
+        <span class="rd-sep">·</span> <span id="rd-rows">0 rows</span>
+        <span class="rd-sep">·</span> <span id="rd-mem">rss —</span>
+        <span id="rd-fail" class="rd-fail" hidden></span>
+      </span>
+    </div>
+    <div class="rd-bar"><div id="rd-bar-fill" class="rd-bar-fill"></div><span id="rd-bar-label" class="rd-bar-label"></span></div>
+  </div>
+
+  <div class="rd-section-head"><span>Tables</span><span id="rd-branch-strip" class="rd-branch-strip"></span></div>
+  <div class="table-wrap rd-tablewrap">
+    <table class="rd-table">
+      <thead><tr><th>Table</th><th>Extract (branches)</th><th>Load</th><th class="num">Rows</th><th>Issue</th></tr></thead>
+      <tbody id="rd-tbody"></tbody>
+    </table>
+  </div>
+
+  <details id="rd-issues-box" class="rd-issues" hidden>
+    <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="rd-issue-count">0</span>)</summary>
+    <div id="rd-issues"></div>
+  </details>
+</div>

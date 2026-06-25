@@ -2,205 +2,200 @@
 {% block content %}
 <div class="page-head">
   <h1><i class="fa-solid fa-clock"></i> Schedule</h1>
-  <p>Define recurring runs and install them as Ubuntu <span class="mono">cron</span> jobs.</p>
+  <p>Pick when a command (built on the <a href="/run">Run</a> page) recurs, and install it as an Ubuntu <span class="mono">cron</span> job.</p>
 </div>
 
 <div id="cron-banner"></div>
 
-<div class="grid-side">
-  <!-- editor -->
+<div class="row-flex" style="margin-bottom:16px">
+  <button class="btn tab primary" data-tab="configure">Configure</button>
+  <button class="btn tab" data-tab="list">All schedules <span id="job-count" class="tag"></span></button>
+</div>
+
+<!-- ============================ CONFIGURE ============================ -->
+<section data-panel="configure">
   <div class="panel">
-    <h2 id="form-title">New schedule</h2>
-    <label>Name</label>
-    <input id="s-name" placeholder="nightly-incremental">
-
-    <label>Schedule</label>
-    <div class="form-row">
-      <select id="s-preset"><option value="">— preset —</option></select>
-      <input id="s-expr" class="mono" placeholder="0 2 * * *">
+    <div class="panel-head">
+      <h2 id="form-title">New schedule</h2>
+      <button class="btn ghost sm" id="s-reset" hidden><i class="fa-solid fa-xmark"></i> Cancel edit</button>
     </div>
-    <div class="hint">5 fields: minute hour day-of-month month day-of-week. e.g. <span class="mono">*/15 * * * *</span></div>
 
-    <label style="margin-top:12px">Task</label>
-    <select id="s-script">
-      <option value="oracle_to_iceberg">oracle_to_iceberg</option>
-      <option value="dq_check">dq_check</option>
-      <option value="snapshot_diff">snapshot_diff</option>
-      <option value="fresh_run">fresh_run</option>
-      <option value="custom">custom</option>
-    </select>
+    <div id="no-spec" class="banner warn" hidden>
+      <span>No command selected. Build one on the <b>Run</b> page and click <b>Schedule this…</b>, or edit an existing schedule.</span>
+      <button class="btn sm" style="margin-left:auto" onclick="location.href='/run'">Go to Run page</button>
+    </div>
 
-    <div data-grp="oracle_to_iceberg">
-      <div class="form-row">
-        <div><label>Mode</label><select id="s-mode"><option>INCREMENTAL</option><option>INITIAL</option></select></div>
-        <div><label>Category</label><select id="s-category"><option>both</option><option>masters</option><option>transactions</option></select></div>
+    <label>Command to schedule <small>(generated on the Run page)</small></label>
+    <div id="cmd-preview" class="codeline">—</div>
+
+    <div class="form-row" style="margin-top:14px">
+      <div>
+        <label>Name</label>
+        <input id="s-name" placeholder="nightly-incremental">
+      </div>
+      <div>
+        <label>Cron expression <small>(edit directly to override the fields below)</small></label>
+        <input id="s-expr" class="mono" placeholder="0 2 * * *">
       </div>
     </div>
-    <div data-grp="dq_check" hidden>
-      <div class="form-row">
-        <div><label>Since</label><input id="s-since" placeholder="YYYY-MM-DD"></div>
-        <div><label>Until</label><input id="s-until" placeholder="YYYY-MM-DD"></div>
-      </div>
-      <div class="checkbox"><input type="checkbox" id="s-no_hash"><label for="s-no_hash">--no-hash</label></div>
-    </div>
-    <div data-grp="snapshot_diff" hidden>
-      <div class="form-row">
-        <div><label>Lake table</label><input id="s-sd_table" value="delivery_charge"></div>
-        <div><label>Unique key</label><input id="s-sd_key" value="delivery_charge_id"></div>
-      </div>
-    </div>
-    <div data-grp="custom" hidden>
-      <label>Raw command</label><textarea id="s-custom" placeholder="python diagnostics/table_stats.py"></textarea>
-    </div>
 
-    <fieldset data-grp="oracle_to_iceberg dq_check">
-      <legend>Filters</legend>
-      <div class="form-row">
-        <div><label>Branches (comma)</label><input id="s-branches" placeholder="all"></div>
-        <div><label>Tables (comma)</label><input id="s-tables" placeholder="all"></div>
-      </div>
-      <label>Extra args</label><input id="s-extra" placeholder="--max-table-workers 1">
-    </fieldset>
-
-    <label>Command preview</label>
-    <div id="s-preview" class="codeline">—</div>
+    <label style="margin-top:16px">Schedule — configure each cron field</label>
+    <div class="cron-grid">
+      <div><label>Minute</label><input id="cf-min" class="mono" value="0"></div>
+      <div><label>Hour</label><input id="cf-hour" class="mono" value="2"></div>
+      <div><label>Day of month</label><input id="cf-dom" class="mono" value="*"></div>
+      <div><label>Month</label><input id="cf-mon" class="mono" value="*"></div>
+      <div><label>Day of week</label><input id="cf-dow" class="mono" value="*"></div>
+    </div>
+    <div class="hint">minute · hour · day-of-month · month · day-of-week. Each field accepts numbers, <span class="mono">*</span>, ranges (<span class="mono">1-5</span>), lists (<span class="mono">1,15</span>) and steps (<span class="mono">*/15</span>).</div>
+    <div id="cron-human" class="hint"></div>
 
     <div class="btn-row">
-      <button class="btn primary" id="s-save">Save schedule</button>
-      <button class="btn ghost" id="s-reset" hidden>Cancel edit</button>
+      <button class="btn primary" id="s-save"><i class="fa-solid fa-floppy-disk"></i> Save schedule</button>
     </div>
   </div>
 
-  <!-- jobs + install -->
-  <div>
-    <div class="panel">
-      <div class="panel-head">
-        <h2>Scheduled jobs</h2>
-        <div class="row-flex">
-          <button class="btn good sm" id="install"><i class="fa-solid fa-circle-check"></i> Apply to crontab</button>
-          <button class="btn ghost sm" id="uninstall">Remove block</button>
-        </div>
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Apply to crontab</h2>
+      <div class="row-flex">
+        <button class="btn good sm" id="install"><i class="fa-solid fa-circle-check"></i> Apply</button>
+        <button class="btn ghost sm" id="uninstall">Remove block</button>
+        <button class="btn sm ghost" id="copy-block"><i class="fa-solid fa-copy"></i> Copy block</button>
       </div>
-      <div id="jobs"></div>
     </div>
+    <div id="block" class="console" style="max-height:320px">—</div>
+  </div>
+</section>
 
-    <div class="panel">
-      <div class="panel-head"><h2>Rendered crontab block</h2><button class="btn sm ghost" id="copy-block">Copy</button></div>
-      <div id="block" class="console" style="max-height:260px">—</div>
+<!-- ============================ ALL SCHEDULES ============================ -->
+<section data-panel="list" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>All schedules</h2><button class="btn sm ghost" id="refresh-jobs">↻</button></div>
+    <div class="table-wrap">
+      <table id="jobs-table">
+        <thead><tr>
+          <th>Name</th><th>Cron</th><th>State</th><th>Live</th><th>Command</th>
+          <th>Log</th><th>Last written</th><th class="num">Size</th><th>Created</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
-</div>
+</section>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let editingId = null;
+let currentSpec = null;   // the command to schedule (carried from Run, or a job's spec)
+let JOBS = [];
 
-function specFromForm() {
-  const script = el("s-script").value;
-  const spec = { script };
-  if (script === "oracle_to_iceberg") { spec.mode = el("s-mode").value; spec.category = el("s-category").value; }
-  else if (script === "dq_check") { spec.since = el("s-since").value; spec.until = el("s-until").value; spec.no_hash = el("s-no_hash").checked; }
-  else if (script === "snapshot_diff") { spec.table = el("s-sd_table").value; spec.unique_key = el("s-sd_key").value; }
-  else if (script === "custom") { spec.custom = el("s-custom").value; }
-  if (script === "oracle_to_iceberg" || script === "dq_check") {
-    spec.branches = el("s-branches").value; spec.tables = el("s-tables").value; spec.extra = el("s-extra").value;
+function showTab(tab) {
+  $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
+  $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
+  if (tab === "list") renderJobs();
+}
+
+// ---- cron field <-> expression sync ----
+function composeExpr() {
+  el("s-expr").value = [el("cf-min").value, el("cf-hour").value, el("cf-dom").value,
+                        el("cf-mon").value, el("cf-dow").value].map(v => v.trim() || "*").join(" ");
+  describeCron();
+}
+function decomposeExpr() {
+  const parts = el("s-expr").value.trim().split(/\s+/);
+  if (parts.length === 5) {
+    [["cf-min",0],["cf-hour",1],["cf-dom",2],["cf-mon",3],["cf-dow",4]].forEach(([id,i]) => el(id).value = parts[i]);
   }
-  return spec;
+  describeCron();
+}
+function describeCron() {
+  const e = el("s-expr").value.trim();
+  el("cron-human").textContent = e ? `cron: ${e}` : "";
 }
 
-function syncGroups() {
-  const script = el("s-script").value;
-  $$("[data-grp]").forEach(g => g.hidden = !g.dataset.grp.split(" ").includes(script));
-}
-
-let pvTimer;
-async function preview() {
-  clearTimeout(pvTimer);
-  pvTimer = setTimeout(async () => {
-    try { const r = await apiPost("/api/command/preview", specFromForm()); el("s-preview").textContent = r.preview; }
-    catch (e) { el("s-preview").textContent = "⚠ " + e.message; }
-  }, 150);
+async function refreshCommand() {
+  if (!currentSpec) { el("cmd-preview").textContent = "—"; el("no-spec").hidden = false; return; }
+  el("no-spec").hidden = true;
+  try {
+    const r = await apiPost("/api/command/preview", currentSpec);
+    el("cmd-preview").textContent = r.preview;
+  } catch (e) { el("cmd-preview").textContent = "⚠ " + e.message; }
 }
 
 function banner(st) {
-  if (st.available) {
-    el("cron-banner").innerHTML = `<div class="banner info">cron is available on this host — saved jobs can be applied to the live crontab.</div>`;
-  } else {
-    el("cron-banner").innerHTML = `<div class="banner warn">cron is not available on this host (Windows). Jobs are saved here; copy the rendered block onto the Ubuntu host (<span class="mono">crontab -e</span>) or run this panel there and click <b>Apply to crontab</b>.</div>`;
-  }
+  el("cron-banner").innerHTML = st.available
+    ? `<div class="banner info">cron is available on this host — saved jobs can be applied to the live crontab.</div>`
+    : `<div class="banner warn">cron is not available on this host (Windows). Jobs are saved here; copy the rendered block onto the Ubuntu host (<span class="mono">crontab -e</span>) or run this panel there and click <b>Apply</b>.</div>`;
 }
 
+let INSTALLED = new Set();
 async function load() {
   try {
     const data = await apiGet("/api/schedules");
     banner(data.status);
     el("block").textContent = data.status.block || "—";
-    if (!el("s-preset").dataset.filled) {
-      el("s-preset").insertAdjacentHTML("beforeend",
-        data.presets.map(p => `<option value="${esc(p.expr)}">${esc(p.label)} (${esc(p.expr)})</option>`).join(""));
-      el("s-preset").dataset.filled = "1";
-    }
-    const installed = new Set(data.status.installed_ids || []);
-    el("jobs").innerHTML = data.jobs.map(j => `
-      <div class="card" style="margin-bottom:10px">
-        <div class="row-flex">
-          <b>${esc(j.name)}</b>
-          ${pill(j.enabled ? "ok" : "stopped")}
-          <span class="tag mono">${esc(j.expr)}</span>
-          ${installed.has(j.id) ? `<span class="pill running">live</span>` : ""}
-          <span class="spacer"></span>
-          <button class="btn sm ghost" onclick="editJob('${j.id}')">Edit</button>
-          <button class="btn sm" onclick="toggleJob('${j.id}', ${j.enabled ? "false":"true"})">${j.enabled ? "Disable":"Enable"}</button>
-          <button class="btn sm bad" onclick="delJob('${j.id}')">Delete</button>
-        </div>
-        <div class="muted" style="margin:6px 0 4px">${esc(j.label)} → log <span class="mono">${esc(j.log)}</span></div>
-        <div class="codeline">${esc(j.cron_line)}</div>
-      </div>`).join("") || `<div class="muted">No schedules yet.</div>`;
-    window._jobs = data.jobs;
+    INSTALLED = new Set(data.status.installed_ids || []);
+    JOBS = data.jobs;
+    el("job-count").textContent = JOBS.length;
+    renderJobs();
   } catch (e) { err(e.message); }
 }
 
+function renderJobs() {
+  $("#jobs-table tbody").innerHTML = JOBS.map(j => `
+    <tr>
+      <td><b>${esc(j.name)}</b></td>
+      <td class="mono">${esc(j.expr)}</td>
+      <td>${pill(j.enabled ? "ok" : "stopped")}</td>
+      <td>${INSTALLED.has(j.id) ? '<span class="pill running">live</span>' : '<span class="muted">—</span>'}</td>
+      <td class="mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis" title="${esc(j.command)}">${esc(j.command)}</td>
+      <td class="mono">${esc(j.log)}</td>
+      <td class="mono">${j.log_exists ? fmtDate(j.log_modified) : "—"}</td>
+      <td class="num">${j.log_exists ? fmtBytes(j.log_size) : "—"}</td>
+      <td class="mono">${fmtDate(j.created_at)}</td>
+      <td class="row-flex">
+        <button class="btn sm ghost" onclick="editJob('${j.id}')">Edit</button>
+        <button class="btn sm" onclick="toggleJob('${j.id}', ${j.enabled ? "false":"true"})">${j.enabled ? "Disable":"Enable"}</button>
+        <button class="btn sm bad" onclick="delJob('${j.id}')">Delete</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="10" class="muted">No schedules yet — build a command on the Run page and click “Schedule this…”.</td></tr>`;
+}
+
 function editJob(id) {
-  const j = (window._jobs || []).find(x => x.id === id);
+  const j = JOBS.find(x => x.id === id);
   if (!j) return;
   editingId = id;
+  currentSpec = j.spec || null;
   el("form-title").textContent = "Edit: " + j.name;
   el("s-reset").hidden = false;
-  el("s-name").value = j.name; el("s-expr").value = j.expr;
-  const s = j.spec || {};
-  el("s-script").value = s.script || "oracle_to_iceberg";
-  el("s-mode").value = s.mode || "INCREMENTAL";
-  el("s-category").value = s.category || "both";
-  el("s-since").value = s.since || ""; el("s-until").value = s.until || "";
-  el("s-no_hash").checked = !!s.no_hash;
-  el("s-sd_table").value = s.table || "delivery_charge"; el("s-sd_key").value = s.unique_key || "delivery_charge_id";
-  el("s-custom").value = s.custom || "";
-  el("s-branches").value = Array.isArray(s.branches) ? s.branches.join(",") : (s.branches || "");
-  el("s-tables").value = Array.isArray(s.tables) ? s.tables.join(",") : (s.tables || "");
-  el("s-extra").value = s.extra || "";
-  syncGroups(); preview();
+  el("s-name").value = j.name;
+  el("s-expr").value = j.expr;
+  decomposeExpr();
+  refreshCommand();
+  showTab("configure");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function resetForm() {
   editingId = null;
+  currentSpec = null;
   el("form-title").textContent = "New schedule";
   el("s-reset").hidden = true;
-  el("s-name").value = ""; el("s-expr").value = "";
-  el("s-branches").value = ""; el("s-tables").value = ""; el("s-extra").value = "";
-  preview();
+  el("s-name").value = "";
+  refreshCommand();
 }
 
 async function save() {
   const name = el("s-name").value.trim();
   const expr = el("s-expr").value.trim();
+  if (!currentSpec) return err("No command to schedule — build one on the Run page first.");
   if (!name) return err("Name is required");
   if (!expr) return err("Schedule expression is required");
-  const spec = specFromForm();
   try {
-    if (editingId) { await apiPut(`/api/schedules/${editingId}`, { name, expr, spec }); ok("Updated"); }
-    else { await apiPost("/api/schedules", { name, expr, spec }); ok("Saved"); }
+    if (editingId) { await apiPut(`/api/schedules/${editingId}`, { name, expr, spec: currentSpec }); ok("Updated"); }
+    else { await apiPost("/api/schedules", { name, expr, spec: currentSpec }); ok("Saved"); }
     resetForm(); load();
   } catch (e) { err(e.message); }
 }
@@ -209,15 +204,32 @@ async function delJob(id) { if(!confirm("Delete this schedule?")) return; try { 
 async function install() { try { const r = await apiPost("/api/schedules/install"); r.installed ? ok(`Installed ${r.count} job(s) to crontab`) : err(r.reason); load(); } catch(e){ err(e.message);} }
 async function uninstall() { try { const r = await apiPost("/api/schedules/uninstall"); r.installed ? ok("Removed managed block") : err(r.reason); load(); } catch(e){ err(e.message);} }
 
-el("s-preset").onchange = () => { if (el("s-preset").value) { el("s-expr").value = el("s-preset").value; preview(); } };
-el("s-script").onchange = () => { syncGroups(); preview(); };
-$$("#s-mode,#s-category,#s-since,#s-until,#s-no_hash,#s-sd_table,#s-sd_key,#s-custom,#s-branches,#s-tables,#s-extra,#s-expr")
-  .forEach(n => { n.addEventListener("input", preview); n.addEventListener("change", preview); });
+// Wire up cron field <-> expression two-way sync.
+["cf-min","cf-hour","cf-dom","cf-mon","cf-dow"].forEach(id => el(id).addEventListener("input", composeExpr));
+el("s-expr").addEventListener("input", decomposeExpr);
+
+$$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("s-save").onclick = save;
 el("s-reset").onclick = resetForm;
 el("install").onclick = install;
 el("uninstall").onclick = uninstall;
+el("refresh-jobs").onclick = load;
 el("copy-block").onclick = () => { navigator.clipboard.writeText(el("block").textContent); ok("Copied"); };
-syncGroups(); preview(); load();
+
+// Consume a command carried over from the Run page (one-shot).
+(function initSpec() {
+  const raw = sessionStorage.getItem("oasis_schedule_spec");
+  if (raw) {
+    try {
+      const carried = JSON.parse(raw);
+      currentSpec = carried.spec || null;
+      if (carried.name && !el("s-name").value) el("s-name").value = carried.name;
+    } catch (e) { /* ignore */ }
+    sessionStorage.removeItem("oasis_schedule_spec");
+  }
+  composeExpr();
+  refreshCommand();
+})();
+load();
 </script>
 {% endblock %}

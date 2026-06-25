@@ -55,35 +55,50 @@
 
     <fieldset data-grp="oracle_to_iceberg dq_check" id="filters">
       <legend>Filters</legend>
+
       <label>Branches <small>(none = all)</small></label>
-      <div id="branch-chips" class="chips"></div>
+      <select id="branches" multiple class="multi" size="5"></select>
+      <div class="hint">Ctrl/⌘-click to pick several · empty = all branches.</div>
+
       <label style="margin-top:12px">Tables <small>(none = all)</small></label>
-      <div id="table-chips" class="chips"></div>
+      <input id="table-search" placeholder="wildcard filter — e.g. *appointment*" style="margin-bottom:6px" autocomplete="off">
+      <select id="tables" multiple class="multi" size="6"></select>
+      <div class="hint" id="table-hint"></div>
+
       <div class="form-row" style="margin-top:12px">
         <div><label>Log level</label>
           <select id="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></div>
-        <div><label>Extra args</label><input id="extra" placeholder="--max-table-workers 1"></div>
+        <div></div>
       </div>
+
+      <label style="margin-top:8px">Extra args <small>(tick to add · hover a value for examples)</small></label>
+      <div id="extra-args" class="extra-args"></div>
     </fieldset>
 
     <label>Command preview</label>
     <div id="preview" class="codeline">—</div>
     <div class="btn-row">
       <button class="btn primary" id="run-btn"><i class="fa-solid fa-play"></i> Run now</button>
+      <button class="btn" id="sched-btn"><i class="fa-solid fa-calendar-plus"></i> Schedule this…</button>
       <button class="btn ghost" id="copy-btn"><i class="fa-solid fa-copy"></i> Copy command</button>
     </div>
   </div>
 
   <!-- console + history -->
   <div>
-    <div class="panel">
+    <div class="panel" id="run-panel">
       <div class="panel-head">
         <h2>Live output <span id="cur-run" class="tag"></span></h2>
         <div class="row-flex">
           <span id="cur-status"></span>
+          <button class="btn sm ghost" id="toggle-raw"><i class="fa-solid fa-terminal"></i> Raw log</button>
           <button class="btn bad sm" id="stop-btn" hidden><i class="fa-solid fa-stop"></i> Stop</button>
         </div>
       </div>
+
+      <!-- parsed live dashboard (built from the streamed log) -->
+      {% include "_dash.html" %}
+
       <div id="console" class="console">Select or start a run to see output…</div>
     </div>
 
@@ -102,9 +117,25 @@
 
 {% block scripts %}
 <script>
-let BRANCHES = [], TABLES = [];
+let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [] };
 const selBranches = new Set(), selTables = new Set();
 let curRun = null, tailOffset = 0, tailTimer = null;
+
+// Extra args: each is a flag, optionally taking a value. The value field's
+// tooltip shows example values (so the user knows the expected shape) and ticking
+// the box (or typing a value) adds it to the command.
+const EXTRA_ARGS = [
+  { flag: "--thin", help: "oracledb thin mode (no Instant Client)" },
+  { flag: "--no-progress", help: "suppress the progress bar / interval lines" },
+  { flag: "--max-branch-workers", value: true, examples: "1, 2, 4", help: "parallel branch workers" },
+  { flag: "--max-table-workers", value: true, examples: "1, 2", help: "parallel tables per branch" },
+  { flag: "--pool-max", value: true, examples: "3, 5, 8", help: "max Oracle pool connections" },
+  { flag: "--max-retries", value: true, examples: "0, 1, 3", help: "retry attempts (0 = fail fast)" },
+  { flag: "--progress-interval", value: true, examples: "15, 30, 60", help: "seconds between progress lines" },
+];
+
+// Live log -> progress dashboard (shared parser, see static/runparse.js).
+const liveDash = createLogDash({ branchHint: () => selBranches.size || BRANCHES.length });
 
 function buildSpec() {
   const script = el("script").value;
@@ -132,7 +163,7 @@ function buildSpec() {
     spec.branches = [...selBranches];
     spec.tables = [...selTables];
     spec.log_level = el("log_level").value;
-    spec.extra = el("extra").value;
+    spec.extra = collectExtra();
   }
   return spec;
 }
@@ -155,21 +186,92 @@ async function refreshPreview() {
   }, 150);
 }
 
-function renderChips() {
-  el("branch-chips").innerHTML = BRANCHES.map(b =>
-    `<span class="chip ${selBranches.has(b) ? "on" : ""}" data-b="${esc(b)}">${esc(b)}</span>`).join("")
-    || `<span class="muted">no branches</span>`;
-  el("table-chips").innerHTML = TABLES.map(t =>
-    `<span class="chip ${selTables.has(t) ? "on" : ""}" data-t="${esc(t)}">${esc(t)}</span>`).join("")
-    || `<span class="muted">no tables</span>`;
-  $$("#branch-chips .chip").forEach(c => c.onclick = () => {
-    const b = c.dataset.b; selBranches.has(b) ? selBranches.delete(b) : selBranches.add(b);
-    renderChips(); refreshPreview();
+// Wildcard / substring filter (mirrors the Tables page helper).
+function matchFilter(name, q) {
+  q = String(q || "").trim().toLowerCase();
+  if (!q) return true;
+  name = String(name || "").toLowerCase();
+  if (q.includes("*")) {
+    const re = new RegExp("^" + q.split("*")
+      .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+    return re.test(name);
+  }
+  return name.includes(q);
+}
+
+// Category only applies to oracle_to_iceberg; dq_check has no category -> all.
+function currentCategory() {
+  return el("script").value === "oracle_to_iceberg" ? el("category").value : "both";
+}
+
+function renderBranches() {
+  el("branches").innerHTML = BRANCHES.map(b =>
+    `<option value="${esc(b)}" ${selBranches.has(b) ? "selected" : ""}>${esc(b)}</option>`).join("")
+    || `<option disabled>no branches</option>`;
+}
+
+function tablePool() {
+  const cat = currentCategory();
+  const pool = cat === "masters" ? TABLES_BY_CAT.masters
+             : cat === "transactions" ? TABLES_BY_CAT.transactions
+             : [...TABLES_BY_CAT.masters, ...TABLES_BY_CAT.transactions];
+  return [...new Set(pool)].filter(Boolean).sort();
+}
+
+function renderTables() {
+  const all = tablePool();
+  const q = el("table-search").value;
+  const shown = all.filter(n => matchFilter(n, q));
+  el("tables").innerHTML = shown.map(n =>
+    `<option value="${esc(n)}" ${selTables.has(n) ? "selected" : ""}>${esc(n)}</option>`).join("")
+    || `<option disabled>no matching tables</option>`;
+  const cat = currentCategory();
+  el("table-hint").textContent =
+    `${shown.length} of ${all.length} ${cat === "both" ? "" : cat + " "}table(s)` +
+    (selTables.size ? ` · ${selTables.size} selected` : "");
+}
+
+// Read the multi-select back into selTables, preserving picks that are currently
+// filtered out (only the visible options' state is authoritative).
+function syncTables() {
+  const visible = [...el("tables").options].map(o => o.value);
+  visible.forEach(v => selTables.delete(v));
+  [...el("tables").selectedOptions].forEach(o => selTables.add(o.value));
+  renderTables();
+}
+
+function renderExtraArgs() {
+  el("extra-args").innerHTML = EXTRA_ARGS.map(a => `
+    <div class="extra-arg" title="${esc(a.help)}">
+      <label class="checkbox" style="margin:0">
+        <input type="checkbox" data-flag="${esc(a.flag)}">
+        <span class="mono">${esc(a.flag)}</span>
+      </label>
+      ${a.value
+        ? `<input class="ea-val" placeholder="value" autocomplete="off"
+             title="Examples: ${esc(a.examples)} — ${esc(a.help)}">`
+        : `<span class="muted" style="font-size:11px">${esc(a.help)}</span>`}
+    </div>`).join("");
+  $$("#extra-args input[type=checkbox]").forEach(cb =>
+    cb.addEventListener("change", refreshPreview));
+  $$("#extra-args .ea-val").forEach(inp => inp.addEventListener("input", () => {
+    // Typing a value implies the flag is on.
+    const cb = inp.closest(".extra-arg").querySelector('input[type=checkbox]');
+    if (inp.value.trim() && cb) cb.checked = true;
+    refreshPreview();
+  }));
+}
+
+function collectExtra() {
+  const parts = [];
+  $$("#extra-args .extra-arg").forEach(row => {
+    const cb = row.querySelector('input[type=checkbox]');
+    if (!cb || !cb.checked) return;
+    parts.push(cb.dataset.flag);
+    const val = row.querySelector(".ea-val");
+    if (val && val.value.trim()) parts.push(val.value.trim());
   });
-  $$("#table-chips .chip").forEach(c => c.onclick = () => {
-    const t = c.dataset.t; selTables.has(t) ? selTables.delete(t) : selTables.add(t);
-    renderChips(); refreshPreview();
-  });
+  return parts.join(" ");
 }
 
 async function startRun() {
@@ -187,6 +289,7 @@ function viewRun(id) {
   curRun = id; tailOffset = 0;
   el("cur-run").textContent = id;
   el("console").textContent = "";
+  liveDash.reset();
   clearInterval(tailTimer);
   pollTail();
   tailTimer = setInterval(pollTail, 1300);
@@ -201,12 +304,14 @@ async function pollTail() {
       const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
       c.textContent += r.chunk;
       if (atBottom) c.scrollTop = c.scrollHeight;
+      liveDash.feed(r.chunk);
     }
     tailOffset = r.offset;
     el("cur-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
     const running = r.status === "running" || r.status === "detached";
     el("stop-btn").hidden = !running;
-    if (!running) { clearInterval(tailTimer); loadRuns(); }
+    if (!running) { clearInterval(tailTimer); liveDash.flush(); loadRuns(); }
+    liveDash.render();
   } catch (e) { clearInterval(tailTimer); }
 }
 
@@ -238,29 +343,44 @@ async function init() {
   try {
     const t = await apiGet("/api/tables");
     BRANCHES = t._branches || [];
-    const names = [];
-    for (const cat of ["masters","transactions"])
-      for (const e of (t[cat]||[])) {
+    for (const cat of ["masters", "transactions"])
+      TABLES_BY_CAT[cat] = (t[cat] || []).map(e => {
         const full = e.table || "";
-        names.push(full.includes(".") ? full.split(".").pop() : full);
-      }
-    TABLES = [...new Set(names)].filter(Boolean);
+        return full.includes(".") ? full.split(".").pop() : full;
+      }).filter(Boolean);
   } catch (e) { err(e.message); }
-  renderChips();
+  renderBranches();
+  renderTables();
+  renderExtraArgs();
   syncGroups();
   refreshPreview();
   loadRuns();
 }
 
-el("script").onchange = () => { syncGroups(); refreshPreview(); };
+el("script").onchange = () => { syncGroups(); renderTables(); refreshPreview(); };
 $$("input, select, textarea").forEach(node => {
   node.addEventListener("input", refreshPreview);
   node.addEventListener("change", refreshPreview);
 });
+// Category drives which tables are offered; the search box filters them live.
+el("category").addEventListener("change", renderTables);
+el("table-search").addEventListener("input", renderTables);
+el("branches").addEventListener("change", () => {
+  selBranches.clear();
+  [...el("branches").selectedOptions].forEach(o => selBranches.add(o.value));
+});
+el("tables").addEventListener("change", syncTables);
 el("run-btn").onclick = startRun;
 el("stop-btn").onclick = stopRun;
+el("toggle-raw").onclick = () => el("run-panel").classList.toggle("raw-hidden");
 el("refresh-runs").onclick = loadRuns;
 el("copy-btn").onclick = () => { navigator.clipboard.writeText(el("preview").textContent); ok("Copied"); };
+el("sched-btn").onclick = () => {
+  // Carry the built command to the Schedule page (command generation lives here).
+  sessionStorage.setItem("oasis_schedule_spec",
+    JSON.stringify({ spec: buildSpec(), preview: el("preview").textContent, name: el("script").value }));
+  window.location.href = "/schedule";
+};
 init();
 </script>
 {% endblock %}

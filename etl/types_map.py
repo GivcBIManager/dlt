@@ -221,6 +221,38 @@ def unify_schemas(schemas: list[pa.Schema]) -> pa.Schema:
     return pa.schema(fields)
 
 
+def replace_null_types(
+    schema: pa.Schema,
+    overrides: Optional[dict[str, pa.DataType]] = None,
+    fallback: pa.DataType = pa.string(),
+) -> pa.Schema:
+    """Replace every ``null``-typed field with a concrete type.
+
+    A column that is entirely null across every branch this run -- an
+    unconstrained NUMBER mapped to ``INFER`` with no (or all-null) values, or a
+    0-row delta -- is inferred by pyarrow as the ``null`` type, which then
+    survives ``unify_schemas`` (``widen_types`` keeps null when both sides are
+    null). dlt maps an Arrow ``null`` column to an *incomplete* column, and
+    pyiceberg cannot cast an existing typed column to ``null`` -- so handing such
+    a column to the load raises ``Unsupported cast from <type> to null using
+    function cast_null`` on a table that already has the column typed.
+
+    Coerce to a concrete type instead: the destination's existing type for that
+    column when known (``overrides``, keyed by field name) so a merge stays a
+    no-op, otherwise ``fallback`` (string -- the universal safe ground, matching
+    ``build_arrow_column``'s stringify last resort). Non-null fields are
+    untouched.
+    """
+    overrides = overrides or {}
+    fields = [
+        pa.field(f.name, overrides.get(f.name, fallback),
+                 nullable=f.nullable, metadata=f.metadata)
+        if pa.types.is_null(f.type) else f
+        for f in schema
+    ]
+    return pa.schema(fields)
+
+
 def cast_table_to_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
     """Reshape one branch's table to the unified schema.
 

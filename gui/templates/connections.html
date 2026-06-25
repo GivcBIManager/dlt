@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-network-wired"></i> Connections</h1>
+  <p>Manage Oracle branch connections in <span class="mono">.dlt/secrets.toml</span>. Passwords are write-only — they are never sent back to the browser.</p>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-database"></i> Oracle branches <span id="conn-count" class="tag"></span></h2>
+    <button class="btn primary sm" id="add-conn"><i class="fa-solid fa-plus"></i> New connection</button>
+  </div>
+  <div class="table-wrap">
+    <table id="conns">
+      <thead><tr>
+        <th>Branch key</th><th>Name</th><th class="num">ID</th><th>Host</th>
+        <th class="num">Port</th><th>Database</th><th>Username</th>
+        <th class="num">Fetch batch</th><th>Password</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- editor modal -->
+<div class="modal-bg" id="modal">
+  <div class="modal" style="width:560px">
+    <h2 id="modal-title">New connection</h2>
+    <div class="form-row">
+      <div><label>Branch key * <small>(used with --branch)</small></label><input id="c-key" title="letters, digits, underscore"></div>
+      <div><label>Display name</label><input id="c-name" title="e.g. Jazan"></div>
+    </div>
+    <div class="form-row-3">
+      <div><label>Host *</label><input id="c-host" title="e.g. 172.17.4.3"></div>
+      <div><label>Port *</label><input id="c-port" type="number" value="1521"></div>
+      <div><label>Branch ID</label><input id="c-id" type="number" title="numeric branch_id"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Database *<small> (service name / SID)</small></label><input id="c-database"></div>
+      <div><label>Fetch batch size</label><input id="c-fetch" type="number" placeholder="e.g. 25000"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Username *</label><input id="c-username"></div>
+      <div><label id="pw-label">Password *</label><input id="c-password" type="password" autocomplete="new-password"></div>
+    </div>
+    <div id="c-msg"></div>
+    <div class="btn-row">
+      <button class="btn primary" id="c-save">Save</button>
+      <button class="btn ghost" id="c-test"><i class="fa-solid fa-plug"></i> Test connection</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" id="c-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let CONNS = [];
+let editingKey = null;   // null => adding
+
+async function load() {
+  try {
+    CONNS = await apiGet("/api/connections");
+    el("conn-count").textContent = `${CONNS.length} configured`;
+    $("#conns tbody").innerHTML = CONNS.map(c => `
+      <tr>
+        <td class="mono"><b>${esc(c.key)}</b></td>
+        <td>${esc(c.name)}</td>
+        <td class="num">${esc(c.id ?? "—")}</td>
+        <td class="mono">${esc(c.host || "—")}</td>
+        <td class="num">${esc(c.port ?? "—")}</td>
+        <td class="mono">${esc(c.database || "—")}</td>
+        <td class="mono">${esc(c.username || "—")}</td>
+        <td class="num">${fmtNum(c.fetch_batch_size)}</td>
+        <td>${c.has_password ? '<span class="pill ok">set</span>' : '<span class="pill failed">none</span>'}</td>
+        <td class="row-flex">
+          <button class="btn sm ghost" onclick="openEdit('${esc(c.key)}')">Edit</button>
+          <button class="btn sm" onclick="testConn('${esc(c.key)}')">Test</button>
+          <button class="btn sm bad" onclick="delConn('${esc(c.key)}')">Delete</button>
+        </td>
+      </tr>`).join("") || `<tr><td colspan="10" class="muted">No connections yet — add one.</td></tr>`;
+  } catch (e) { err(e.message); }
+}
+
+function openEdit(key) {
+  const c = key ? CONNS.find(x => x.key === key) : {};
+  editingKey = key || null;
+  el("modal-title").textContent = key ? `Edit connection — ${key}` : "New connection";
+  el("c-key").value = c.key || "";
+  el("c-key").disabled = false;
+  el("c-name").value = c.name || "";
+  el("c-host").value = c.host || "";
+  el("c-port").value = c.port ?? 1521;
+  el("c-id").value = c.id ?? "";
+  el("c-database").value = c.database || "";
+  el("c-fetch").value = c.fetch_batch_size ?? "";
+  el("c-username").value = c.username || "";
+  el("c-password").value = "";
+  el("pw-label").innerHTML = key
+    ? 'Password <small>(leave blank to keep current)</small>'
+    : 'Password *';
+  el("c-msg").innerHTML = key && c.has_password
+    ? `<div class="hint">A password is already stored for this branch; leave blank to keep it.</div>` : "";
+  el("modal").classList.add("show");
+}
+
+function payload() {
+  return {
+    key: el("c-key").value.trim(),
+    name: el("c-name").value.trim(),
+    host: el("c-host").value.trim(),
+    port: el("c-port").value.trim(),
+    id: el("c-id").value.trim(),
+    database: el("c-database").value.trim(),
+    fetch_batch_size: el("c-fetch").value.trim(),
+    username: el("c-username").value.trim(),
+    password: el("c-password").value,
+  };
+}
+
+async function save() {
+  const p = payload();
+  el("c-save").disabled = true;
+  try {
+    if (editingKey) { await apiPut(`/api/connections/${encodeURIComponent(editingKey)}`, p); ok("Connection updated"); }
+    else { await apiPost("/api/connections", p); ok("Connection added"); }
+    el("modal").classList.remove("show");
+    load();
+  } catch (e) { el("c-msg").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+  el("c-save").disabled = false;
+}
+
+async function testConn(key) {
+  // From the table: test the saved branch directly.
+  el("c-msg").innerHTML = "";
+  try {
+    const r = await apiPost(`/api/connections/${encodeURIComponent(key)}/test`);
+    r.ok ? ok(r.message || "Connection OK") : err(r.error || "Connection failed");
+  } catch (e) { err(e.message); }
+}
+
+async function testFromModal() {
+  // Must be a saved branch to test (uses the stored password if blank).
+  if (!editingKey) return err("Save the connection first, then test it.");
+  el("c-msg").innerHTML = `<div class="hint">Testing…</div>`;
+  try {
+    const r = await apiPost(`/api/connections/${encodeURIComponent(editingKey)}/test`);
+    el("c-msg").innerHTML = r.ok
+      ? `<div class="banner success">${esc(r.message || "Connection OK")}</div>`
+      : `<div class="banner warn">${esc(r.error || "Connection failed")}</div>`;
+  } catch (e) { el("c-msg").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+
+async function delConn(key) {
+  if (!confirm(`Delete branch connection '${key}'? This rewrites secrets.toml (a backup is kept).`)) return;
+  try { await apiDel(`/api/connections/${encodeURIComponent(key)}`); ok("Deleted"); load(); }
+  catch (e) { err(e.message); }
+}
+
+el("add-conn").onclick = () => openEdit(null);
+el("c-save").onclick = save;
+el("c-test").onclick = testFromModal;
+el("c-cancel").onclick = () => el("modal").classList.remove("show");
+load();
+</script>
+{% endblock %}

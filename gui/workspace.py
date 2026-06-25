@@ -8,7 +8,9 @@ log files produced by launched runs. Nothing here mutates project state.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import re
+import shutil
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from config import (
     CONTROL_STATE,
     LOG_DIR,
     SECRETS_TOML,
+    STATE_DIR,
 )
 
 # tomllib is stdlib on 3.11+; fall back to the tomli backport on 3.10.
@@ -73,6 +76,93 @@ def etl_settings() -> dict[str, Any]:
     )
     etl["_bucket_url"] = bucket
     return etl
+
+
+# Keys the dashboard lets you edit (a write allowlist; ``_bucket_url`` and any
+# other derived/destination keys are intentionally excluded).
+EDITABLE_ETL_KEYS = {
+    "dataset_name", "pipeline_name", "max_branch_workers", "max_table_workers",
+    "pool_min", "pool_max", "pool_increment", "pool_acquire_timeout_s",
+    "pool_acquire_attempts", "max_retries", "retry_interval_s",
+    "snapshot_expire_days", "snapshot_min_to_keep", "dsn_mode",
+}
+_ETL_KV_RE = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=\s*)(.*?)(\s*(?:#.*)?)$")
+
+
+def _fmt_toml_scalar(existing_raw: str, value: Any) -> str:
+    """Render ``value`` matching the quoting/type of the existing raw value."""
+    existing_raw = existing_raw.strip()
+    quoted = len(existing_raw) >= 2 and existing_raw[0] in "\"'"
+    if quoted or isinstance(value, str) and not _looks_numeric(str(value)):
+        s = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{s}"'
+    sv = str(value).strip().lower()
+    if sv in ("true", "false"):
+        return sv
+    return str(value).strip()
+
+
+def _looks_numeric(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
+    """Edit scalar keys inside the ``[etl]`` block of ``config.toml`` in place.
+
+    Only keys already present in the block and on the allowlist are touched;
+    every other line (comments, other sections) is preserved verbatim. Keeps a
+    timestamped backup and validates the result by re-parsing.
+    """
+    bad = [k for k in updates if k not in EDITABLE_ETL_KEYS]
+    if bad:
+        raise ValueError(f"Not editable: {', '.join(sorted(bad))}")
+    if not CONFIG_TOML.exists():
+        raise FileNotFoundError("config.toml")
+
+    lines = CONFIG_TOML.read_text(encoding="utf-8").splitlines()
+    in_etl = False
+    applied: dict[str, Any] = {}
+    for i, line in enumerate(lines):
+        header = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
+        if header:
+            in_etl = header.group(1).strip() == "etl"
+            continue
+        if not in_etl:
+            continue
+        m = _ETL_KV_RE.match(line)
+        if not m:
+            continue
+        key = m.group(2)
+        if key in updates:
+            new_raw = _fmt_toml_scalar(m.group(4), updates[key])
+            lines[i] = f"{m.group(1)}{key}{m.group(3)}{new_raw}{m.group(5)}"
+            applied[key] = updates[key]
+
+    missing = [k for k in updates if k not in applied]
+    if missing:
+        raise ValueError(f"Key(s) not found in [etl]: {', '.join(missing)}")
+
+    text = "\n".join(lines)
+    if not text.endswith("\n"):
+        text += "\n"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = STATE_DIR / f"config.toml.{stamp}.bak"
+    shutil.copy2(CONFIG_TOML, backup)
+    tmp = CONFIG_TOML.with_suffix(".toml.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        with tmp.open("rb") as fh:
+            _toml.load(fh)
+    except Exception as exc:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"refused to write corrupt config.toml: {exc}") from exc
+    tmp.replace(CONFIG_TOML)
+    return {"applied": applied, "backup": str(backup)}
 
 
 # --------------------------------------------------------------------------- #
@@ -157,7 +247,7 @@ def list_log_files() -> list[dict[str, Any]]:
     return out
 
 
-def read_log_file(name: str, max_bytes: int = 400_000) -> str:
+def read_log_file(name: str, max_bytes: int = 5_242_880) -> str:
     """Return the tail of a log file (path-traversal safe)."""
     safe = Path(name).name
     p = LOG_DIR / safe
@@ -167,3 +257,35 @@ def read_log_file(name: str, max_bytes: int = 400_000) -> str:
     if len(data) > max_bytes:
         data = b"...[truncated]...\n" + data[-max_bytes:]
     return data.decode("utf-8", errors="replace")
+
+
+def purge_logs(before: str | None = None, days: int | None = None) -> dict[str, Any]:
+    """Delete ``run_logs/*.log`` files last modified before a cutoff.
+
+    Pass either ``before`` (an ISO ``YYYY-MM-DD`` date — files modified strictly
+    before midnight of that day are removed) or ``days`` (older than N days).
+    Returns the deleted file names and reclaimed byte total.
+    """
+    if before:
+        try:
+            cutoff = datetime.combine(date.fromisoformat(before[:10]), datetime.min.time()).timestamp()
+        except ValueError:
+            raise ValueError(f"Invalid date: {before!r} (expected YYYY-MM-DD)") from None
+    elif days is not None:
+        cutoff = datetime.now().timestamp() - int(days) * 86400
+    else:
+        raise ValueError("Provide 'before' (YYYY-MM-DD) or 'days'")
+
+    deleted: list[str] = []
+    freed = 0
+    if LOG_DIR.exists():
+        for p in LOG_DIR.glob("*.log"):
+            try:
+                st = p.stat()
+                if st.st_mtime < cutoff:
+                    freed += st.st_size
+                    p.unlink()
+                    deleted.append(p.name)
+            except OSError:
+                continue
+    return {"deleted": deleted, "count": len(deleted), "freed_bytes": freed}

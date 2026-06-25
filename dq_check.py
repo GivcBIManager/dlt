@@ -148,9 +148,15 @@ def main(argv: list[str]) -> int:
         print(f"-> wrote {len(results)} row(s) to Iceberg table "
               f"'{settings.dataset_name}.{name}'")
 
-    # Exit non-zero if anything failed or drifted, so this is CI/cron friendly.
-    bad = [r for r in results if r.status in ("ERROR", "MISMATCH")]
-    return 1 if bad else 0
+    # A MISMATCH is a *successful* check that found drift -- it's recorded in
+    # etl_dq_results and the summary, not a run failure, so it still exits 0.
+    # Only a genuine ERROR (the check itself could not complete) exits non-zero,
+    # so the run shows "finished" whenever the reconciliation actually ran.
+    errored = [r for r in results if r.status == "ERROR"]
+    if errored:
+        log.error("%d unit(s) errored: %s", len(errored),
+                  ", ".join(f"{r.table}/{r.branch}" for r in errored))
+    return 1 if errored else 0
 
 
 if __name__ == "__main__":

@@ -7,16 +7,19 @@
 
 <div class="metrics-grid" id="cards"></div>
 
-<div class="grid-side" style="margin-top:18px">
-  <div class="panel">
-    <div class="panel-head"><h2><i class="fa-solid fa-code-branch"></i> Branches</h2><span id="branch-count" class="tag"></span></div>
-    <div id="branches"></div>
-  </div>
-
+<div style="margin-top:18px">
   <div class="panel">
     <div class="panel-head">
       <h2><i class="fa-solid fa-table-cells"></i> Per-table / branch state</h2>
       <a class="btn sm ghost" href="/logs">Open monitor <i class="fa-solid fa-arrow-right"></i></a>
+    </div>
+    <div class="filter-bar">
+      <div><label>Table</label><select id="f-table"><option value="">All tables</option></select></div>
+      <div><label>Branch</label><select id="f-branch"><option value="">All branches</option></select></div>
+      <div><label>Status</label><select id="f-status"><option value="">All statuses</option></select></div>
+      <button class="btn ghost sm" id="f-clear" style="align-self:flex-end">Clear</button>
+      <span class="spacer"></span>
+      <span class="muted" id="f-count"></span>
     </div>
     <div class="table-wrap">
       <table id="control">
@@ -31,13 +34,35 @@
 </div>
 
 <div class="panel" id="settings-panel" style="margin-top:18px">
-  <div class="panel-head"><h2><i class="fa-solid fa-sliders"></i> ETL settings</h2><small>.dlt/config.toml [etl]</small></div>
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-sliders"></i> ETL settings</h2>
+    <div class="row-flex">
+      <small>.dlt/config.toml [etl]</small>
+      <button class="btn sm ghost" id="edit-settings"><i class="fa-solid fa-pen"></i> Edit</button>
+      <button class="btn sm primary" id="save-settings" hidden><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      <button class="btn sm ghost" id="cancel-settings" hidden>Cancel</button>
+    </div>
+  </div>
   <div id="settings" class="cards"></div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+let CTRL_ROWS = [];
+let SETTINGS = {};
+let editingSettings = false;
+
+// Keys editable in .dlt/config.toml [etl] (mirrors workspace.EDITABLE_ETL_KEYS).
+const EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
+  "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode"]);
+const NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
+  "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
+  "snapshot_expire_days","snapshot_min_to_keep"]);
+const SHOWN = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
+  "max_retries","retry_interval_s","snapshot_expire_days","_bucket_url"];
+
 async function load() {
   try {
     const o = await apiGet("/api/overview");
@@ -55,34 +80,82 @@ async function load() {
       ${metric("Last run", fmtDate(c.last_run_at), "blue", "fa-clock-rotate-left", true)}
     `;
 
-    el("branch-count").textContent = `${o.branches.length} configured`;
-    el("branches").innerHTML = `<ul class="list">` + o.branches.map(b => `
-      <li>
-        <span><b>${esc(b.name)}</b> <small class="mono">${esc(b.key)}</small></span>
-        <span class="muted mono">id ${esc(b.id)} · ${esc(b.host)}:${esc(b.port)} · ${esc(b.database)}</span>
-      </li>`).join("") + `</ul>`;
-
-    const s = o.settings || {};
-    const keys = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
-                  "max_retries","retry_interval_s","snapshot_expire_days","_bucket_url"];
-    el("settings").innerHTML = keys.filter(k => s[k] !== undefined).map(k =>
-      cardHtml(k.replace(/^_/,""), esc(s[k]))).join("");
+    SETTINGS = o.settings || {};
+    renderSettings();
 
     const ctrl = await apiGet("/api/control");
-    const tb = $("#control tbody");
-    tb.innerHTML = ctrl.rows.map(r => `
-      <tr>
-        <td class="mono">${esc(r.table)}</td>
-        <td>${esc(r.branch)}</td>
-        <td>${pill(r.status)}</td>
-        <td class="num">${fmtNum(r.row_count)}</td>
-        <td class="num">${r.duration_ms != null ? fmtNum(r.duration_ms)+" ms" : "—"}</td>
-        <td class="mono">${esc(r.last_cdc || "—")}</td>
-        <td class="mono">${fmtDate(r.last_run_at)}</td>
-      </tr>`).join("") || `<tr><td colspan="7" class="muted">No control state yet — run the pipeline.</td></tr>`;
+    CTRL_ROWS = ctrl.rows;
+    fillFilter("f-table", [...new Set(CTRL_ROWS.map(r => r.table))]);
+    fillFilter("f-branch", [...new Set(CTRL_ROWS.map(r => String(r.branch)))]);
+    fillFilter("f-status", [...new Set(CTRL_ROWS.map(r => r.status || "UNKNOWN"))]);
+    renderControl();
   } catch (e) { err(e.message); }
 }
-function cardHtml(k, v) { return `<div class="card"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`; }
+
+function fillFilter(id, values) {
+  const sel = el(id), keep = sel.value;
+  sel.length = 1;  // keep the "All …" option
+  values.filter(v => v != null && v !== "").sort().forEach(v =>
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(v)}">${esc(v)}</option>`));
+  sel.value = keep;
+}
+
+function renderControl() {
+  const ft = el("f-table").value, fb = el("f-branch").value, fs = el("f-status").value;
+  const rows = CTRL_ROWS.filter(r =>
+    (!ft || r.table === ft) &&
+    (!fb || String(r.branch) === fb) &&
+    (!fs || (r.status || "UNKNOWN") === fs));
+  $("#control tbody").innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${esc(r.table)}</td>
+      <td>${esc(r.branch)}</td>
+      <td>${pill(r.status)}</td>
+      <td class="num">${fmtNum(r.row_count)}</td>
+      <td class="num">${r.duration_ms != null ? fmtNum(r.duration_ms)+" ms" : "—"}</td>
+      <td class="mono">${esc(r.last_cdc || "—")}</td>
+      <td class="mono">${fmtDate(r.last_run_at)}</td>
+    </tr>`).join("") || `<tr><td colspan="7" class="muted">No matching rows.</td></tr>`;
+  el("f-count").textContent = `${rows.length} of ${CTRL_ROWS.length} rows`;
+}
+
+function renderSettings() {
+  el("settings").innerHTML = SHOWN.filter(k => SETTINGS[k] !== undefined).map(k => {
+    const label = k.replace(/^_/, "");
+    if (editingSettings && EDITABLE.has(k)) {
+      const type = NUMERIC.has(k) ? "number" : "text";
+      return `<div class="card"><div class="k">${esc(label)}</div>
+        <div class="v"><input class="set-input" data-k="${esc(k)}" type="${type}" value="${esc(SETTINGS[k])}"></div></div>`;
+    }
+    const lock = (!editingSettings || EDITABLE.has(k)) ? "" : ` <i class="fa-solid fa-lock muted" title="not editable here"></i>`;
+    return `<div class="card"><div class="k">${esc(label)}${lock}</div><div class="v">${esc(SETTINGS[k])}</div></div>`;
+  }).join("");
+}
+
+function toggleEdit(on) {
+  editingSettings = on;
+  el("edit-settings").hidden = on;
+  el("save-settings").hidden = !on;
+  el("cancel-settings").hidden = !on;
+  renderSettings();
+}
+
+async function saveSettings() {
+  const updates = {};
+  $$(".set-input").forEach(inp => {
+    const k = inp.dataset.k;
+    let v = inp.value.trim();
+    if (NUMERIC.has(k)) { if (v === "") return; v = Number(v); }
+    updates[k] = v;
+  });
+  try {
+    const r = await apiPut("/api/settings", updates);
+    Object.assign(SETTINGS, r.applied);
+    ok(`Saved ${Object.keys(r.applied).length} setting(s)`);
+    toggleEdit(false);
+  } catch (e) { err(e.message); }
+}
+
 function metric(label, value, color, icon, small) {
   return `<div class="metric-card ${color}">
     <div class="icon"><i class="fa-solid ${icon}"></i></div>
@@ -91,6 +164,12 @@ function metric(label, value, color, icon, small) {
       <div class="value ${small ? "sm" : ""}">${value}</div>
     </div></div>`;
 }
+
+["f-table","f-branch","f-status"].forEach(id => el(id).onchange = renderControl);
+el("f-clear").onclick = () => { el("f-table").value=""; el("f-branch").value=""; el("f-status").value=""; renderControl(); };
+el("edit-settings").onclick = () => toggleEdit(true);
+el("cancel-settings").onclick = () => toggleEdit(false);
+el("save-settings").onclick = saveSettings;
 load();
 </script>
 {% endblock %}

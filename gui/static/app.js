@@ -83,3 +83,13 @@ function toast(msg, kind = "") {
 }
 function ok(msg) { toast(msg, "ok"); }
 function err(msg) { toast(msg, "err"); }
+
+// Sidebar toggle (mobile / narrow viewports)
+(function () {
+  const toggle = el("sidebar-toggle");
+  const scrim = el("scrim");
+  const close = () => document.body.classList.remove("nav-open");
+  if (toggle) toggle.addEventListener("click", () => document.body.classList.toggle("nav-open"));
+  if (scrim) scrim.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+})();

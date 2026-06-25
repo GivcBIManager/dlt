@@ -101,6 +101,16 @@ def _render_job(job: dict[str, Any]) -> dict[str, Any]:
     out["command"] = " ".join(shlex.quote(a) for a in argv)
     out["log"] = log_path.name
     out["cron_line"] = cron_line
+    # Status data: has this job's log been written, and when / how big.
+    try:
+        st = log_path.stat()
+        out["log_exists"] = True
+        out["log_size"] = st.st_size
+        out["log_modified"] = datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        out["log_exists"] = False
+        out["log_size"] = 0
+        out["log_modified"] = None
     return out
 
 

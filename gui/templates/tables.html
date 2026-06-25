@@ -25,11 +25,13 @@
   <div class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>Masters</h2><span id="m-count" class="tag"></span></div>
-      <div id="masters"></div>
+      <input class="list-filter" id="m-filter" placeholder="Filter by table name — wildcard, e.g. *order*">
+      <div id="masters" class="scroll-list"></div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Transactions</h2><span id="t-count" class="tag"></span></div>
-      <div id="transactions"></div>
+      <input class="list-filter" id="t-filter" placeholder="Filter by table name — wildcard, e.g. *order*">
+      <div id="transactions" class="scroll-list"></div>
     </div>
   </div>
 </div>
@@ -44,33 +46,30 @@
 <div class="modal-bg" id="modal">
   <div class="modal">
     <h2 id="modal-title">Edit table</h2>
+    <div><label>Table (OWNER.NAME) *</label><input id="f-table" title="e.g. OASIS.MY_TABLE"></div>
     <div class="form-row">
-      <div><label>Category</label><select id="f-category"><option value="masters">masters</option><option value="transactions">transactions</option></select></div>
-      <div><label>Table (OWNER.NAME) *</label><input id="f-table" placeholder="OASIS.MY_TABLE"></div>
-    </div>
-    <div class="form-row">
-      <div><label>Unique key *</label><input id="f-key" placeholder="MY_ID or A,B"></div>
-      <div><label>CDC column</label><input id="f-cdc" placeholder="AMEND_LAST_DATE"></div>
+      <div><label>Unique key *</label><input id="f-key" title="e.g. MY_ID or A,B"></div>
+      <div><label>CDC column</label><input id="f-cdc" title="e.g. AMEND_LAST_DATE"></div>
     </div>
     <div class="form-row-3">
-      <div><label>Where date column</label><input id="f-wdate" placeholder="ORDER_DATE"></div>
-      <div><label>Operator</label><input id="f-wop" placeholder=">="></div>
-      <div><label>Initial value</label><input id="f-wval" placeholder="2026-06-01"></div>
+      <div><label>Where date column</label><input id="f-wdate" title="e.g. ORDER_DATE"></div>
+      <div><label>Operator</label><input id="f-wop" title="e.g. >="></div>
+      <div><label>Initial value</label><input id="f-wval" title="e.g. 2026-06-01"></div>
     </div>
     <div class="form-row">
-      <div><label>Upper operator (optional)</label><input id="f-wopmax" placeholder="<="></div>
-      <div><label>Upper value (window ceiling)</label><input id="f-wvalmax" placeholder="TO_NUMBER(...SYSDATE...)"></div>
+      <div><label>Upper operator (optional)</label><input id="f-wopmax" title="e.g. <="></div>
+      <div><label>Upper value (window ceiling)</label><input id="f-wvalmax" title="e.g. TO_NUMBER(...SYSDATE...)"></div>
     </div>
 
     <fieldset>
       <legend>Helper (borrowed CDC — optional)</legend>
       <div class="form-row">
-        <div><label>Helper table</label><input id="f-h-table" placeholder="OASIS.ORDERS_MASTER"></div>
-        <div><label>Helper CDC column</label><input id="f-h-cdc" placeholder="AMEND_LAST_DATE"></div>
+        <div><label>Helper table</label><input id="f-h-table" title="e.g. OASIS.ORDERS_MASTER"></div>
+        <div><label>Helper CDC column</label><input id="f-h-cdc" title="e.g. AMEND_LAST_DATE"></div>
       </div>
-      <label>Helper where-date column (optional)</label><input id="f-h-wdate" placeholder="ORDER_DATE">
+      <label>Helper where-date column (optional)</label><input id="f-h-wdate" title="e.g. ORDER_DATE">
       <label>Join pairs — one per line: <span class="mono">child_col, helper_col</span></label>
-      <textarea id="f-h-join" placeholder="MASTER_ORDER_NO, MASTER_ORDER_NO"></textarea>
+      <textarea id="f-h-join" title="e.g. MASTER_ORDER_NO, MASTER_ORDER_NO"></textarea>
     </fieldset>
 
     <div class="btn-row">
@@ -98,10 +97,24 @@ function summarize(e) {
   return bits.join(" · ");
 }
 
+function matchFilter(name, q) {
+  q = String(q || "").trim().toLowerCase();
+  if (!q) return true;
+  name = String(name || "").toLowerCase();
+  if (q.includes("*")) {
+    const re = new RegExp("^" + q.split("*")
+      .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+    return re.test(name);
+  }
+  return name.includes(q);
+}
+
 function renderList(category) {
   const items = DOC[category] || [];
   const box = el(category);
-  box.innerHTML = items.map((e, i) => `
+  const q = el(category === "masters" ? "m-filter" : "t-filter").value;
+  const shown = items.map((e, i) => ({ e, i })).filter(({ e }) => matchFilter(e.table, q));
+  box.innerHTML = shown.map(({ e, i }) => `
     <div class="card" style="margin-bottom:8px">
       <div class="row-flex">
         <b class="mono">${esc(e.table || "(unnamed)")}</b>
@@ -110,16 +123,17 @@ function renderList(category) {
         <button class="btn sm bad" onclick="removeEntry('${category}', ${i})">Delete</button>
       </div>
       <div class="muted" style="margin-top:6px;white-space:normal">${esc(summarize(e)) || "—"}</div>
-    </div>`).join("") || `<div class="muted">none</div>`;
-  el(category === "masters" ? "m-count" : "t-count").textContent = `${items.length}`;
+    </div>`).join("") || `<div class="muted">${q ? "no matches" : "none"}</div>`;
+  el(category === "masters" ? "m-count" : "t-count").textContent =
+    q ? `${shown.length}/${items.length}` : `${items.length}`;
 }
 function renderAll() { renderList("masters"); renderList("transactions"); }
 
 function openEdit(category, index) {
   editing = { category, index };
   const e = index >= 0 ? DOC[category][index] : {};
-  el("modal-title").textContent = index >= 0 ? "Edit table" : "New table";
-  el("f-category").value = category;
+  const catLabel = category === "masters" ? "master" : "transaction";
+  el("modal-title").textContent = (index >= 0 ? "Edit " : "New ") + catLabel + " table";
   el("f-table").value = e.table || "";
   el("f-key").value = e.unique_key || "";
   el("f-cdc").value = e.cdc_column || "";
@@ -164,7 +178,7 @@ function applyEdit() {
     if (hwd) e.helper.where_date_column = hwd;
   }
 
-  const newCat = el("f-category").value;
+  const newCat = editing.category;
   if (editing.index >= 0) DOC[editing.category].splice(editing.index, 1);
   DOC[newCat] = DOC[newCat] || [];
   DOC[newCat].push(e);
@@ -237,6 +251,8 @@ async function load() {
 
 el("add-master").onclick = () => openEdit("masters", -1);
 el("add-trans").onclick = () => openEdit("transactions", -1);
+el("m-filter").oninput = () => renderList("masters");
+el("t-filter").oninput = () => renderList("transactions");
 el("f-save").onclick = applyEdit;
 el("f-cancel").onclick = () => el("modal").classList.remove("show");
 el("toggle-raw").onclick = toggleRaw;

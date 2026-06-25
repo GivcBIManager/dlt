@@ -447,7 +447,11 @@ def _resolve_actual(actual_names: Iterable[str], norm: Optional[str]) -> Optiona
 
 
 def _business_norms(actual_names: Iterable[str], injected: set[str]) -> set[str]:
-    return {_norm(a) for a in actual_names} - injected
+    # dlt's internal bookkeeping columns (_dlt_id, _dlt_load_id, ...) are stamped
+    # in by the pipeline at load time and exist only in the lake. They can't come
+    # from the source, so they must never count as business columns -- keeping
+    # them out of the row fingerprint *and* the column-drift report.
+    return {_norm(a) for a in actual_names if not a.startswith("_dlt")} - injected
 
 
 # --------------------------------------------------------------------------- #

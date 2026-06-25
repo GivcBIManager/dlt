@@ -1,22 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-head">
-  <h1><i class="fa-solid fa-cubes"></i> Iceberg explorer</h1>
-  <p>Datasets under <span class="mono">iceberg_output/oasis</span> — schema, partitions, snapshots and sample rows.</p>
+  <h1><i class="fa-solid fa-cubes"></i> Staging layer explorer</h1>
+  <p>Staging datasets under <span class="mono">iceberg_output/oasis</span> — schema, partitions, snapshots and sample rows.</p>
 </div>
 
-<div class="grid-side">
-  <div class="panel">
-    <div class="panel-head"><h2>Tables</h2><button class="btn sm ghost" id="refresh">↻</button></div>
-    <div id="tlist"></div>
+<div class="panel" style="margin-bottom:18px">
+  <div class="panel-head"><h2>Tables</h2><button class="btn sm ghost" id="refresh">↻</button></div>
+  <div class="filter-bar">
+    <div><label>Filter by name</label><input id="tbl-filter" placeholder="wildcard, e.g. *appointment*"></div>
+    <div><label>Type</label>
+      <select id="tbl-type"><option value="">All</option><option value="data">Data</option><option value="system">System</option></select></div>
+    <span class="spacer"></span>
+    <span id="tbl-count" class="muted" style="align-self:flex-end"></span>
+  </div>
+  <div class="table-wrap" id="tlist"></div>
+</div>
+
+<div>
+  <div class="panel" id="detail-head">
+    <div class="muted">Select a table to inspect.</div>
   </div>
 
-  <div>
-    <div class="panel" id="detail-head">
-      <div class="muted">Select a table to inspect.</div>
-    </div>
-
-    <div id="detail" hidden>
+  <div id="detail" hidden>
       <div class="row-flex" style="margin-bottom:14px">
         <button class="btn tab primary" data-tab="overview">Overview</button>
         <button class="btn tab" data-tab="snapshots">Snapshots</button>
@@ -43,42 +49,97 @@
       </section>
 
       <section data-panel="snapshots" class="panel" hidden>
+        <div class="hint" style="margin-bottom:10px">Click a snapshot id to load its rows on the Sample data tab.</div>
         <div id="snapshots"></div>
       </section>
 
       <section data-panel="sample" class="panel" hidden>
-        <div class="row-flex" style="margin-bottom:12px">
-          <div><label style="margin:0">Rows</label><input id="limit" type="number" value="50" style="width:90px"></div>
-          <div><label style="margin:0">branch_id (optional)</label><input id="branchid" type="number" style="width:120px"></div>
+        <div class="filter-bar">
+          <div><label>Branch</label><select id="samp-branch"><option value="">All branches</option></select></div>
+          <div><label>Date column</label><select id="samp-datecol"><option value="">— none —</option></select></div>
+          <div><label>From</label><input type="date" id="samp-from"></div>
+          <div><label>To</label><input type="date" id="samp-to"></div>
+          <div><label>Rows (preview)</label><input id="limit" type="number" value="50" style="width:90px"></div>
           <button class="btn sm primary" id="load-sample" style="align-self:flex-end">Load</button>
+          <button class="btn sm good" id="export-sample" style="align-self:flex-end"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
+          <span class="spacer"></span>
+          <span id="samp-snap"></span>
         </div>
+        <div class="hint" style="margin-bottom:8px">Export writes the full filtered table (branch + date filter), ignoring the preview row limit.</div>
         <div id="sample"><div class="muted">Click load to fetch rows.</div></div>
       </section>
 
       <section data-panel="branches" class="panel" hidden>
-        <button class="btn sm primary" id="load-branches">Compute branch counts</button>
+        <div class="filter-bar">
+          <div><label>Aggregate by</label>
+            <select id="agg-by"><option value="branch">Branch</option><option value="date">Date</option><option value="both">Branch + Date</option></select></div>
+          <div id="agg-datecol-wrap" hidden><label>Date column</label><select id="agg-datecol"></select></div>
+          <div id="agg-gran-wrap" hidden><label>Granularity</label>
+            <select id="agg-gran"><option value="day">Day</option><option value="month">Month</option><option value="year">Year</option></select></div>
+          <button class="btn sm primary" id="load-branches" style="align-self:flex-end">Compute</button>
+        </div>
         <div id="branch-counts" style="margin-top:12px"></div>
       </section>
     </div>
   </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-let curTable = null;
+let curTable = null, curFields = [], BRANCHES = [];
+let sampleSnapshot = null;
+let allTables = [];
+
+async function init() {
+  try { BRANCHES = await apiGet("/api/branches"); } catch (e) { BRANCHES = []; }
+  loadTables();
+}
 
 async function loadTables() {
   try {
-    const tables = await apiGet("/api/iceberg/tables");
-    el("tlist").innerHTML = `<ul class="list">` + tables.map(t => `
-      <li>
-        <a href="#" onclick="select('${esc(t.table)}');return false;">
-          ${esc(t.table)} ${t.is_system ? '<span class="tag">sys</span>' : ''}
-        </a>
-        <span class="muted">${fmtNum(t.rows)} rows · ${fmtBytes(t.size_bytes)} · ${t.snapshots} snap</span>
-      </li>`).join("") + `</ul>` || `<div class="muted">No Iceberg tables found.</div>`;
+    allTables = await apiGet("/api/iceberg/tables");
+    renderTables();
   } catch (e) { err(e.message); }
+}
+
+function matchFilter(name, q) {
+  q = String(q || "").trim().toLowerCase();
+  if (!q) return true;
+  name = String(name || "").toLowerCase();
+  if (q.includes("*")) {
+    const re = new RegExp("^" + q.split("*")
+      .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+    return re.test(name);
+  }
+  return name.includes(q);
+}
+
+function renderTables() {
+  const q = el("tbl-filter").value;
+  const type = el("tbl-type").value;
+  const shown = allTables.filter(t =>
+    matchFilter(t.table, q) &&
+    (type === "" || (type === "system") === !!t.is_system));
+
+  el("tbl-count").textContent =
+    `${shown.length} of ${allTables.length} table${allTables.length === 1 ? "" : "s"}`;
+
+  el("tlist").innerHTML = shown.length ? `<table id="ib-tables">
+    <thead><tr><th>Table</th><th>Type</th><th class="num">Rows</th><th class="num">Size</th><th class="num">Snaps</th></tr></thead>
+    <tbody>` + shown.map(t => `
+      <tr class="clickable" data-t="${esc(t.table)}" onclick="select('${esc(t.table)}')">
+        <td class="mono">${esc(t.table)}</td>
+        <td>${t.is_system ? '<span class="tag">system</span>' : '<span class="pill ok">data</span>'}</td>
+        <td class="num">${fmtNum(t.rows)}</td>
+        <td class="num">${fmtBytes(t.size_bytes)}</td>
+        <td class="num">${t.snapshots}</td>
+      </tr>`).join("") + `</tbody></table>`
+    : `<div class="muted" style="padding:12px">${allTables.length ? "No tables match the filter." : "No Iceberg tables found."}</div>`;
+  if (curTable) markSelected(curTable);
+}
+
+function markSelected(table) {
+  $$("#ib-tables tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.t === table));
 }
 
 function showTab(tab) {
@@ -88,17 +149,20 @@ function showTab(tab) {
 
 async function select(table) {
   curTable = table;
+  markSelected(table);
   el("detail").hidden = false;
   el("detail-head").innerHTML = `<div class="row-flex"><h2 style="margin:0">${esc(table)}</h2></div>`;
   showTab("overview");
   el("sample").innerHTML = `<div class="muted">Click load to fetch rows.</div>`;
   el("branch-counts").innerHTML = "";
+  sampleSnapshot = null; el("samp-snap").innerHTML = "";
   try {
     const o = await apiGet(`/api/iceberg/tables/${encodeURIComponent(table)}`);
+    curFields = o.fields || [];
     el("ov-meta").innerHTML = [
       ["Rows", fmtNum(o.rows)], ["Files", fmtNum(o.files)], ["Size", fmtBytes(o.size_bytes)],
       ["Snapshots", o.snapshots.length], ["Format", "v" + o.format_version], ["Updated", fmtDate(o.updated)],
-    ].map(([k,v]) => `<div class="card"><div class="k">${k}</div><div class="v" style="font-size:18px">${v}</div></div>`).join("");
+    ].map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v" style="font-size:18px">${v}</div></div>`).join("");
 
     el("field-count").textContent = `${o.fields.length} cols`;
     $("#schema tbody").innerHTML = o.fields.map(f => `
@@ -109,45 +173,124 @@ async function select(table) {
       ? `<ul class="list">` + o.partitions.map(p => `<li><span class="mono">${esc(p.name)}</span><span class="muted">${esc(p.transform)}(${esc(p.source)})</span></li>`).join("") + `</ul>`
       : `<div class="muted">unpartitioned</div>`;
 
-    el("properties").innerHTML = Object.keys(o.properties||{}).length
-      ? `<ul class="list">` + Object.entries(o.properties).map(([k,v]) => `<li><span class="mono">${esc(k)}</span><span class="muted mono">${esc(v)}</span></li>`).join("") + `</ul>`
+    el("properties").innerHTML = Object.keys(o.properties || {}).length
+      ? `<ul class="list">` + Object.entries(o.properties).map(([k, v]) => `<li><span class="mono">${esc(k)}</span><span class="muted mono">${esc(v)}</span></li>`).join("") + `</ul>`
       : `<div class="muted">none</div>`;
 
-    el("snapshots").innerHTML = renderTable(
-      ["committed","operation","added_records","total_records","total_files","snapshot_id","is_current"],
-      o.snapshots.map(s => ({...s, is_current: s.is_current ? "current" : ""})),
-      { numCols: ["added_records","total_records","total_files"] });
+    renderSnapshots(o.snapshots);
+    populateSampleControls(o.fields);
+    populateAggControls(o.fields);
   } catch (e) { err(e.message); }
+}
+
+function renderSnapshots(snaps) {
+  el("snapshots").innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Committed</th><th>Operation</th><th class="num">Added</th><th class="num">Total</th><th class="num">Files</th><th>Snapshot id</th><th></th></tr></thead>
+    <tbody>` + snaps.map(s => `
+      <tr>
+        <td class="mono">${fmtDate(s.committed)}</td>
+        <td>${esc(s.operation || "—")}</td>
+        <td class="num">${fmtNum(s.added_records)}</td>
+        <td class="num">${fmtNum(s.total_records)}</td>
+        <td class="num">${fmtNum(s.total_files)}</td>
+        <td class="mono"><a href="#" onclick="openSnapshotSample('${esc(s.snapshot_id)}');return false;" title="Load this snapshot on the Sample data tab">${esc(s.snapshot_id)}</a></td>
+        <td>${s.is_current ? '<span class="pill ok">current</span>' : ''}</td>
+      </tr>`).join("") + `</tbody></table></div>`
+    || `<div class="muted">No snapshots.</div>`;
+}
+
+function openSnapshotSample(id) {
+  sampleSnapshot = id;
+  el("samp-snap").innerHTML = `<span class="tag">snapshot ${esc(id)} <a href="#" onclick="clearSnap();return false;">✕</a></span>`;
+  showTab("sample");
+  loadSample();
+}
+function clearSnap() { sampleSnapshot = null; el("samp-snap").innerHTML = ""; loadSample(); }
+
+function dateFields(fields) {
+  const dated = fields.filter(f => /date|time/i.test(f.type) || /date|time/i.test(f.name));
+  return dated.length ? dated : fields;
+}
+
+function populateSampleControls(fields) {
+  const hasBranch = fields.some(f => f.name === "branch_id");
+  const bsel = el("samp-branch");
+  bsel.innerHTML = `<option value="">All branches</option>` +
+    (hasBranch ? BRANCHES.filter(b => b.id != null)
+      .map(b => `<option value="${esc(b.id)}">${esc(b.name)} (id ${esc(b.id)})</option>`).join("") : "");
+  bsel.disabled = !hasBranch;
+  el("samp-datecol").innerHTML = `<option value="">— none —</option>` +
+    dateFields(fields).map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
+  el("samp-from").value = ""; el("samp-to").value = "";
+}
+
+function populateAggControls(fields) {
+  el("agg-datecol").innerHTML = dateFields(fields).map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join("");
+  el("agg-by").value = "branch";
+  syncAggControls();
+}
+function syncAggControls() {
+  const wantDate = el("agg-by").value !== "branch";
+  el("agg-datecol-wrap").hidden = !wantDate;
+  el("agg-gran-wrap").hidden = !wantDate;
+}
+
+function sampleQuery(includeLimit) {
+  const p = new URLSearchParams();
+  const b = el("samp-branch").value; if (b) p.set("branch_id", b);
+  if (sampleSnapshot) p.set("snapshot_id", sampleSnapshot);
+  const dc = el("samp-datecol").value;
+  if (dc) {
+    p.set("date_col", dc);
+    if (el("samp-from").value) p.set("date_from", el("samp-from").value);
+    if (el("samp-to").value) p.set("date_to", el("samp-to").value);
+  }
+  if (includeLimit) p.set("limit", el("limit").value || 50);
+  return p.toString();
 }
 
 async function loadSample() {
   if (!curTable) return;
-  const limit = el("limit").value || 50;
-  const bid = el("branchid").value;
   el("sample").innerHTML = `<div class="muted">Loading…</div>`;
   try {
-    const url = `/api/iceberg/tables/${encodeURIComponent(curTable)}/sample?limit=${limit}` + (bid ? `&branch_id=${bid}` : "");
-    const d = await apiGet(url);
-    el("sample").innerHTML = `<div class="muted" style="margin-bottom:8px">${d.rows.length} row(s), ${d.columns.length} columns</div>` +
-      renderTable(d.columns, d.rows, {});
+    const d = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/sample?` + sampleQuery(true));
+    el("sample").innerHTML =
+      `<div class="muted" style="margin-bottom:8px">${d.rows.length} row(s), ${d.columns.length} columns${sampleSnapshot ? ` · snapshot ${esc(sampleSnapshot)}` : ""}</div>` +
+      `<div class="sample-wrap">${renderTable(d.columns, d.rows, {})}</div>`;
   } catch (e) { el("sample").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
 
-async function loadBranchCounts() {
+function exportSample() {
   if (!curTable) return;
+  window.location.href = `/api/iceberg/tables/${encodeURIComponent(curTable)}/export?` + sampleQuery(false);
+}
+
+async function loadAgg() {
+  if (!curTable) return;
+  const by = el("agg-by").value;
+  const p = new URLSearchParams({ by });
+  if (by !== "branch") {
+    const dc = el("agg-datecol").value;
+    if (!dc) return err("Pick a date column");
+    p.set("date_col", dc); p.set("gran", el("agg-gran").value);
+  }
   el("branch-counts").innerHTML = `<div class="muted">Scanning…</div>`;
   try {
-    const rows = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/branch-counts`);
-    el("branch-counts").innerHTML = rows.length
-      ? renderTable(["branch_id","rows"], rows, { numCols: ["branch_id","rows"] })
-      : `<div class="muted">No branch_id column (not a partitioned data table).</div>`;
+    const d = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/aggregate?` + p.toString());
+    el("branch-counts").innerHTML = d.rows.length
+      ? renderTable(d.columns, d.rows, { numCols: ["branch_id", "rows"] })
+      : `<div class="muted">No rows (the table may not have a branch_id column).</div>`;
   } catch (e) { el("branch-counts").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
 
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("refresh").onclick = loadTables;
+el("tbl-filter").oninput = renderTables;
+el("tbl-type").onchange = renderTables;
 el("load-sample").onclick = loadSample;
-el("load-branches").onclick = loadBranchCounts;
-loadTables();
+el("export-sample").onclick = exportSample;
+el("load-branches").onclick = loadAgg;
+el("agg-by").onchange = syncAggControls;
+init();
 </script>
 {% endblock %}

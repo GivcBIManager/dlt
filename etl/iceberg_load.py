@@ -223,6 +223,49 @@ def _plan_table(
     return plan
 
 
+def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Schema:
+    """Replace ``null``-typed columns in the unified schema with concrete types.
+
+    pyarrow infers the ``null`` type for a column that is entirely null across
+    every branch this run (an unconstrained NUMBER with no/all-null values, or a
+    0-row incremental delta where every column is empty). Feeding that ``null``
+    column to dlt/pyiceberg fails when the destination already has the column
+    typed -- pyiceberg tries to cast the existing column to ``null`` and raises
+    ``Unsupported cast from <type> to null using function cast_null``.
+
+    Prefer the destination's existing Arrow type for each null column (read
+    best-effort from the Iceberg table) so a merge sees identical types and is a
+    no-op; fall back to string for a column the destination doesn't have yet.
+    Returns ``schema`` unchanged when it has no null columns.
+    """
+    null_names = [f.name for f in schema if pa.types.is_null(f.type)]
+    if not null_names:
+        return schema
+
+    overrides: dict[str, pa.DataType] = {}
+    try:
+        from dlt.common.libs.pyiceberg import get_iceberg_tables
+        from pyiceberg.io.pyarrow import schema_to_pyarrow
+        tbl = get_iceberg_tables(pipeline).get(tdef.dataset_table_name)
+        if tbl is not None:
+            # dlt normalizes identifiers to lower snake; for these clean
+            # UPPER_SNAKE / already-lower names that is just lower-casing.
+            dest = {f.name: f.type for f in schema_to_pyarrow(tbl.schema())}
+            for name in null_names:
+                t = dest.get(name.lower())
+                if t is not None and not pa.types.is_null(t):
+                    overrides[name] = t
+    except Exception as exc:  # noqa: BLE001 - best effort; string fallback is safe
+        log.warning("[%s] could not read destination types for null-column "
+                    "coercion: %s", tdef.dataset_table_name, exc)
+
+    coerced = types_map.replace_null_types(schema, overrides=overrides)
+    log.info("[%s] coerced all-null columns to concrete types: %s",
+             tdef.dataset_table_name,
+             {n: str(coerced.field(n).type) for n in null_names})
+    return coerced
+
+
 def _carry_forward_insert_at(
     batch: pa.Table, existing: pa.Table, join_keys: list[str], insert_col: str
 ) -> pa.Table:
@@ -606,6 +649,30 @@ def _load_one_table(
         log.info("[%s] skipped: %s", tdef.dataset_table_name, plan.load_error)
         monitor.record_table_loaded(plan.load_status)
         return plan
+
+    # Nothing extracted across every branch (a common incremental no-op): there
+    # is no data to write, so skip the dlt run entirely. This both avoids an
+    # empty Iceberg snapshot per unchanged table and sidesteps the all-null
+    # schema problem -- a 0-row branch infers every unconstrained-NUMBER column
+    # as the Arrow ``null`` type, which pyiceberg cannot reconcile against the
+    # table's existing typed columns ("Unsupported cast from <type> to null").
+    # Watermarks/status still advance for the successful (0-row) branches.
+    if sum(r.row_count for r in plan.success) == 0:
+        for r in plan.success:
+            control.advance(r)
+        control.save()
+        plan.load_status = "SUCCESS"
+        log.info("[%s] no rows; load skipped (disp=%s ok=%d fail=%d)",
+                 tdef.dataset_table_name, plan.disposition,
+                 len(plan.success), len(plan.failed))
+        monitor.record_table_loaded(plan.load_status)
+        return plan
+
+    # A column that is all-null in the rows that *were* extracted (an
+    # unconstrained NUMBER with only null values) is likewise inferred as the
+    # Arrow ``null`` type; coerce it to a concrete type so the load never asks
+    # pyiceberg to cast an existing column to ``null``.
+    plan.unified_schema = _coerce_unified_nulls(pipeline, tdef, plan.unified_schema)
 
     # Label the peak-memory window: this is where the staged parquet is read
     # back into Arrow and committed to Iceberg.

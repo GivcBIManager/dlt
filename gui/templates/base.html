@@ -7,42 +7,80 @@
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body data-page="{{ active }}">
-  <header>
-    <div class="brand">
-      <span class="logo"><img src="{{ url_for('static', filename='logo.svg') }}" alt="HNH"></span>
-      <span class="brand-text">HNH ETLPipeline Manager <small>Oracle → Iceberg ETL control panel</small></span>
+  {% set items = [
+    ('dashboard',   '/',            'Dashboard',        'dashboard'),
+    ('connections', '/connections', 'Connections',      'lan'),
+    ('run',         '/run',         'Run',              'play_circle'),
+    ('schedule',    '/schedule',    'Schedule',         'calendar_month'),
+    ('logs',        '/logs',        'Monitor',          'monitoring'),
+    ('tables',      '/tables',      'Tables',           'table_chart'),
+    ('iceberg',     '/iceberg',     'Staging Layer Explorer', 'explore'),
+  ] %}
+  {% set titles = {
+    'dashboard': 'Dashboard', 'connections': 'Connections', 'run': 'Run pipeline',
+    'schedule': 'Schedule', 'logs': 'Monitor', 'tables': 'Tables Configuration',
+    'iceberg': 'Staging Layer Explorer'
+  } %}
+
+  <!-- Side navigation -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <span class="sidebar-logo"><img src="{{ url_for('static', filename='logo.svg') }}" alt="HNH"></span>
+      <div class="sidebar-brand">
+        <h1>HNH ETL</h1>
+        <p>Oracle → Iceberg · v2.4</p>
+      </div>
     </div>
-    <nav class="nav">
-      {% set items = [
-        ('dashboard', '/', 'Dashboard', 'fa-gauge-high'),
-        ('run', '/run', 'Run', 'fa-play'),
-        ('schedule', '/schedule', 'Schedule', 'fa-clock'),
-        ('logs', '/logs', 'Monitor', 'fa-chart-line'),
-        ('tables', '/tables', 'Tables', 'fa-table-list'),
-        ('iceberg', '/iceberg', 'Iceberg', 'fa-cubes'),
-      ] %}
-      {% for key, href, label, icon in items %}
-        <a href="{{ href }}" class="{{ 'active' if active == key else '' }}">
-          <i class="fa-solid {{ icon }}"></i><span>{{ label }}</span>
-        </a>
-      {% endfor %}
-    </nav>
-    <div class="header-right">
-      <span class="env-pill"><i class="fa-solid fa-circle status-dot"></i> local</span>
+
+    <div class="sidebar-nav">
+      <ul>
+        {% for key, href, label, icon in items %}
+          <li>
+            <a href="{{ href }}" class="{{ 'active' if active == key else '' }}">
+              <span class="material-symbols-outlined">{{ icon }}</span>
+              <span class="nav-label">{{ label }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="sidebar-foot">
+      <span class="env-pill"><i class="fa-solid fa-circle status-dot"></i> local workspace</span>
+    </div>
+  </nav>
+
+  <!-- Top app bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn sidebar-toggle" id="sidebar-toggle" aria-label="Toggle menu">
+        <span class="material-symbols-outlined">menu</span>
+      </button>
+      <span class="topbar-title">ETL Pipeline Manager</span>
+      <span class="topbar-sep">/</span>
+      <span class="topbar-page">{{ titles.get(active, '') }}</span>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" aria-label="Notifications"><span class="material-symbols-outlined">notifications</span></button>
+      <button class="icon-btn" aria-label="Workspace"><span class="material-symbols-outlined">dns</span></button>
+      <span class="avatar"><span class="material-symbols-outlined">account_circle</span></span>
     </div>
   </header>
 
-  <main class="content">
+  <main class="app-main">
     {% block content %}{% endblock %}
   </main>
 
+  <div class="scrim" id="scrim"></div>
   <div id="toasts" class="toasts"></div>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='runparse.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
