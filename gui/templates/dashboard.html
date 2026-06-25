@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-gauge-high"></i> Dashboard</h1>
+  <p>Workspace health from <span class="mono">control_state.json</span>, branches and ETL settings.</p>
+</div>
+
+<div class="metrics-grid" id="cards"></div>
+
+<div class="grid-side" style="margin-top:18px">
+  <div class="panel">
+    <div class="panel-head"><h2><i class="fa-solid fa-code-branch"></i> Branches</h2><span id="branch-count" class="tag"></span></div>
+    <div id="branches"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2><i class="fa-solid fa-table-cells"></i> Per-table / branch state</h2>
+      <a class="btn sm ghost" href="/logs">Open monitor <i class="fa-solid fa-arrow-right"></i></a>
+    </div>
+    <div class="table-wrap">
+      <table id="control">
+        <thead><tr>
+          <th>Table</th><th>Branch</th><th>Status</th><th class="num">Rows</th>
+          <th class="num">Duration</th><th>Last CDC</th><th>Last run</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="settings-panel" style="margin-top:18px">
+  <div class="panel-head"><h2><i class="fa-solid fa-sliders"></i> ETL settings</h2><small>.dlt/config.toml [etl]</small></div>
+  <div id="settings" class="cards"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function load() {
+  try {
+    const o = await apiGet("/api/overview");
+    const c = o.control;
+    const statusBits = Object.entries(c.statuses || {})
+      .map(([k, v]) => `${pill(k)} ${v}`).join(" ");
+    el("cards").innerHTML = `
+      ${metric("Tables", c.tables, "blue", "fa-table-list")}
+      ${metric("Branches", c.branches, "teal", "fa-code-branch")}
+      ${metric("Table × branch units", c.units, "purple", "fa-layer-group")}
+      ${metric("Rows tracked", fmtNum(c.total_rows), "green", "fa-database")}
+      ${metric("Active runs", o.active_runs, "amber", "fa-bolt")}
+      ${metric("Cron available", o.cron ? "yes" : "no", "pink", "fa-clock")}
+      ${metric("Status", statusBits || "—", "red", "fa-heart-pulse", true)}
+      ${metric("Last run", fmtDate(c.last_run_at), "blue", "fa-clock-rotate-left", true)}
+    `;
+
+    el("branch-count").textContent = `${o.branches.length} configured`;
+    el("branches").innerHTML = `<ul class="list">` + o.branches.map(b => `
+      <li>
+        <span><b>${esc(b.name)}</b> <small class="mono">${esc(b.key)}</small></span>
+        <span class="muted mono">id ${esc(b.id)} · ${esc(b.host)}:${esc(b.port)} · ${esc(b.database)}</span>
+      </li>`).join("") + `</ul>`;
+
+    const s = o.settings || {};
+    const keys = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
+                  "max_retries","retry_interval_s","snapshot_expire_days","_bucket_url"];
+    el("settings").innerHTML = keys.filter(k => s[k] !== undefined).map(k =>
+      cardHtml(k.replace(/^_/,""), esc(s[k]))).join("");
+
+    const ctrl = await apiGet("/api/control");
+    const tb = $("#control tbody");
+    tb.innerHTML = ctrl.rows.map(r => `
+      <tr>
+        <td class="mono">${esc(r.table)}</td>
+        <td>${esc(r.branch)}</td>
+        <td>${pill(r.status)}</td>
+        <td class="num">${fmtNum(r.row_count)}</td>
+        <td class="num">${r.duration_ms != null ? fmtNum(r.duration_ms)+" ms" : "—"}</td>
+        <td class="mono">${esc(r.last_cdc || "—")}</td>
+        <td class="mono">${fmtDate(r.last_run_at)}</td>
+      </tr>`).join("") || `<tr><td colspan="7" class="muted">No control state yet — run the pipeline.</td></tr>`;
+  } catch (e) { err(e.message); }
+}
+function cardHtml(k, v) { return `<div class="card"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`; }
+function metric(label, value, color, icon, small) {
+  return `<div class="metric-card ${color}">
+    <div class="icon"><i class="fa-solid ${icon}"></i></div>
+    <div class="content">
+      <div class="label">${esc(label)}</div>
+      <div class="value ${small ? "sm" : ""}">${value}</div>
+    </div></div>`;
+}
+load();
+</script>
+{% endblock %}

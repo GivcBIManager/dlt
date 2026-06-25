@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HNH ETLPipeline Manager{% block title %}{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-page="{{ active }}">
+  <header>
+    <div class="brand">
+      <span class="logo"><img src="{{ url_for('static', filename='logo.svg') }}" alt="HNH"></span>
+      <span class="brand-text">HNH ETLPipeline Manager <small>Oracle → Iceberg ETL control panel</small></span>
+    </div>
+    <nav class="nav">
+      {% set items = [
+        ('dashboard', '/', 'Dashboard', 'fa-gauge-high'),
+        ('run', '/run', 'Run', 'fa-play'),
+        ('schedule', '/schedule', 'Schedule', 'fa-clock'),
+        ('logs', '/logs', 'Monitor', 'fa-chart-line'),
+        ('tables', '/tables', 'Tables', 'fa-table-list'),
+        ('iceberg', '/iceberg', 'Iceberg', 'fa-cubes'),
+      ] %}
+      {% for key, href, label, icon in items %}
+        <a href="{{ href }}" class="{{ 'active' if active == key else '' }}">
+          <i class="fa-solid {{ icon }}"></i><span>{{ label }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+    <div class="header-right">
+      <span class="env-pill"><i class="fa-solid fa-circle status-dot"></i> local</span>
+    </div>
+  </header>
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toasts" class="toasts"></div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

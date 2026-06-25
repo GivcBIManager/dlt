@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-cubes"></i> Iceberg explorer</h1>
+  <p>Datasets under <span class="mono">iceberg_output/oasis</span> — schema, partitions, snapshots and sample rows.</p>
+</div>
+
+<div class="grid-side">
+  <div class="panel">
+    <div class="panel-head"><h2>Tables</h2><button class="btn sm ghost" id="refresh">↻</button></div>
+    <div id="tlist"></div>
+  </div>
+
+  <div>
+    <div class="panel" id="detail-head">
+      <div class="muted">Select a table to inspect.</div>
+    </div>
+
+    <div id="detail" hidden>
+      <div class="row-flex" style="margin-bottom:14px">
+        <button class="btn tab primary" data-tab="overview">Overview</button>
+        <button class="btn tab" data-tab="snapshots">Snapshots</button>
+        <button class="btn tab" data-tab="sample">Sample data</button>
+        <button class="btn tab" data-tab="branches">Branch counts</button>
+      </div>
+
+      <section data-panel="overview" class="panel">
+        <div id="ov-meta" class="cards" style="margin-bottom:16px"></div>
+        <div class="grid-2">
+          <div>
+            <h2>Schema <span id="field-count" class="tag"></span></h2>
+            <div class="table-wrap" style="max-height:420px">
+              <table id="schema"><thead><tr><th>#</th><th>Column</th><th>Type</th><th>Req</th></tr></thead><tbody></tbody></table>
+            </div>
+          </div>
+          <div>
+            <h2>Partitioning</h2>
+            <div id="partitions"></div>
+            <h2 style="margin-top:16px">Properties</h2>
+            <div id="properties"></div>
+          </div>
+        </div>
+      </section>
+
+      <section data-panel="snapshots" class="panel" hidden>
+        <div id="snapshots"></div>
+      </section>
+
+      <section data-panel="sample" class="panel" hidden>
+        <div class="row-flex" style="margin-bottom:12px">
+          <div><label style="margin:0">Rows</label><input id="limit" type="number" value="50" style="width:90px"></div>
+          <div><label style="margin:0">branch_id (optional)</label><input id="branchid" type="number" style="width:120px"></div>
+          <button class="btn sm primary" id="load-sample" style="align-self:flex-end">Load</button>
+        </div>
+        <div id="sample"><div class="muted">Click load to fetch rows.</div></div>
+      </section>
+
+      <section data-panel="branches" class="panel" hidden>
+        <button class="btn sm primary" id="load-branches">Compute branch counts</button>
+        <div id="branch-counts" style="margin-top:12px"></div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let curTable = null;
+
+async function loadTables() {
+  try {
+    const tables = await apiGet("/api/iceberg/tables");
+    el("tlist").innerHTML = `<ul class="list">` + tables.map(t => `
+      <li>
+        <a href="#" onclick="select('${esc(t.table)}');return false;">
+          ${esc(t.table)} ${t.is_system ? '<span class="tag">sys</span>' : ''}
+        </a>
+        <span class="muted">${fmtNum(t.rows)} rows · ${fmtBytes(t.size_bytes)} · ${t.snapshots} snap</span>
+      </li>`).join("") + `</ul>` || `<div class="muted">No Iceberg tables found.</div>`;
+  } catch (e) { err(e.message); }
+}
+
+function showTab(tab) {
+  $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
+  $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
+}
+
+async function select(table) {
+  curTable = table;
+  el("detail").hidden = false;
+  el("detail-head").innerHTML = `<div class="row-flex"><h2 style="margin:0">${esc(table)}</h2></div>`;
+  showTab("overview");
+  el("sample").innerHTML = `<div class="muted">Click load to fetch rows.</div>`;
+  el("branch-counts").innerHTML = "";
+  try {
+    const o = await apiGet(`/api/iceberg/tables/${encodeURIComponent(table)}`);
+    el("ov-meta").innerHTML = [
+      ["Rows", fmtNum(o.rows)], ["Files", fmtNum(o.files)], ["Size", fmtBytes(o.size_bytes)],
+      ["Snapshots", o.snapshots.length], ["Format", "v" + o.format_version], ["Updated", fmtDate(o.updated)],
+    ].map(([k,v]) => `<div class="card"><div class="k">${k}</div><div class="v" style="font-size:18px">${v}</div></div>`).join("");
+
+    el("field-count").textContent = `${o.fields.length} cols`;
+    $("#schema tbody").innerHTML = o.fields.map(f => `
+      <tr><td class="num">${f.id}</td><td class="mono">${esc(f.name)}</td><td>${esc(f.type)}</td>
+      <td>${f.required ? "✓" : ""}</td></tr>`).join("");
+
+    el("partitions").innerHTML = o.partitions.length
+      ? `<ul class="list">` + o.partitions.map(p => `<li><span class="mono">${esc(p.name)}</span><span class="muted">${esc(p.transform)}(${esc(p.source)})</span></li>`).join("") + `</ul>`
+      : `<div class="muted">unpartitioned</div>`;
+
+    el("properties").innerHTML = Object.keys(o.properties||{}).length
+      ? `<ul class="list">` + Object.entries(o.properties).map(([k,v]) => `<li><span class="mono">${esc(k)}</span><span class="muted mono">${esc(v)}</span></li>`).join("") + `</ul>`
+      : `<div class="muted">none</div>`;
+
+    el("snapshots").innerHTML = renderTable(
+      ["committed","operation","added_records","total_records","total_files","snapshot_id","is_current"],
+      o.snapshots.map(s => ({...s, is_current: s.is_current ? "current" : ""})),
+      { numCols: ["added_records","total_records","total_files"] });
+  } catch (e) { err(e.message); }
+}
+
+async function loadSample() {
+  if (!curTable) return;
+  const limit = el("limit").value || 50;
+  const bid = el("branchid").value;
+  el("sample").innerHTML = `<div class="muted">Loading…</div>`;
+  try {
+    const url = `/api/iceberg/tables/${encodeURIComponent(curTable)}/sample?limit=${limit}` + (bid ? `&branch_id=${bid}` : "");
+    const d = await apiGet(url);
+    el("sample").innerHTML = `<div class="muted" style="margin-bottom:8px">${d.rows.length} row(s), ${d.columns.length} columns</div>` +
+      renderTable(d.columns, d.rows, {});
+  } catch (e) { el("sample").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+
+async function loadBranchCounts() {
+  if (!curTable) return;
+  el("branch-counts").innerHTML = `<div class="muted">Scanning…</div>`;
+  try {
+    const rows = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/branch-counts`);
+    el("branch-counts").innerHTML = rows.length
+      ? renderTable(["branch_id","rows"], rows, { numCols: ["branch_id","rows"] })
+      : `<div class="muted">No branch_id column (not a partitioned data table).</div>`;
+  } catch (e) { el("branch-counts").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+
+$$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+el("refresh").onclick = loadTables;
+el("load-sample").onclick = loadSample;
+el("load-branches").onclick = loadBranchCounts;
+loadTables();
+</script>
+{% endblock %}

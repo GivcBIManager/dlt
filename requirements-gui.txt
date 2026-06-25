@@ -1,0 +1,7 @@
+# OASIS control panel (GUI) -- installs the full pipeline stack plus the web UI.
+# Use:  pip install -r requirements-gui.txt
+-r requirements.txt
+
+Flask>=3.0
+# tomllib is stdlib on Python 3.11+; backport only needed on 3.10.
+tomli>=2.0 ; python_version < "3.11"

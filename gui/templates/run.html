@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-play"></i> Run</h1>
+  <p>Build a pipeline command, run it now, and watch the live output.</p>
+</div>
+
+<div class="grid-side">
+  <!-- builder -->
+  <div class="panel">
+    <h2>Command builder</h2>
+    <label>Script / task</label>
+    <select id="script">
+      <option value="oracle_to_iceberg">oracle_to_iceberg — extract → Iceberg</option>
+      <option value="dq_check">dq_check — Oracle vs Iceberg reconciliation</option>
+      <option value="snapshot_diff">snapshot_diff — per-record change report</option>
+      <option value="fresh_run">fresh_run — clear runtime artefacts</option>
+      <option value="custom">custom — raw command</option>
+    </select>
+
+    <div data-grp="oracle_to_iceberg">
+      <div class="form-row">
+        <div><label>Mode</label>
+          <select id="mode"><option>INCREMENTAL</option><option>INITIAL</option></select></div>
+        <div><label>Category</label>
+          <select id="category"><option>both</option><option>masters</option><option>transactions</option></select></div>
+      </div>
+      <div class="checkbox"><input type="checkbox" id="self_test_o"><label for="self_test_o">--self-test (synthetic data, no Oracle)</label></div>
+      <div class="checkbox"><input type="checkbox" id="no_progress"><label for="no_progress">--no-progress</label></div>
+    </div>
+
+    <div data-grp="dq_check" hidden>
+      <div class="form-row">
+        <div><label>Since (YYYY-MM-DD)</label><input id="since" placeholder="default: Jan 1"></div>
+        <div><label>Until (YYYY-MM-DD)</label><input id="until" placeholder="default: watermark"></div>
+      </div>
+      <label>CSV export dir (optional)</label><input id="csv" placeholder="e.g. exports">
+      <div class="checkbox"><input type="checkbox" id="no_hash"><label for="no_hash">--no-hash (counts only)</label></div>
+      <div class="checkbox"><input type="checkbox" id="no_write"><label for="no_write">--no-write (don't write Iceberg results)</label></div>
+      <div class="checkbox"><input type="checkbox" id="self_test_d"><label for="self_test_d">--self-test</label></div>
+    </div>
+
+    <div data-grp="snapshot_diff" hidden>
+      <div class="form-row">
+        <div><label>Lake table</label><input id="sd_table" value="delivery_charge"></div>
+        <div><label>Unique key</label><input id="sd_key" value="delivery_charge_id"></div>
+      </div>
+      <label>As-of day (YYYY-MM-DD, optional)</label><input id="sd_asof" placeholder="default: yesterday">
+    </div>
+
+    <div data-grp="custom" hidden>
+      <label>Raw command (runs verbatim in the repo root)</label>
+      <textarea id="custom" placeholder="python diagnostics/table_stats.py --branch jazan"></textarea>
+    </div>
+
+    <fieldset data-grp="oracle_to_iceberg dq_check" id="filters">
+      <legend>Filters</legend>
+      <label>Branches <small>(none = all)</small></label>
+      <div id="branch-chips" class="chips"></div>
+      <label style="margin-top:12px">Tables <small>(none = all)</small></label>
+      <div id="table-chips" class="chips"></div>
+      <div class="form-row" style="margin-top:12px">
+        <div><label>Log level</label>
+          <select id="log_level"><option>INFO</option><option>DEBUG</option><option>WARNING</option><option>ERROR</option></select></div>
+        <div><label>Extra args</label><input id="extra" placeholder="--max-table-workers 1"></div>
+      </div>
+    </fieldset>
+
+    <label>Command preview</label>
+    <div id="preview" class="codeline">—</div>
+    <div class="btn-row">
+      <button class="btn primary" id="run-btn"><i class="fa-solid fa-play"></i> Run now</button>
+      <button class="btn ghost" id="copy-btn"><i class="fa-solid fa-copy"></i> Copy command</button>
+    </div>
+  </div>
+
+  <!-- console + history -->
+  <div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Live output <span id="cur-run" class="tag"></span></h2>
+        <div class="row-flex">
+          <span id="cur-status"></span>
+          <button class="btn bad sm" id="stop-btn" hidden><i class="fa-solid fa-stop"></i> Stop</button>
+        </div>
+      </div>
+      <div id="console" class="console">Select or start a run to see output…</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Run history</h2><button class="btn sm ghost" id="refresh-runs">Refresh</button></div>
+      <div class="table-wrap" style="max-height:320px">
+        <table id="runs">
+          <thead><tr><th>Started</th><th>Label</th><th>Status</th><th>Command</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let BRANCHES = [], TABLES = [];
+const selBranches = new Set(), selTables = new Set();
+let curRun = null, tailOffset = 0, tailTimer = null;
+
+function buildSpec() {
+  const script = el("script").value;
+  const spec = { script };
+  if (script === "oracle_to_iceberg") {
+    spec.mode = el("mode").value;
+    spec.category = el("category").value;
+    spec.self_test = el("self_test_o").checked;
+    spec.no_progress = el("no_progress").checked;
+  } else if (script === "dq_check") {
+    spec.since = el("since").value;
+    spec.until = el("until").value;
+    spec.csv = el("csv").value;
+    spec.no_hash = el("no_hash").checked;
+    spec.no_write = el("no_write").checked;
+    spec.self_test = el("self_test_d").checked;
+  } else if (script === "snapshot_diff") {
+    spec.table = el("sd_table").value;
+    spec.unique_key = el("sd_key").value;
+    spec.as_of = el("sd_asof").value;
+  } else if (script === "custom") {
+    spec.custom = el("custom").value;
+  }
+  if (script === "oracle_to_iceberg" || script === "dq_check") {
+    spec.branches = [...selBranches];
+    spec.tables = [...selTables];
+    spec.log_level = el("log_level").value;
+    spec.extra = el("extra").value;
+  }
+  return spec;
+}
+
+function syncGroups() {
+  const script = el("script").value;
+  $$("[data-grp]").forEach(g => {
+    g.hidden = !g.dataset.grp.split(" ").includes(script);
+  });
+}
+
+let previewTimer;
+async function refreshPreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    try {
+      const r = await apiPost("/api/command/preview", buildSpec());
+      el("preview").textContent = r.preview;
+    } catch (e) { el("preview").textContent = "⚠ " + e.message; }
+  }, 150);
+}
+
+function renderChips() {
+  el("branch-chips").innerHTML = BRANCHES.map(b =>
+    `<span class="chip ${selBranches.has(b) ? "on" : ""}" data-b="${esc(b)}">${esc(b)}</span>`).join("")
+    || `<span class="muted">no branches</span>`;
+  el("table-chips").innerHTML = TABLES.map(t =>
+    `<span class="chip ${selTables.has(t) ? "on" : ""}" data-t="${esc(t)}">${esc(t)}</span>`).join("")
+    || `<span class="muted">no tables</span>`;
+  $$("#branch-chips .chip").forEach(c => c.onclick = () => {
+    const b = c.dataset.b; selBranches.has(b) ? selBranches.delete(b) : selBranches.add(b);
+    renderChips(); refreshPreview();
+  });
+  $$("#table-chips .chip").forEach(c => c.onclick = () => {
+    const t = c.dataset.t; selTables.has(t) ? selTables.delete(t) : selTables.add(t);
+    renderChips(); refreshPreview();
+  });
+}
+
+async function startRun() {
+  el("run-btn").disabled = true;
+  try {
+    const run = await apiPost("/api/run", buildSpec());
+    ok(`Started ${run.id}`);
+    viewRun(run.id);
+    loadRuns();
+  } catch (e) { err(e.message); }
+  el("run-btn").disabled = false;
+}
+
+function viewRun(id) {
+  curRun = id; tailOffset = 0;
+  el("cur-run").textContent = id;
+  el("console").textContent = "";
+  clearInterval(tailTimer);
+  pollTail();
+  tailTimer = setInterval(pollTail, 1300);
+}
+
+async function pollTail() {
+  if (!curRun) return;
+  try {
+    const r = await apiGet(`/api/runs/${curRun}/tail?offset=${tailOffset}`);
+    if (r.chunk) {
+      const c = el("console");
+      const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+      c.textContent += r.chunk;
+      if (atBottom) c.scrollTop = c.scrollHeight;
+    }
+    tailOffset = r.offset;
+    el("cur-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
+    const running = r.status === "running" || r.status === "detached";
+    el("stop-btn").hidden = !running;
+    if (!running) { clearInterval(tailTimer); loadRuns(); }
+  } catch (e) { clearInterval(tailTimer); }
+}
+
+async function stopRun() {
+  if (!curRun) return;
+  try { await apiPost(`/api/runs/${curRun}/stop`); ok("Stop signal sent"); }
+  catch (e) { err(e.message); }
+}
+
+async function loadRuns() {
+  try {
+    const runs = await apiGet("/api/runs");
+    $("#runs tbody").innerHTML = runs.map(r => `
+      <tr>
+        <td class="mono">${esc(r.id.slice(0,15))}</td>
+        <td>${esc(r.label || "—")}</td>
+        <td>${pill(r.status)}</td>
+        <td class="mono" style="max-width:340px;overflow:hidden;text-overflow:ellipsis">${esc(r.command)}</td>
+        <td class="row-flex">
+          <button class="btn sm ghost" onclick="viewRun('${r.id}')">View</button>
+          ${(r.status==="running"||r.status==="detached") ? `<button class="btn sm bad" onclick="stopById('${r.id}')">Stop</button>` : ""}
+        </td>
+      </tr>`).join("") || `<tr><td colspan="5" class="muted">No runs yet.</td></tr>`;
+  } catch (e) { err(e.message); }
+}
+async function stopById(id) { try { await apiPost(`/api/runs/${id}/stop`); ok("Stop sent"); loadRuns(); } catch(e){ err(e.message);} }
+
+async function init() {
+  try {
+    const t = await apiGet("/api/tables");
+    BRANCHES = t._branches || [];
+    const names = [];
+    for (const cat of ["masters","transactions"])
+      for (const e of (t[cat]||[])) {
+        const full = e.table || "";
+        names.push(full.includes(".") ? full.split(".").pop() : full);
+      }
+    TABLES = [...new Set(names)].filter(Boolean);
+  } catch (e) { err(e.message); }
+  renderChips();
+  syncGroups();
+  refreshPreview();
+  loadRuns();
+}
+
+el("script").onchange = () => { syncGroups(); refreshPreview(); };
+$$("input, select, textarea").forEach(node => {
+  node.addEventListener("input", refreshPreview);
+  node.addEventListener("change", refreshPreview);
+});
+el("run-btn").onclick = startRun;
+el("stop-btn").onclick = stopRun;
+el("refresh-runs").onclick = loadRuns;
+el("copy-btn").onclick = () => { navigator.clipboard.writeText(el("preview").textContent); ok("Copied"); };
+init();
+</script>
+{% endblock %}

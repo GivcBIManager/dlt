@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-chart-line"></i> Monitor</h1>
+  <p>Run &amp; cron log files, plus the Iceberg observability tables (<span class="mono">etl_run_log</span>, <span class="mono">etl_dq_results</span>).</p>
+</div>
+
+<div class="row-flex" style="margin-bottom:16px">
+  <button class="btn tab primary" data-tab="files">Log files</button>
+  <button class="btn tab" data-tab="dq">DQ results</button>
+  <button class="btn tab" data-tab="runlog">ETL run log</button>
+  <button class="btn tab" data-tab="control">ETL control</button>
+</div>
+
+<section data-panel="files">
+  <div class="grid-side">
+    <div class="panel">
+      <div class="panel-head"><h2>Files</h2><button class="btn sm ghost" id="refresh-files">↻</button></div>
+      <ul class="list" id="file-list"></ul>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 id="file-title">Select a file</h2>
+        <label class="checkbox" style="margin:0"><input type="checkbox" id="auto"><span>auto-refresh</span></label>
+      </div>
+      <div id="file-content" class="console">—</div>
+    </div>
+  </div>
+</section>
+
+<section data-panel="dq" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>etl_dq_results <small>(latest)</small></h2><button class="btn sm ghost" id="refresh-dq">↻</button></div>
+    <div id="dq"></div>
+  </div>
+</section>
+
+<section data-panel="runlog" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>etl_run_log <small>(latest)</small></h2><button class="btn sm ghost" id="refresh-runlog">↻</button></div>
+    <div id="runlog"></div>
+  </div>
+</section>
+
+<section data-panel="control" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>etl_control</h2><button class="btn sm ghost" id="refresh-control">↻</button></div>
+    <div id="control"></div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let curFile = null, autoTimer = null;
+
+function showTab(tab) {
+  $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
+  $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
+  if (tab === "dq") loadDq();
+  if (tab === "runlog") loadRunlog();
+  if (tab === "control") loadControl();
+}
+
+async function loadFiles() {
+  try {
+    const files = await apiGet("/api/logs");
+    el("file-list").innerHTML = files.map(f => `
+      <li>
+        <a href="#" onclick="openFile('${esc(f.name)}');return false;">${esc(f.name)}</a>
+        <span class="muted">${fmtBytes(f.size)} · ${fmtDate(f.modified)}</span>
+      </li>`).join("") || `<li class="muted">No log files yet.</li>`;
+  } catch (e) { err(e.message); }
+}
+
+async function openFile(name) {
+  curFile = name;
+  el("file-title").textContent = name;
+  await refreshFile();
+}
+async function refreshFile() {
+  if (!curFile) return;
+  try {
+    const r = await apiGet(`/api/logs/${encodeURIComponent(curFile)}`);
+    const c = el("file-content");
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.content || "(empty)";
+    if (atBottom) c.scrollTop = c.scrollHeight;
+  } catch (e) { err(e.message); }
+}
+
+async function loadDq() {
+  try {
+    const d = await apiGet("/api/iceberg/system/etl_dq_results?limit=300");
+    el("dq").innerHTML = renderTable(d.columns, d.rows,
+      { pillCols: ["status"], numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta"] });
+  } catch (e) { el("dq").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+async function loadRunlog() {
+  try {
+    const d = await apiGet("/api/iceberg/system/etl_run_log?limit=300");
+    el("runlog").innerHTML = renderTable(d.columns, d.rows,
+      { pillCols: ["status"], numCols: ["row_count","duration_ms","attempts"] });
+  } catch (e) { el("runlog").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+async function loadControl() {
+  try {
+    const d = await apiGet("/api/iceberg/system/etl_control?limit=500");
+    el("control").innerHTML = renderTable(d.columns, d.rows,
+      { pillCols: ["status"], numCols: ["row_count","duration_ms"] });
+  } catch (e) { el("control").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+}
+
+$$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+el("refresh-files").onclick = loadFiles;
+el("refresh-dq").onclick = loadDq;
+el("refresh-runlog").onclick = loadRunlog;
+el("refresh-control").onclick = loadControl;
+el("auto").onchange = (e) => {
+  clearInterval(autoTimer);
+  if (e.target.checked) autoTimer = setInterval(() => { refreshFile(); loadFiles(); }, 3000);
+};
+loadFiles();
+</script>
+{% endblock %}

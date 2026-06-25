@@ -1,0 +1,22 @@
+# runtime artifacts
+iceberg_output/
+_staging/
+control_state.json
+exports/
+
+# GUI runtime artifacts
+run_logs/
+gui/state/
+
+# dlt working dirs
+.dlt/pipelines/
+*.duckdb
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# secrets stay local
+.dlt/secrets.toml

@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-table-list"></i> Tables</h1>
+  <p>Add, edit and validate <span class="mono">tables.json</span>. Saves keep a timestamped backup.</p>
+</div>
+
+<div class="panel">
+  <div class="form-row">
+    <div><label>Schema</label><input id="t-schema"></div>
+    <div><label>Description</label><input id="t-desc"></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn" id="add-master"><i class="fa-solid fa-plus"></i> Master</button>
+    <button class="btn" id="add-trans"><i class="fa-solid fa-plus"></i> Transaction</button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="toggle-raw"><i class="fa-solid fa-code"></i> Raw JSON</button>
+    <button class="btn" id="validate"><i class="fa-solid fa-circle-check"></i> Validate</button>
+    <button class="btn primary" id="save"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+  </div>
+  <div id="valbox"></div>
+</div>
+
+<div id="structured">
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><h2>Masters</h2><span id="m-count" class="tag"></span></div>
+      <div id="masters"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Transactions</h2><span id="t-count" class="tag"></span></div>
+      <div id="transactions"></div>
+    </div>
+  </div>
+</div>
+
+<div id="raw-wrap" class="panel" hidden>
+  <h2>Raw tables.json</h2>
+  <textarea id="raw" class="mono" style="min-height:480px"></textarea>
+  <div class="hint">Edits here sync to the form when you switch back.</div>
+</div>
+
+<!-- editor modal -->
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">Edit table</h2>
+    <div class="form-row">
+      <div><label>Category</label><select id="f-category"><option value="masters">masters</option><option value="transactions">transactions</option></select></div>
+      <div><label>Table (OWNER.NAME) *</label><input id="f-table" placeholder="OASIS.MY_TABLE"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Unique key *</label><input id="f-key" placeholder="MY_ID or A,B"></div>
+      <div><label>CDC column</label><input id="f-cdc" placeholder="AMEND_LAST_DATE"></div>
+    </div>
+    <div class="form-row-3">
+      <div><label>Where date column</label><input id="f-wdate" placeholder="ORDER_DATE"></div>
+      <div><label>Operator</label><input id="f-wop" placeholder=">="></div>
+      <div><label>Initial value</label><input id="f-wval" placeholder="2026-06-01"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Upper operator (optional)</label><input id="f-wopmax" placeholder="<="></div>
+      <div><label>Upper value (window ceiling)</label><input id="f-wvalmax" placeholder="TO_NUMBER(...SYSDATE...)"></div>
+    </div>
+
+    <fieldset>
+      <legend>Helper (borrowed CDC — optional)</legend>
+      <div class="form-row">
+        <div><label>Helper table</label><input id="f-h-table" placeholder="OASIS.ORDERS_MASTER"></div>
+        <div><label>Helper CDC column</label><input id="f-h-cdc" placeholder="AMEND_LAST_DATE"></div>
+      </div>
+      <label>Helper where-date column (optional)</label><input id="f-h-wdate" placeholder="ORDER_DATE">
+      <label>Join pairs — one per line: <span class="mono">child_col, helper_col</span></label>
+      <textarea id="f-h-join" placeholder="MASTER_ORDER_NO, MASTER_ORDER_NO"></textarea>
+    </fieldset>
+
+    <div class="btn-row">
+      <button class="btn primary" id="f-save">Apply</button>
+      <button class="btn ghost" id="f-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let DOC = { schema: "", description: "", masters: [], transactions: [] };
+let editing = { category: "masters", index: -1 };
+let rawMode = false;
+
+function summarize(e) {
+  const bits = [];
+  if (e.unique_key) bits.push(`key=${e.unique_key}`);
+  if (e.cdc_column) bits.push(`cdc=${e.cdc_column}`);
+  if (e.where_date_column) bits.push(`date=${e.where_date_column}`);
+  if (e.where_value_of_initial_run) bits.push(`from ${e.where_operator||""} ${e.where_value_of_initial_run}`);
+  if (e.where_value_max) bits.push(`max ${e.where_operator_max||"<="} ${e.where_value_max}`);
+  if (e.helper) bits.push(`helper=${e.helper.table}`);
+  return bits.join(" · ");
+}
+
+function renderList(category) {
+  const items = DOC[category] || [];
+  const box = el(category);
+  box.innerHTML = items.map((e, i) => `
+    <div class="card" style="margin-bottom:8px">
+      <div class="row-flex">
+        <b class="mono">${esc(e.table || "(unnamed)")}</b>
+        <span class="spacer"></span>
+        <button class="btn sm ghost" onclick="openEdit('${category}', ${i})">Edit</button>
+        <button class="btn sm bad" onclick="removeEntry('${category}', ${i})">Delete</button>
+      </div>
+      <div class="muted" style="margin-top:6px;white-space:normal">${esc(summarize(e)) || "—"}</div>
+    </div>`).join("") || `<div class="muted">none</div>`;
+  el(category === "masters" ? "m-count" : "t-count").textContent = `${items.length}`;
+}
+function renderAll() { renderList("masters"); renderList("transactions"); }
+
+function openEdit(category, index) {
+  editing = { category, index };
+  const e = index >= 0 ? DOC[category][index] : {};
+  el("modal-title").textContent = index >= 0 ? "Edit table" : "New table";
+  el("f-category").value = category;
+  el("f-table").value = e.table || "";
+  el("f-key").value = e.unique_key || "";
+  el("f-cdc").value = e.cdc_column || "";
+  el("f-wdate").value = e.where_date_column || "";
+  el("f-wop").value = e.where_operator || "";
+  el("f-wval").value = e.where_value_of_initial_run || "";
+  el("f-wopmax").value = e.where_operator_max || "";
+  el("f-wvalmax").value = e.where_value_max || "";
+  const hp = e.helper || {};
+  el("f-h-table").value = hp.table || "";
+  el("f-h-cdc").value = hp.cdc_column || "";
+  el("f-h-wdate").value = hp.where_date_column || "";
+  el("f-h-join").value = (hp.join || hp.join_keys || []).map(p => p.join(", ")).join("\n");
+  el("modal").classList.add("show");
+}
+
+function applyEdit() {
+  const table = el("f-table").value.trim();
+  const key = el("f-key").value.trim();
+  if (!table) return err("Table is required");
+  if (!key) return err("Unique key is required");
+  const e = { table, unique_key: key };
+  const cdc = el("f-cdc").value.trim();
+  const wdate = el("f-wdate").value.trim();
+  const wop = el("f-wop").value.trim();
+  const wval = el("f-wval").value.trim();
+  const wopmax = el("f-wopmax").value.trim();
+  const wvalmax = el("f-wvalmax").value.trim();
+  e.cdc_column = cdc || null;
+  if (wdate) e.where_date_column = wdate; else e.where_date_column = null;
+  if (wop) e.where_operator = wop;
+  if (wval) e.where_value_of_initial_run = wval;
+  if (wopmax) e.where_operator_max = wopmax;
+  if (wvalmax) e.where_value_max = wvalmax;
+
+  const hTable = el("f-h-table").value.trim();
+  if (hTable) {
+    const join = el("f-h-join").value.split("\n").map(l => l.trim()).filter(Boolean)
+      .map(l => l.split(/[,:]/).map(s => s.trim()).filter(Boolean));
+    e.helper = { table: hTable, cdc_column: el("f-h-cdc").value.trim(), join };
+    const hwd = el("f-h-wdate").value.trim();
+    if (hwd) e.helper.where_date_column = hwd;
+  }
+
+  const newCat = el("f-category").value;
+  if (editing.index >= 0) DOC[editing.category].splice(editing.index, 1);
+  DOC[newCat] = DOC[newCat] || [];
+  DOC[newCat].push(e);
+  el("modal").classList.remove("show");
+  renderAll();
+  el("valbox").innerHTML = "";
+}
+
+function removeEntry(category, index) {
+  if (!confirm("Delete this table?")) return;
+  DOC[category].splice(index, 1);
+  renderAll();
+}
+
+function syncFromRaw() {
+  try { DOC = JSON.parse(el("raw").value); return true; }
+  catch (e) { err("Invalid JSON: " + e.message); return false; }
+}
+function syncToRaw() { el("raw").value = JSON.stringify(currentDoc(), null, 2); }
+
+function currentDoc() {
+  return {
+    schema: el("t-schema").value,
+    description: el("t-desc").value,
+    masters: DOC.masters || [],
+    transactions: DOC.transactions || [],
+  };
+}
+
+function toggleRaw() {
+  rawMode = !rawMode;
+  if (rawMode) { syncToRaw(); }
+  else { if (!syncFromRaw()) { rawMode = true; return; } el("t-schema").value = DOC.schema||""; el("t-desc").value = DOC.description||""; renderAll(); }
+  el("structured").hidden = rawMode;
+  el("raw-wrap").hidden = !rawMode;
+  el("toggle-raw").textContent = rawMode ? "Form view" : "Raw JSON";
+}
+
+async function validate() {
+  const doc = rawMode ? (syncFromRaw(), currentDocFromRaw()) : currentDoc();
+  if (!doc) return;
+  try {
+    const r = await apiPost("/api/tables/validate", doc);
+    el("valbox").innerHTML = r.valid
+      ? `<div class="banner info">✓ Valid — ${(doc.masters||[]).length} masters, ${(doc.transactions||[]).length} transactions.</div>`
+      : `<div class="banner warn">${r.errors.map(esc).join("<br>")}</div>`;
+    return r.valid;
+  } catch (e) { err(e.message); }
+}
+function currentDocFromRaw() { try { return JSON.parse(el("raw").value); } catch { return null; } }
+
+async function save() {
+  const doc = rawMode ? currentDocFromRaw() : currentDoc();
+  if (!doc) return err("Invalid JSON");
+  try {
+    const r = await apiPut("/api/tables", doc);
+    ok("Saved" + (r.backup ? " (backup kept)" : ""));
+    el("valbox").innerHTML = `<div class="banner info">✓ Saved tables.json${r.backup ? " — backup: <span class='mono'>" + esc(r.backup) + "</span>" : ""}</div>`;
+  } catch (e) { el("valbox").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; err("Save failed"); }
+}
+
+async function load() {
+  try {
+    const doc = await apiGet("/api/tables");
+    DOC = { schema: doc.schema||"", description: doc.description||"", masters: doc.masters||[], transactions: doc.transactions||[] };
+    el("t-schema").value = DOC.schema; el("t-desc").value = DOC.description;
+    renderAll();
+  } catch (e) { err(e.message); }
+}
+
+el("add-master").onclick = () => openEdit("masters", -1);
+el("add-trans").onclick = () => openEdit("transactions", -1);
+el("f-save").onclick = applyEdit;
+el("f-cancel").onclick = () => el("modal").classList.remove("show");
+el("toggle-raw").onclick = toggleRaw;
+el("validate").onclick = validate;
+el("save").onclick = save;
+load();
+</script>
+{% endblock %}

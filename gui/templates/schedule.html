@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-clock"></i> Schedule</h1>
+  <p>Define recurring runs and install them as Ubuntu <span class="mono">cron</span> jobs.</p>
+</div>
+
+<div id="cron-banner"></div>
+
+<div class="grid-side">
+  <!-- editor -->
+  <div class="panel">
+    <h2 id="form-title">New schedule</h2>
+    <label>Name</label>
+    <input id="s-name" placeholder="nightly-incremental">
+
+    <label>Schedule</label>
+    <div class="form-row">
+      <select id="s-preset"><option value="">— preset —</option></select>
+      <input id="s-expr" class="mono" placeholder="0 2 * * *">
+    </div>
+    <div class="hint">5 fields: minute hour day-of-month month day-of-week. e.g. <span class="mono">*/15 * * * *</span></div>
+
+    <label style="margin-top:12px">Task</label>
+    <select id="s-script">
+      <option value="oracle_to_iceberg">oracle_to_iceberg</option>
+      <option value="dq_check">dq_check</option>
+      <option value="snapshot_diff">snapshot_diff</option>
+      <option value="fresh_run">fresh_run</option>
+      <option value="custom">custom</option>
+    </select>
+
+    <div data-grp="oracle_to_iceberg">
+      <div class="form-row">
+        <div><label>Mode</label><select id="s-mode"><option>INCREMENTAL</option><option>INITIAL</option></select></div>
+        <div><label>Category</label><select id="s-category"><option>both</option><option>masters</option><option>transactions</option></select></div>
+      </div>
+    </div>
+    <div data-grp="dq_check" hidden>
+      <div class="form-row">
+        <div><label>Since</label><input id="s-since" placeholder="YYYY-MM-DD"></div>
+        <div><label>Until</label><input id="s-until" placeholder="YYYY-MM-DD"></div>
+      </div>
+      <div class="checkbox"><input type="checkbox" id="s-no_hash"><label for="s-no_hash">--no-hash</label></div>
+    </div>
+    <div data-grp="snapshot_diff" hidden>
+      <div class="form-row">
+        <div><label>Lake table</label><input id="s-sd_table" value="delivery_charge"></div>
+        <div><label>Unique key</label><input id="s-sd_key" value="delivery_charge_id"></div>
+      </div>
+    </div>
+    <div data-grp="custom" hidden>
+      <label>Raw command</label><textarea id="s-custom" placeholder="python diagnostics/table_stats.py"></textarea>
+    </div>
+
+    <fieldset data-grp="oracle_to_iceberg dq_check">
+      <legend>Filters</legend>
+      <div class="form-row">
+        <div><label>Branches (comma)</label><input id="s-branches" placeholder="all"></div>
+        <div><label>Tables (comma)</label><input id="s-tables" placeholder="all"></div>
+      </div>
+      <label>Extra args</label><input id="s-extra" placeholder="--max-table-workers 1">
+    </fieldset>
+
+    <label>Command preview</label>
+    <div id="s-preview" class="codeline">—</div>
+
+    <div class="btn-row">
+      <button class="btn primary" id="s-save">Save schedule</button>
+      <button class="btn ghost" id="s-reset" hidden>Cancel edit</button>
+    </div>
+  </div>
+
+  <!-- jobs + install -->
+  <div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Scheduled jobs</h2>
+        <div class="row-flex">
+          <button class="btn good sm" id="install"><i class="fa-solid fa-circle-check"></i> Apply to crontab</button>
+          <button class="btn ghost sm" id="uninstall">Remove block</button>
+        </div>
+      </div>
+      <div id="jobs"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Rendered crontab block</h2><button class="btn sm ghost" id="copy-block">Copy</button></div>
+      <div id="block" class="console" style="max-height:260px">—</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let editingId = null;
+
+function specFromForm() {
+  const script = el("s-script").value;
+  const spec = { script };
+  if (script === "oracle_to_iceberg") { spec.mode = el("s-mode").value; spec.category = el("s-category").value; }
+  else if (script === "dq_check") { spec.since = el("s-since").value; spec.until = el("s-until").value; spec.no_hash = el("s-no_hash").checked; }
+  else if (script === "snapshot_diff") { spec.table = el("s-sd_table").value; spec.unique_key = el("s-sd_key").value; }
+  else if (script === "custom") { spec.custom = el("s-custom").value; }
+  if (script === "oracle_to_iceberg" || script === "dq_check") {
+    spec.branches = el("s-branches").value; spec.tables = el("s-tables").value; spec.extra = el("s-extra").value;
+  }
+  return spec;
+}
+
+function syncGroups() {
+  const script = el("s-script").value;
+  $$("[data-grp]").forEach(g => g.hidden = !g.dataset.grp.split(" ").includes(script));
+}
+
+let pvTimer;
+async function preview() {
+  clearTimeout(pvTimer);
+  pvTimer = setTimeout(async () => {
+    try { const r = await apiPost("/api/command/preview", specFromForm()); el("s-preview").textContent = r.preview; }
+    catch (e) { el("s-preview").textContent = "⚠ " + e.message; }
+  }, 150);
+}
+
+function banner(st) {
+  if (st.available) {
+    el("cron-banner").innerHTML = `<div class="banner info">cron is available on this host — saved jobs can be applied to the live crontab.</div>`;
+  } else {
+    el("cron-banner").innerHTML = `<div class="banner warn">cron is not available on this host (Windows). Jobs are saved here; copy the rendered block onto the Ubuntu host (<span class="mono">crontab -e</span>) or run this panel there and click <b>Apply to crontab</b>.</div>`;
+  }
+}
+
+async function load() {
+  try {
+    const data = await apiGet("/api/schedules");
+    banner(data.status);
+    el("block").textContent = data.status.block || "—";
+    if (!el("s-preset").dataset.filled) {
+      el("s-preset").insertAdjacentHTML("beforeend",
+        data.presets.map(p => `<option value="${esc(p.expr)}">${esc(p.label)} (${esc(p.expr)})</option>`).join(""));
+      el("s-preset").dataset.filled = "1";
+    }
+    const installed = new Set(data.status.installed_ids || []);
+    el("jobs").innerHTML = data.jobs.map(j => `
+      <div class="card" style="margin-bottom:10px">
+        <div class="row-flex">
+          <b>${esc(j.name)}</b>
+          ${pill(j.enabled ? "ok" : "stopped")}
+          <span class="tag mono">${esc(j.expr)}</span>
+          ${installed.has(j.id) ? `<span class="pill running">live</span>` : ""}
+          <span class="spacer"></span>
+          <button class="btn sm ghost" onclick="editJob('${j.id}')">Edit</button>
+          <button class="btn sm" onclick="toggleJob('${j.id}', ${j.enabled ? "false":"true"})">${j.enabled ? "Disable":"Enable"}</button>
+          <button class="btn sm bad" onclick="delJob('${j.id}')">Delete</button>
+        </div>
+        <div class="muted" style="margin:6px 0 4px">${esc(j.label)} → log <span class="mono">${esc(j.log)}</span></div>
+        <div class="codeline">${esc(j.cron_line)}</div>
+      </div>`).join("") || `<div class="muted">No schedules yet.</div>`;
+    window._jobs = data.jobs;
+  } catch (e) { err(e.message); }
+}
+
+function editJob(id) {
+  const j = (window._jobs || []).find(x => x.id === id);
+  if (!j) return;
+  editingId = id;
+  el("form-title").textContent = "Edit: " + j.name;
+  el("s-reset").hidden = false;
+  el("s-name").value = j.name; el("s-expr").value = j.expr;
+  const s = j.spec || {};
+  el("s-script").value = s.script || "oracle_to_iceberg";
+  el("s-mode").value = s.mode || "INCREMENTAL";
+  el("s-category").value = s.category || "both";
+  el("s-since").value = s.since || ""; el("s-until").value = s.until || "";
+  el("s-no_hash").checked = !!s.no_hash;
+  el("s-sd_table").value = s.table || "delivery_charge"; el("s-sd_key").value = s.unique_key || "delivery_charge_id";
+  el("s-custom").value = s.custom || "";
+  el("s-branches").value = Array.isArray(s.branches) ? s.branches.join(",") : (s.branches || "");
+  el("s-tables").value = Array.isArray(s.tables) ? s.tables.join(",") : (s.tables || "");
+  el("s-extra").value = s.extra || "";
+  syncGroups(); preview();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+  editingId = null;
+  el("form-title").textContent = "New schedule";
+  el("s-reset").hidden = true;
+  el("s-name").value = ""; el("s-expr").value = "";
+  el("s-branches").value = ""; el("s-tables").value = ""; el("s-extra").value = "";
+  preview();
+}
+
+async function save() {
+  const name = el("s-name").value.trim();
+  const expr = el("s-expr").value.trim();
+  if (!name) return err("Name is required");
+  if (!expr) return err("Schedule expression is required");
+  const spec = specFromForm();
+  try {
+    if (editingId) { await apiPut(`/api/schedules/${editingId}`, { name, expr, spec }); ok("Updated"); }
+    else { await apiPost("/api/schedules", { name, expr, spec }); ok("Saved"); }
+    resetForm(); load();
+  } catch (e) { err(e.message); }
+}
+async function toggleJob(id, enabled) { try { await apiPut(`/api/schedules/${id}`, { enabled }); load(); } catch(e){ err(e.message);} }
+async function delJob(id) { if(!confirm("Delete this schedule?")) return; try { await apiDel(`/api/schedules/${id}`); ok("Deleted"); load(); } catch(e){ err(e.message);} }
+async function install() { try { const r = await apiPost("/api/schedules/install"); r.installed ? ok(`Installed ${r.count} job(s) to crontab`) : err(r.reason); load(); } catch(e){ err(e.message);} }
+async function uninstall() { try { const r = await apiPost("/api/schedules/uninstall"); r.installed ? ok("Removed managed block") : err(r.reason); load(); } catch(e){ err(e.message);} }
+
+el("s-preset").onchange = () => { if (el("s-preset").value) { el("s-expr").value = el("s-preset").value; preview(); } };
+el("s-script").onchange = () => { syncGroups(); preview(); };
+$$("#s-mode,#s-category,#s-since,#s-until,#s-no_hash,#s-sd_table,#s-sd_key,#s-custom,#s-branches,#s-tables,#s-extra,#s-expr")
+  .forEach(n => { n.addEventListener("input", preview); n.addEventListener("change", preview); });
+el("s-save").onclick = save;
+el("s-reset").onclick = resetForm;
+el("install").onclick = install;
+el("uninstall").onclick = uninstall;
+el("copy-block").onclick = () => { navigator.clipboard.writeText(el("block").textContent); ok("Copied"); };
+syncGroups(); preview(); load();
+</script>
+{% endblock %}
