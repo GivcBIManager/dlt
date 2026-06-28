@@ -95,11 +95,6 @@ def page_connections():
     return render_template("connections.html", active="connections")
 
 
-@app.route("/pipelines")
-def page_pipelines():
-    return render_template("pipelines.html", active="pipelines")
-
-
 @app.route("/flows")
 def page_flows():
     return render_template("flows.html", active="flows")

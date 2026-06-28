@@ -18,6 +18,17 @@ def test_add_rejects_bad_spec(state_dir):
         ps.add_pipeline("bad", {"script": "custom", "custom": ""})
 
 
+def test_add_auto_names_when_blank(state_dir):
+    import pipelines_store as ps
+    spec = {"script": "dq_check"}
+    p1 = ps.add_pipeline("", spec)
+    p2 = ps.add_pipeline("", spec)  # same label -> deduped
+    assert p1["name"]  # non-empty auto name derived from the command label
+    assert p2["name"] != p1["name"]
+    assert p2["name"].endswith("(2)")
+    assert len(ps.load_pipelines()) == 2
+
+
 def test_update_and_delete(state_dir):
     import pipelines_store as ps
     p = ps.add_pipeline("a", {"script": "dq_check"})

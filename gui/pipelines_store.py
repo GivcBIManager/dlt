@@ -48,13 +48,26 @@ def get_pipeline(pid: str) -> dict[str, Any] | None:
     return next((_render(p) for p in _load() if p["id"] == pid), None)
 
 
+def _unique_name(base: str, existing: set[str]) -> str:
+    """A name not already in ``existing``, suffixing ' (2)', ' (3)', … if needed."""
+    base = (base or "").strip() or "pipeline"
+    if base not in existing:
+        return base
+    i = 2
+    while f"{base} ({i})" in existing:
+        i += 1
+    return f"{base} ({i})"
+
+
 def add_pipeline(name: str, spec: dict[str, Any]) -> dict[str, Any]:
-    commands.build_argv(spec)  # validates; raises ValueError on bad spec
+    _, label = commands.build_argv(spec)  # validates; raises ValueError on bad spec
+    items = _load()
+    existing = {p["name"] for p in items}
     name = (name or "").strip()
     if not name:
-        raise ValueError("Pipeline name is required")
-    items = _load()
-    if any(p["name"] == name for p in items):
+        # Auto-name from the command label (e.g. the Run page "Save" button).
+        name = _unique_name(label, existing)
+    elif name in existing:
         raise ValueError(f"Pipeline '{name}' already exists")
     p = {"id": uuid.uuid4().hex[:8], "name": name, "spec": spec,
          "created_at": datetime.now().isoformat(timespec="seconds")}

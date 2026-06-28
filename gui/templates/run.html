@@ -92,37 +92,59 @@
     <div id="preview" class="codeline">—</div>
     <div class="btn-row">
       <button class="btn primary" id="run-btn"><i class="fa-solid fa-play"></i> Run now</button>
+      <button class="btn good" id="save-pipe-btn"><i class="fa-solid fa-floppy-disk"></i> Save as pipeline</button>
       <button class="btn ghost" id="copy-btn"><i class="fa-solid fa-copy"></i> Copy command</button>
     </div>
+    <div class="hint">“Save as pipeline” stores this command (auto-named) so you can re-run it or schedule it on the <a href="/flows">Flows</a> page.</div>
   </div>
 
-  <!-- console + history -->
+  <!-- tabs: live output + history  |  saved pipelines -->
   <div>
-    <div class="panel" id="run-panel">
-      <div class="panel-head">
-        <h2>Live output <span id="cur-run" class="tag"></span></h2>
-        <div class="row-flex">
-          <span id="cur-status"></span>
-          <button class="btn sm ghost" id="toggle-raw"><i class="fa-solid fa-terminal"></i> Raw log</button>
-          <button class="btn bad sm" id="stop-btn" hidden><i class="fa-solid fa-stop"></i> Stop</button>
+    <div class="row-flex" style="margin-bottom:12px">
+      <button class="btn tab primary" data-rtab="output"><i class="fa-solid fa-terminal"></i> Output &amp; history</button>
+      <button class="btn tab" data-rtab="saved"><i class="fa-solid fa-bookmark"></i> Saved pipelines <span id="saved-count" class="tag"></span></button>
+    </div>
+
+    <section data-rpanel="output">
+      <div class="panel" id="run-panel">
+        <div class="panel-head">
+          <h2>Live output <span id="cur-run" class="tag"></span></h2>
+          <div class="row-flex">
+            <span id="cur-status"></span>
+            <button class="btn sm ghost" id="toggle-raw"><i class="fa-solid fa-terminal"></i> Raw log</button>
+            <button class="btn bad sm" id="stop-btn" hidden><i class="fa-solid fa-stop"></i> Stop</button>
+          </div>
+        </div>
+
+        <!-- parsed live dashboard (built from the streamed log) -->
+        {% include "_dash.html" %}
+
+        <div id="console" class="console">Select or start a run to see output…</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Run history</h2><button class="btn sm ghost" id="refresh-runs">Refresh</button></div>
+        <div class="table-wrap" style="max-height:320px">
+          <table id="runs">
+            <thead><tr><th>Started</th><th>Label</th><th>Status</th><th>Command</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
+    </section>
 
-      <!-- parsed live dashboard (built from the streamed log) -->
-      {% include "_dash.html" %}
-
-      <div id="console" class="console">Select or start a run to see output…</div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h2>Run history</h2><button class="btn sm ghost" id="refresh-runs">Refresh</button></div>
-      <div class="table-wrap" style="max-height:320px">
-        <table id="runs">
-          <thead><tr><th>Started</th><th>Label</th><th>Status</th><th>Command</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
+    <section data-rpanel="saved" hidden>
+      <div class="panel">
+        <div class="panel-head"><h2>Saved pipelines</h2><button class="btn sm ghost" id="refresh-saved">Refresh</button></div>
+        <p class="hint">Re-run a saved command here, load it back into the builder to tweak, or delete it. These are also what the <a href="/flows">Flows</a> page schedules.</p>
+        <div class="table-wrap" style="max-height:460px">
+          <table id="saved-table">
+            <thead><tr><th>Name</th><th>Command</th><th>Saved</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </section>
   </div>
 </div>
 {% endblock %}
@@ -366,6 +388,121 @@ async function loadRuns() {
 }
 async function stopById(id) { try { await apiPost(`/api/runs/${id}/stop`); ok("Stop sent"); loadRuns(); } catch(e){ err(e.message);} }
 
+// ---- Saved pipelines (built here, scheduled on the Flows page) -------------
+let SAVED = [];
+
+function showRtab(t) {
+  $$(".tab[data-rtab]").forEach(b => b.classList.toggle("primary", b.dataset.rtab === t));
+  $$("[data-rpanel]").forEach(s => s.hidden = s.dataset.rpanel !== t);
+  if (t === "saved") loadPipelines();
+}
+
+async function savePipeline() {
+  el("save-pipe-btn").disabled = true;
+  try {
+    const p = await apiPost("/api/pipelines", { spec: buildSpec() });   // blank name -> auto-named
+    ok(`Saved pipeline “${p.name}”`);
+    loadPipelines();
+  } catch (e) { err(e.message); }
+  el("save-pipe-btn").disabled = false;
+}
+
+async function loadPipelines() {
+  try {
+    SAVED = await apiGet("/api/pipelines");
+    el("saved-count").textContent = SAVED.length;
+    $("#saved-table tbody").innerHTML = SAVED.map(p => `
+      <tr>
+        <td><b>${esc(p.name)}</b></td>
+        <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.command)}">${esc(p.command)}</td>
+        <td class="mono">${esc(fmtDate(p.created_at))}</td>
+        <td class="row-flex">
+          <button class="btn sm ghost" onclick="loadSaved('${p.id}')">Load</button>
+          <button class="btn sm" onclick="runSaved('${p.id}')">Run</button>
+          <button class="btn sm bad" onclick="delPipeline('${p.id}')">Delete</button>
+        </td>
+      </tr>`).join("") ||
+      `<tr><td colspan="4" class="muted">No saved pipelines yet — build a command and click “Save as pipeline”.</td></tr>`;
+  } catch (e) { err(e.message); }
+}
+
+function loadSaved(id) {
+  const p = SAVED.find(x => x.id === id);
+  if (!p) return;
+  loadSpec(p.spec);
+  ok(`Loaded “${p.name}” into the builder`);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function runSaved(id) {
+  const p = SAVED.find(x => x.id === id);
+  if (!p) return;
+  try {
+    const run = await apiPost("/api/run", p.spec);   // run the stored spec at full fidelity
+    ok(`Started ${run.id}`);
+    showRtab("output");
+    viewRun(run.id);
+    loadRuns();
+  } catch (e) { err(e.message); }
+}
+
+async function delPipeline(id) {
+  if (!confirm("Delete this saved pipeline?")) return;
+  try { await apiDel(`/api/pipelines/${id}`); ok("Deleted"); loadPipelines(); }
+  catch (e) { err(e.message); }   // surfaces the "used by flow …" guard
+}
+
+// Populate the builder form from a saved spec (reverse of buildSpec).
+function loadSpec(spec) {
+  spec = spec || {};
+  el("script").value = spec.script || "oracle_to_iceberg";
+  syncGroups();
+  if (spec.script === "oracle_to_iceberg") {
+    if (spec.mode) el("mode").value = spec.mode;
+    if (spec.category) el("category").value = spec.category;
+    el("self_test_o").checked = !!spec.self_test;
+    el("no_progress").checked = !!spec.no_progress;
+  } else if (spec.script === "dq_check") {
+    el("since").value = spec.since || "";
+    el("until").value = spec.until || "";
+    el("csv").value = spec.csv || "";
+    el("no_hash").checked = !!spec.no_hash;
+    el("no_write").checked = !!spec.no_write;
+    el("self_test_d").checked = !!spec.self_test;
+  } else if (spec.script === "snapshot_diff") {
+    el("sd_table").value = spec.table || "";
+    el("sd_key").value = spec.unique_key || "";
+    el("sd_asof").value = spec.as_of || "";
+  } else if (spec.script === "custom") {
+    el("custom").value = spec.custom || "";
+  }
+  const toList = v => Array.isArray(v) ? v : (v ? String(v).split(",") : []);
+  selBranches.clear();
+  toList(spec.branches).map(s => s.trim()).filter(Boolean).forEach(b => selBranches.add(b));
+  selTables.clear();
+  toList(spec.tables).map(s => s.trim()).filter(Boolean).forEach(t => selTables.add(t));
+  if (spec.log_level) el("log_level").value = spec.log_level;
+  restoreExtra(spec.extra || "");
+  renderBranches(); renderTables(); refreshPreview();
+}
+
+// Best-effort restore of the extra-args checkboxes/values from a flag string.
+function restoreExtra(extraStr) {
+  $$("#extra-args .extra-arg").forEach(row => {
+    const cb = row.querySelector('input[type=checkbox]'); if (cb) cb.checked = false;
+    const v = row.querySelector(".ea-val"); if (v) v.value = "";
+  });
+  const tokens = String(extraStr || "").trim().split(/\s+/).filter(Boolean);
+  const rows = [...$$("#extra-args .extra-arg")];
+  for (let i = 0; i < tokens.length; i++) {
+    const row = rows.find(r => r.querySelector('input[type=checkbox]')?.dataset.flag === tokens[i]);
+    if (!row) continue;
+    row.querySelector('input[type=checkbox]').checked = true;
+    const valInput = row.querySelector(".ea-val");
+    if (valInput && i + 1 < tokens.length && !tokens[i + 1].startsWith("--")) valInput.value = tokens[++i];
+  }
+}
+
 async function loadSettings() {
   try { SETTINGS = await apiGet("/api/settings") || {}; renderSettings(); }
   catch (e) { err(e.message); }
@@ -425,6 +562,7 @@ async function init() {
   refreshPreview();
   loadRuns();
   loadSettings();
+  loadPipelines();
 }
 
 el("script").onchange = () => { syncGroups(); renderTables(); refreshPreview(); };
@@ -448,6 +586,9 @@ el("stop-btn").onclick = stopRun;
 el("toggle-raw").onclick = () => el("run-panel").classList.toggle("raw-hidden");
 el("refresh-runs").onclick = loadRuns;
 el("copy-btn").onclick = () => { navigator.clipboard.writeText(el("preview").textContent); ok("Copied"); };
+el("save-pipe-btn").onclick = savePipeline;
+el("refresh-saved").onclick = loadPipelines;
+$$(".tab[data-rtab]").forEach(b => b.onclick = () => showRtab(b.dataset.rtab));
 init();
 </script>
 {% endblock %}
