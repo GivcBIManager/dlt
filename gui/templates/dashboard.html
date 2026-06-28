@@ -2,7 +2,7 @@
 {% block content %}
 <div class="page-head">
   <h1><i class="fa-solid fa-gauge-high"></i> Dashboard</h1>
-  <p>Workspace health from <span class="mono">control_state.json</span>, branches and ETL settings.</p>
+  <p>Workspace health from <span class="mono">control_state.json</span> and branches.</p>
 </div>
 
 <div class="metrics-grid" id="cards"></div>
@@ -33,35 +33,11 @@
   </div>
 </div>
 
-<div class="panel" id="settings-panel" style="margin-top:18px">
-  <div class="panel-head">
-    <h2><i class="fa-solid fa-sliders"></i> ETL settings</h2>
-    <div class="row-flex">
-      <small>.dlt/config.toml [etl]</small>
-      <button class="btn sm ghost" id="edit-settings"><i class="fa-solid fa-pen"></i> Edit</button>
-      <button class="btn sm primary" id="save-settings" hidden><i class="fa-solid fa-floppy-disk"></i> Save</button>
-      <button class="btn sm ghost" id="cancel-settings" hidden>Cancel</button>
-    </div>
-  </div>
-  <div id="settings" class="cards"></div>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let CTRL_ROWS = [];
-let SETTINGS = {};
-let editingSettings = false;
-
-// Keys editable in .dlt/config.toml [etl] (mirrors workspace.EDITABLE_ETL_KEYS).
-const EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
-  "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
-  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode"]);
-const NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
-  "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
-  "snapshot_expire_days","snapshot_min_to_keep"]);
-const SHOWN = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
-  "max_retries","retry_interval_s","snapshot_expire_days","_bucket_url"];
 
 async function load() {
   try {
@@ -79,9 +55,6 @@ async function load() {
       ${metric("Status", statusBits || "—", "red", "fa-heart-pulse", true)}
       ${metric("Last run", fmtDate(c.last_run_at), "blue", "fa-clock-rotate-left", true)}
     `;
-
-    SETTINGS = o.settings || {};
-    renderSettings();
 
     const ctrl = await apiGet("/api/control");
     CTRL_ROWS = ctrl.rows;
@@ -119,43 +92,6 @@ function renderControl() {
   el("f-count").textContent = `${rows.length} of ${CTRL_ROWS.length} rows`;
 }
 
-function renderSettings() {
-  el("settings").innerHTML = SHOWN.filter(k => SETTINGS[k] !== undefined).map(k => {
-    const label = k.replace(/^_/, "");
-    if (editingSettings && EDITABLE.has(k)) {
-      const type = NUMERIC.has(k) ? "number" : "text";
-      return `<div class="card"><div class="k">${esc(label)}</div>
-        <div class="v"><input class="set-input" data-k="${esc(k)}" type="${type}" value="${esc(SETTINGS[k])}"></div></div>`;
-    }
-    const lock = (!editingSettings || EDITABLE.has(k)) ? "" : ` <i class="fa-solid fa-lock muted" title="not editable here"></i>`;
-    return `<div class="card"><div class="k">${esc(label)}${lock}</div><div class="v">${esc(SETTINGS[k])}</div></div>`;
-  }).join("");
-}
-
-function toggleEdit(on) {
-  editingSettings = on;
-  el("edit-settings").hidden = on;
-  el("save-settings").hidden = !on;
-  el("cancel-settings").hidden = !on;
-  renderSettings();
-}
-
-async function saveSettings() {
-  const updates = {};
-  $$(".set-input").forEach(inp => {
-    const k = inp.dataset.k;
-    let v = inp.value.trim();
-    if (NUMERIC.has(k)) { if (v === "") return; v = Number(v); }
-    updates[k] = v;
-  });
-  try {
-    const r = await apiPut("/api/settings", updates);
-    Object.assign(SETTINGS, r.applied);
-    ok(`Saved ${Object.keys(r.applied).length} setting(s)`);
-    toggleEdit(false);
-  } catch (e) { err(e.message); }
-}
-
 function metric(label, value, color, icon, small) {
   return `<div class="metric-card ${color}">
     <div class="icon"><i class="fa-solid ${icon}"></i></div>
@@ -167,9 +103,6 @@ function metric(label, value, color, icon, small) {
 
 ["f-table","f-branch","f-status"].forEach(id => el(id).onchange = renderControl);
 el("f-clear").onclick = () => { el("f-table").value=""; el("f-branch").value=""; el("f-status").value=""; renderControl(); };
-el("edit-settings").onclick = () => toggleEdit(true);
-el("cancel-settings").onclick = () => toggleEdit(false);
-el("save-settings").onclick = saveSettings;
 load();
 </script>
 {% endblock %}

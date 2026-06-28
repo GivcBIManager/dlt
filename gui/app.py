@@ -125,6 +125,12 @@ def api_control():
     return jsonify({"summary": workspace.control_summary(), "rows": workspace.control_rows()})
 
 
+@app.get("/api/settings")
+@api
+def api_settings_get():
+    return jsonify(workspace.etl_settings())
+
+
 @app.put("/api/settings")
 @api
 def api_settings_put():

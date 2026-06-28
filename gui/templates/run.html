@@ -5,6 +5,19 @@
   <p>Build a pipeline command, run it now, and watch the live output.</p>
 </div>
 
+<div class="panel" id="settings-panel" style="margin-bottom:18px">
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-sliders"></i> ETL settings</h2>
+    <div class="row-flex">
+      <small>.dlt/config.toml [etl]</small>
+      <button class="btn sm ghost" id="edit-settings"><i class="fa-solid fa-pen"></i> Edit</button>
+      <button class="btn sm primary" id="save-settings" hidden><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      <button class="btn sm ghost" id="cancel-settings" hidden>Cancel</button>
+    </div>
+  </div>
+  <div id="settings" class="cards"></div>
+</div>
+
 <div class="grid-side">
   <!-- builder -->
   <div class="panel">
@@ -120,6 +133,19 @@
 let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [] };
 const selBranches = new Set(), selTables = new Set();
 let curRun = null, tailOffset = 0, tailTimer = null;
+
+// ETL settings (.dlt/config.toml [etl]) — shown/edited at the top of the page.
+let SETTINGS = {};
+let editingSettings = false;
+// Keys editable in .dlt/config.toml [etl] (mirrors workspace.EDITABLE_ETL_KEYS).
+const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
+  "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode"]);
+const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
+  "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
+  "snapshot_expire_days","snapshot_min_to_keep"]);
+const SET_SHOWN = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
+  "max_retries","retry_interval_s","snapshot_expire_days"];
 
 // Extra args: each is a flag, optionally taking a value. The value field's
 // tooltip shows example values (so the user knows the expected shape) and ticking
@@ -242,15 +268,17 @@ function syncTables() {
 
 function renderExtraArgs() {
   el("extra-args").innerHTML = EXTRA_ARGS.map(a => `
-    <div class="extra-arg" title="${esc(a.help)}">
+    <div class="extra-arg"${a.value ? ` title="${esc(a.help)}"` : ""}>
       <label class="checkbox" style="margin:0">
         <input type="checkbox" data-flag="${esc(a.flag)}">
         <span class="mono">${esc(a.flag)}</span>
+        ${a.value ? "" : `<span class="info-icon" tabindex="0" role="img"
+             title="${esc(a.help)}" aria-label="${esc(a.help)}">i</span>`}
       </label>
       ${a.value
         ? `<input class="ea-val" placeholder="value" autocomplete="off"
              title="Examples: ${esc(a.examples)} — ${esc(a.help)}">`
-        : `<span class="muted" style="font-size:11px">${esc(a.help)}</span>`}
+        : ""}
     </div>`).join("");
   $$("#extra-args input[type=checkbox]").forEach(cb =>
     cb.addEventListener("change", refreshPreview));
@@ -339,6 +367,48 @@ async function loadRuns() {
 }
 async function stopById(id) { try { await apiPost(`/api/runs/${id}/stop`); ok("Stop sent"); loadRuns(); } catch(e){ err(e.message);} }
 
+async function loadSettings() {
+  try { SETTINGS = await apiGet("/api/settings") || {}; renderSettings(); }
+  catch (e) { err(e.message); }
+}
+
+function renderSettings() {
+  el("settings").innerHTML = SET_SHOWN.filter(k => SETTINGS[k] !== undefined).map(k => {
+    const label = k.replace(/^_/, "");
+    if (editingSettings && SET_EDITABLE.has(k)) {
+      const type = SET_NUMERIC.has(k) ? "number" : "text";
+      return `<div class="card"><div class="k">${esc(label)}</div>
+        <div class="v"><input class="set-input" data-k="${esc(k)}" type="${type}" value="${esc(SETTINGS[k])}"></div></div>`;
+    }
+    const lock = (!editingSettings || SET_EDITABLE.has(k)) ? "" : ` <i class="fa-solid fa-lock muted" title="not editable here"></i>`;
+    return `<div class="card"><div class="k">${esc(label)}${lock}</div><div class="v">${esc(SETTINGS[k])}</div></div>`;
+  }).join("");
+}
+
+function toggleEditSettings(on) {
+  editingSettings = on;
+  el("edit-settings").hidden = on;
+  el("save-settings").hidden = !on;
+  el("cancel-settings").hidden = !on;
+  renderSettings();
+}
+
+async function saveSettings() {
+  const updates = {};
+  $$(".set-input").forEach(inp => {
+    const k = inp.dataset.k;
+    let v = inp.value.trim();
+    if (SET_NUMERIC.has(k)) { if (v === "") return; v = Number(v); }
+    updates[k] = v;
+  });
+  try {
+    const r = await apiPut("/api/settings", updates);
+    Object.assign(SETTINGS, r.applied);
+    ok(`Saved ${Object.keys(r.applied).length} setting(s)`);
+    toggleEditSettings(false);
+  } catch (e) { err(e.message); }
+}
+
 async function init() {
   try {
     const t = await apiGet("/api/tables");
@@ -355,6 +425,7 @@ async function init() {
   syncGroups();
   refreshPreview();
   loadRuns();
+  loadSettings();
 }
 
 el("script").onchange = () => { syncGroups(); renderTables(); refreshPreview(); };
@@ -370,6 +441,9 @@ el("branches").addEventListener("change", () => {
   [...el("branches").selectedOptions].forEach(o => selBranches.add(o.value));
 });
 el("tables").addEventListener("change", syncTables);
+el("edit-settings").onclick = () => toggleEditSettings(true);
+el("cancel-settings").onclick = () => toggleEditSettings(false);
+el("save-settings").onclick = saveSettings;
 el("run-btn").onclick = startRun;
 el("stop-btn").onclick = stopRun;
 el("toggle-raw").onclick = () => el("run-panel").classList.toggle("raw-hidden");
