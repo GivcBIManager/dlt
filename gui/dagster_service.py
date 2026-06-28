@@ -28,7 +28,7 @@ class DagsterService:
     def __init__(self) -> None:
         self._proc: subprocess.Popen | None = None
         self._lock = threading.RLock()
-        self._log_path = config.LOG_DIR / "dagster.log"
+        self._log_fh: "Any | None" = None
 
     # --- setup ------------------------------------------------------------ #
     def ensure_home(self) -> Path:
@@ -66,10 +66,17 @@ class DagsterService:
                 kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 kwargs["start_new_session"] = True
-            log_fh = open(self._log_path, "a", encoding="utf-8", buffering=1)
+            if self._log_fh is not None:
+                try:
+                    self._log_fh.close()
+                except OSError:
+                    pass
+                self._log_fh = None
+            log_path = config.LOG_DIR / "dagster.log"
+            self._log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
             self._proc = subprocess.Popen(
                 self.launch_argv(), cwd=str(config.ORCHESTRATOR_DIR),
-                stdout=log_fh, stderr=subprocess.STDOUT,
+                stdout=self._log_fh, stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL, env=env, **kwargs,
             )
         return self.status()
@@ -92,13 +99,21 @@ class DagsterService:
                 except OSError:
                     pass
             self._proc = None
+            if self._log_fh is not None:
+                try:
+                    self._log_fh.close()
+                except OSError:
+                    pass
+                self._log_fh = None
         return {"running": False}
 
     def status(self) -> dict[str, Any]:
-        running = self.is_running()
+        with self._lock:
+            running = self._proc is not None and self._proc.poll() is None
+            pid = self._proc.pid if running else None
         return {
             "running": running,
-            "pid": self._proc.pid if running and self._proc else None,
+            "pid": pid,
             "url": config.dagster_base_url(),
         }
 
