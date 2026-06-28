@@ -28,3 +28,6 @@ gui-server.err.log
 
 # pytest local basetemp
 .pytest_tmp/
+
+# dg CLI cache/telemetry
+.dg/

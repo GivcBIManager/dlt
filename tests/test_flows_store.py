@@ -38,6 +38,14 @@ def test_add_flow_and_reference(state_dir):
     assert [r["id"] for r in fs.referencing_flows(pa)] == [f["id"]]
 
 
+def test_validate_rejects_bad_node_id():
+    import flows_store as fs
+    nodes = [{"node_id": "bad id!", "pipeline_id": "p", "deps": []}]
+    import pytest
+    with pytest.raises(ValueError):
+        fs.validate_flow(nodes, known_pipeline_ids={"p"})
+
+
 def test_add_flow_rejects_bad_cron(state_dir):
     import flows_store as fs
     pa, _ = _seed_pipelines(state_dir)

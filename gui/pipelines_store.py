@@ -67,6 +67,8 @@ def update_pipeline(pid: str, **fields: Any) -> dict[str, Any]:
     items = _load()
     for p in items:
         if p["id"] == pid:
+            if "name" in fields and not str(fields["name"]).strip():
+                raise ValueError("Pipeline name cannot be empty")
             if fields.get("spec") is not None:
                 commands.build_argv(fields["spec"])
             for k in ("name", "spec"):

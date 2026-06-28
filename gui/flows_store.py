@@ -17,6 +17,7 @@ import config
 import pipelines_store
 
 _CRON_FIELD = re.compile(r"^[\d*/,\-]+$")
+_NODE_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def validate_cron(expr: str) -> None:
@@ -34,6 +35,8 @@ def validate_flow(nodes: list[dict[str, Any]], *, known_pipeline_ids: set[str]) 
         raise ValueError("Duplicate node_id in flow")
     idset = set(ids)
     for n in nodes:
+        if not _NODE_ID_RE.match(n["node_id"]):
+            raise ValueError(f"node_id {n['node_id']!r} must be letters, digits or underscore")
         if n["pipeline_id"] not in known_pipeline_ids:
             raise ValueError(f"Node {n['node_id']} references unknown pipeline {n['pipeline_id']}")
         for d in n.get("deps", []):
@@ -125,6 +128,8 @@ def update_flow(fid: str, **fields: Any) -> dict[str, Any]:
     items = _load()
     for f in items:
         if f["id"] == fid:
+            if "name" in fields and not str(fields["name"]).strip():
+                raise ValueError("Flow name cannot be empty")
             if fields.get("cron") is not None:
                 validate_cron(fields["cron"])
             if fields.get("nodes") is not None:
