@@ -32,6 +32,9 @@ Write-Host "==> Upgrading pip"
 Write-Host "==> Installing dependencies (pipeline + GUI)"
 & $vpy -m pip install -r requirements-gui.txt
 
+Write-Host "==> Installing the orchestrator code location (editable)"
+& $vpy -m pip install -e orchestrator
+
 Write-Host ""
 Write-Host "Setup complete. Virtualenv: $venv"
 Write-Host "Reminder: Oracle 11g needs the Instant Client (thick mode) on this host —"

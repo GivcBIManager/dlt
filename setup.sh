@@ -34,6 +34,9 @@ python -m pip install --upgrade pip >/dev/null
 echo "==> Installing dependencies (pipeline + GUI)"
 python -m pip install -r requirements-gui.txt
 
+echo "==> Installing the orchestrator code location (editable)"
+python -m pip install -e orchestrator
+
 echo
 echo "Setup complete. Virtualenv: $VENV"
 echo "Reminder: Oracle 11g needs the Instant Client (thick mode) on this host —"
