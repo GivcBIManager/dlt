@@ -5,8 +5,6 @@ streams child output into the Dagster run log, and fails the asset on a
 non-zero exit. Dependencies are declared with ``deps=`` so Dagster runs nodes
 in topological order and only starts a downstream node after upstreams succeed.
 """
-from __future__ import annotations
-
 import subprocess
 import time
 from typing import Any
@@ -27,7 +25,7 @@ def build_asset(flow_id: str, node_id: str, name: str, spec: dict[str, Any],
 
     @dg.asset(key=key, deps=dep_keys, group_name=f"flow_{flow_id}",
               description=name, compute_kind="subprocess")
-    def _asset(context) -> MaterializeResult:
+    def _asset(context: dg.AssetExecutionContext) -> MaterializeResult:
         argv, label = state.build_argv(spec)
         context.log.info("Running: %s", " ".join(argv))
         start = time.time()
