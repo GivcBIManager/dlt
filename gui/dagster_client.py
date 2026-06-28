@@ -15,6 +15,11 @@ import config
 
 _TIMEOUT = 6
 
+# Code-location name = the `-m` target used by dagster_service.launch_argv
+# (`dagster dev -m orchestrator.definitions`). Selector-based GraphQL calls need it.
+_LOCATION = "orchestrator.definitions"
+_REPOSITORY = "__repository__"
+
 
 def graphql_url() -> str:
     return f"{config.dagster_base_url()}/graphql"
@@ -41,57 +46,89 @@ def _query(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any
 
 
 def reload_location() -> dict[str, Any]:
-    # Reload all repository locations (single workspace here).
     q = """
     mutation Reload {
       reloadWorkspace {
         __typename
-        ... on WorkspaceLocationStatusEntries { entries { name } }
+        ... on Workspace { locationEntries { name } }
+        ... on PythonError { message }
       }
     }"""
     res = _query(q)
-    ok = "errors" not in res
-    return {"ok": ok, "error": None if ok else res["errors"][0]["message"]}
-
-
-def _set_schedule(mutation: str, schedule_name: str) -> dict[str, Any]:
-    q = f"""
-    mutation Toggle($name: String!) {{
-      {mutation}(scheduleSelector: {{
-        repositoryLocationName: "orchestrator",
-        repositoryName: "__repository__",
-        scheduleName: $name
-      }}) {{ __typename }}
-    }}"""
-    res = _query(q, {"name": schedule_name})
-    ok = "errors" not in res
-    return {"ok": ok, "error": None if ok else res["errors"][0]["message"]}
+    if "errors" in res:
+        return {"ok": False, "error": res["errors"][0]["message"]}
+    node = res.get("data", {}).get("reloadWorkspace", {})
+    ok = node.get("__typename") == "Workspace"
+    return {"ok": ok, "error": None if ok else node.get("message", "reload failed")}
 
 
 def start_schedule(name: str) -> dict[str, Any]:
-    return _set_schedule("startSchedule", name)
+    q = """
+    mutation Start($sel: ScheduleSelector!) {
+      startSchedule(scheduleSelector: $sel) {
+        __typename
+        ... on PythonError { message }
+      }
+    }"""
+    sel = {"repositoryLocationName": _LOCATION, "repositoryName": _REPOSITORY, "scheduleName": name}
+    res = _query(q, {"sel": sel})
+    if "errors" in res:
+        return {"ok": False, "error": res["errors"][0]["message"]}
+    node = res.get("data", {}).get("startSchedule", {})
+    ok = node.get("__typename") == "ScheduleStateResult"
+    return {"ok": ok, "error": None if ok else node.get("message", "start failed")}
+
+
+def _schedule_id(name: str) -> str | None:
+    q = """
+    query Sid {
+      repositoriesOrError {
+        ... on RepositoryConnection { nodes { schedules { name id } } }
+      }
+    }"""
+    res = _query(q)
+    nodes = (res.get("data", {}).get("repositoriesOrError", {}) or {}).get("nodes")
+    if not nodes:
+        return None
+    for repo in nodes:
+        for s in repo.get("schedules", []):
+            if s["name"] == name:
+                return s["id"]
+    return None
 
 
 def stop_schedule(name: str) -> dict[str, Any]:
-    return _set_schedule("stopSchedule", name)
+    sid = _schedule_id(name)
+    if not sid:
+        return {"ok": False, "error": f"schedule {name} not found"}
+    q = """
+    mutation Stop($id: String!) {
+      stopRunningSchedule(id: $id) {
+        __typename
+        ... on PythonError { message }
+      }
+    }"""
+    res = _query(q, {"id": sid})
+    if "errors" in res:
+        return {"ok": False, "error": res["errors"][0]["message"]}
+    node = res.get("data", {}).get("stopRunningSchedule", {})
+    ok = node.get("__typename") == "ScheduleStateResult"
+    return {"ok": ok, "error": None if ok else node.get("message", "stop failed")}
 
 
 def launch_job(job_name: str) -> dict[str, Any]:
     q = """
-    mutation Launch($job: String!) {
-      launchRun(executionParams: {
-        selector: {
-          repositoryLocationName: "orchestrator",
-          repositoryName: "__repository__",
-          jobName: $job
-        }, mode: "default"
-      }) {
+    mutation Launch($p: ExecutionParams!) {
+      launchRun(executionParams: $p) {
         __typename
         ... on LaunchRunSuccess { run { runId } }
+        ... on PipelineNotFoundError { message }
         ... on PythonError { message }
       }
     }"""
-    res = _query(q, {"job": job_name})
+    params = {"selector": {"repositoryLocationName": _LOCATION,
+                           "repositoryName": _REPOSITORY, "jobName": job_name}}
+    res = _query(q, {"p": params})
     if "errors" in res:
         return {"ok": False, "error": res["errors"][0]["message"]}
     node = res.get("data", {}).get("launchRun", {})
@@ -121,6 +158,8 @@ def flow_status() -> list[dict[str, Any]]:
     for repo in nodes:
         sched_by_job = {s["name"]: s for s in repo.get("schedules", [])}
         for job in repo.get("jobs", []):
+            if not job["name"].startswith("flow_"):
+                continue
             runs = job.get("runs") or []
             last = runs[0] if runs else {}
             sched = sched_by_job.get(f"{job['name']}_schedule", {})
