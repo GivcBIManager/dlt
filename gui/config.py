@@ -39,6 +39,25 @@ STATE_DIR = GUI_DIR / "state"
 LOG_DIR = REPO_ROOT / "run_logs"          # one file per launched run
 RUNS_REGISTRY = STATE_DIR / "runs.json"
 SCHEDULES_JSON = STATE_DIR / "schedules.json"
+PIPELINES_JSON = STATE_DIR / "pipelines.json"
+FLOWS_JSON = STATE_DIR / "flows.json"
+
+# --- Dagster orchestration -------------------------------------------------- #
+ORCHESTRATOR_DIR = REPO_ROOT / "orchestrator"
+DAGSTER_HOME = REPO_ROOT / ".dagster_home"
+
+
+def dagster_host() -> str:
+    return os.environ.get("OASIS_DAGSTER_HOST", "127.0.0.1")
+
+
+def dagster_port() -> int:
+    return int(os.environ.get("OASIS_DAGSTER_PORT", "3000"))
+
+
+def dagster_base_url() -> str:
+    return f"http://{dagster_host()}:{dagster_port()}"
+
 
 # Iceberg system tables (rendered specially in the monitor).
 ETL_CONTROL_TABLE = "etl_control"

@@ -5,3 +5,8 @@
 Flask>=3.0
 # tomllib is stdlib on Python 3.11+; backport only needed on 3.10.
 tomli>=2.0 ; python_version < "3.11"
+
+# Dagster orchestration (scheduling module). Pin one version across the stack.
+dagster==1.13.11
+dagster-webserver==1.13.11
+dagster-graphql==1.13.11

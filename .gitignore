@@ -7,6 +7,7 @@ exports/
 # GUI runtime artifacts
 run_logs/
 gui/state/
+.dagster_home/
 
 # dlt working dirs
 .dlt/pipelines/
