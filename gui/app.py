@@ -20,12 +20,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
 
 import commands  # noqa: E402
+import config  # noqa: E402
 import connections  # noqa: E402
 import cron_manager  # noqa: E402
+import dagster_client  # noqa: E402
+import flows_store  # noqa: E402
 import iceberg_browser  # noqa: E402
+import pipelines_store  # noqa: E402
+import smtp_config  # noqa: E402
 import tables_store  # noqa: E402
 import workspace  # noqa: E402
 from config import ensure_dirs  # noqa: E402
+from dagster_service import service as dagster_service  # noqa: E402
 from pipeline_runner import RunManager  # noqa: E402
 
 app = Flask(__name__)
@@ -94,6 +100,16 @@ def page_iceberg():
 @app.route("/connections")
 def page_connections():
     return render_template("connections.html", active="connections")
+
+
+@app.route("/pipelines")
+def page_pipelines():
+    return render_template("pipelines.html", active="pipelines")
+
+
+@app.route("/flows")
+def page_flows():
+    return render_template("flows.html", active="flows")
 
 
 # --------------------------------------------------------------------------- #
@@ -207,6 +223,149 @@ def api_run_tail(run_id):
 @api
 def api_run_stop(run_id):
     return jsonify({"stopped": runner.stop(run_id)})
+
+
+# --------------------------------------------------------------------------- #
+# Pipelines API
+# --------------------------------------------------------------------------- #
+@app.get("/api/pipelines")
+@api
+def api_pipelines_list():
+    return jsonify(pipelines_store.load_pipelines())
+
+
+@app.post("/api/pipelines")
+@api
+def api_pipelines_add():
+    b = _body()
+    p = pipelines_store.add_pipeline(b.get("name", ""), b.get("spec", {}))
+    dagster_client.reload_location()
+    return jsonify(p)
+
+
+@app.put("/api/pipelines/<pid>")
+@api
+def api_pipelines_update(pid):
+    p = pipelines_store.update_pipeline(pid, **_body())
+    dagster_client.reload_location()
+    return jsonify(p)
+
+
+@app.delete("/api/pipelines/<pid>")
+@api
+def api_pipelines_delete(pid):
+    refs = flows_store.referencing_flows(pid)
+    if refs:
+        names = ", ".join(f["name"] for f in refs)
+        raise ValueError(f"Pipeline is used by flow(s): {names}")
+    deleted = pipelines_store.delete_pipeline(pid)
+    dagster_client.reload_location()
+    return jsonify({"deleted": deleted})
+
+
+# --------------------------------------------------------------------------- #
+# Flows API
+# --------------------------------------------------------------------------- #
+@app.get("/api/flows")
+@api
+def api_flows_list():
+    return jsonify({
+        "flows": flows_store.load_flows(),
+        "pipelines": pipelines_store.load_pipelines(),
+        "dagster": dagster_service.status(),
+    })
+
+
+@app.post("/api/flows")
+@api
+def api_flows_add():
+    b = _body()
+    f = flows_store.add_flow(b.get("name", ""), b.get("nodes", []),
+                             b.get("cron", ""), b.get("timezone", "UTC"),
+                             b.get("email", {}), b.get("enabled", True))
+    dagster_client.reload_location()
+    return jsonify(f)
+
+
+@app.put("/api/flows/<fid>")
+@api
+def api_flows_update(fid):
+    f = flows_store.update_flow(fid, **_body())
+    dagster_client.reload_location()
+    return jsonify(f)
+
+
+@app.delete("/api/flows/<fid>")
+@api
+def api_flows_delete(fid):
+    deleted = flows_store.delete_flow(fid)
+    dagster_client.reload_location()
+    return jsonify({"deleted": deleted})
+
+
+@app.post("/api/flows/<fid>/run")
+@api
+def api_flows_run(fid):
+    return jsonify(dagster_client.launch_job(f"flow_{fid}"))
+
+
+@app.post("/api/flows/<fid>/toggle")
+@api
+def api_flows_toggle(fid):
+    enabled = bool(_body().get("enabled", True))
+    flows_store.update_flow(fid, enabled=enabled)
+    dagster_client.reload_location()
+    fn = f"flow_{fid}_schedule"
+    res = dagster_client.start_schedule(fn) if enabled else dagster_client.stop_schedule(fn)
+    return jsonify({"enabled": enabled, **res})
+
+
+# --------------------------------------------------------------------------- #
+# SMTP API
+# --------------------------------------------------------------------------- #
+@app.get("/api/smtp")
+@api
+def api_smtp_get():
+    return jsonify(smtp_config.get_smtp())
+
+
+@app.put("/api/smtp")
+@api
+def api_smtp_put():
+    return jsonify(smtp_config.save_smtp(_body()))
+
+
+@app.post("/api/smtp/test")
+@api
+def api_smtp_test():
+    return jsonify(smtp_config.send_test(_body().get("to", "")))
+
+
+# --------------------------------------------------------------------------- #
+# Dagster API
+# --------------------------------------------------------------------------- #
+@app.get("/api/dagster/status")
+@api
+def api_dagster_status():
+    return jsonify(dagster_service.status())
+
+
+@app.post("/api/dagster/start")
+@api
+def api_dagster_start():
+    return jsonify(dagster_service.start())
+
+
+@app.post("/api/dagster/stop")
+@api
+def api_dagster_stop():
+    return jsonify(dagster_service.stop())
+
+
+@app.get("/api/dagster/flow-status")
+@api
+def api_dagster_flow_status():
+    return jsonify(dagster_client.flow_status())
 
 
 # --------------------------------------------------------------------------- #
@@ -381,6 +540,12 @@ def main() -> None:
     port = int(os.environ.get("OASIS_GUI_PORT", "8765"))
     debug = os.environ.get("OASIS_GUI_DEBUG", "0") == "1"
     print(f"HNH ETLPipeline Manager -> http://{host}:{port}  (Ctrl+C to stop)")
+    if os.environ.get("OASIS_DAGSTER_AUTOSTART", "1") == "1":
+        try:
+            dagster_service.start()
+            print(f"Dagster UI -> {config.dagster_base_url()}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] could not start Dagster: {exc}")
     app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)
 
 
