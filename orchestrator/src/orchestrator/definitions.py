@@ -1,9 +1,6 @@
-"""Dagster code location entry point. ``defs`` is the launch target.
-
-Launched by gui/dagster_service.py via ``dagster dev -m orchestrator.definitions``.
-"""
+"""Dagster code location entry point (launch target for ``dagster dev -m``)."""
 from __future__ import annotations
 
-import dagster as dg
+from orchestrator.build import build_all_defs
 
-defs = dg.Definitions()
+defs = build_all_defs()
