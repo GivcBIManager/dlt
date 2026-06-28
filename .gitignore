@@ -25,3 +25,6 @@ venv/
 # GUI server console logs
 gui-server.log
 gui-server.err.log
+
+# pytest local basetemp
+.pytest_tmp/
