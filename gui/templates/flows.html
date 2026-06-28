@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-diagram-project"></i> Flows</h1>
+  <p>Compose pipelines into a DAG, wire dependencies, and schedule it. Downstream steps run only after upstream steps succeed.</p>
+</div>
+<div id="dagster-banner"></div>
+
+<div class="row-flex" style="margin-bottom:16px">
+  <button class="btn tab primary" data-tab="build">Build</button>
+  <button class="btn tab" data-tab="list">All flows <span id="flow-count" class="tag"></span></button>
+</div>
+
+<section data-panel="build">
+  <div class="panel">
+    <div class="panel-head"><h2 id="f-title">New flow</h2>
+      <button class="btn ghost sm" id="f-reset" hidden>Cancel edit</button></div>
+    <div class="form-row">
+      <div><label>Name</label><input id="f-name" placeholder="nightly-masters-then-dq"></div>
+      <div><label>Timezone</label><input id="f-tz" value="Asia/Riyadh"></div>
+    </div>
+
+    <label style="margin-top:12px">Nodes</label>
+    <div id="f-nodes"></div>
+    <button class="btn sm" id="f-add-node"><i class="fa-solid fa-plus"></i> Add node</button>
+
+    <label style="margin-top:16px">Schedule (cron)</label>
+    <div class="cron-grid">
+      <div><label>Min</label><input id="cf-min" class="mono" value="0"></div>
+      <div><label>Hour</label><input id="cf-hour" class="mono" value="2"></div>
+      <div><label>DoM</label><input id="cf-dom" class="mono" value="*"></div>
+      <div><label>Mon</label><input id="cf-mon" class="mono" value="*"></div>
+      <div><label>DoW</label><input id="cf-dow" class="mono" value="*"></div>
+    </div>
+
+    <div class="form-row" style="margin-top:12px">
+      <div><label>Email on success</label><input id="f-succ" placeholder="ops@x.com, lead@x.com"></div>
+      <div><label>Email on failure</label><input id="f-fail" placeholder="ops@x.com"></div>
+    </div>
+
+    <label style="margin-top:12px">DAG preview</label>
+    <div id="f-preview" class="console" style="max-height:220px">—</div>
+
+    <div class="btn-row"><button class="btn primary" id="f-save"><i class="fa-solid fa-floppy-disk"></i> Save flow</button></div>
+  </div>
+</section>
+
+<section data-panel="list" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>All flows</h2><button class="btn sm ghost" id="f-refresh">↻</button></div>
+    <div class="table-wrap"><table id="flows-table">
+      <thead><tr><th>Name</th><th>Schedule</th><th>State</th><th>Last run</th><th>Nodes</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let PIPELINES = [], FLOWS = [], editingId = null, nodeSeq = 0;
+
+function cron() {
+  return [el("cf-min"),el("cf-hour"),el("cf-dom"),el("cf-mon"),el("cf-dow")]
+    .map(e => e.value.trim() || "*").join(" ");
+}
+function nodeRow(n) {
+  const opts = PIPELINES.map(p => `<option value="${p.id}" ${n.pipeline_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("");
+  return `<div class="node-row row-flex" data-node="${n.node_id}" style="gap:8px;margin:6px 0">
+    <span class="mono">${n.node_id}</span>
+    <select class="n-pipe">${opts}</select>
+    <span class="muted">depends on:</span>
+    <select class="n-deps" multiple size="2"></select>
+    <button class="btn sm bad" onclick="rmNode('${n.node_id}')">✕</button></div>`;
+}
+function depOptions() {
+  const ids = [...$$("#f-nodes .node-row")].map(r => r.dataset.node);
+  $$("#f-nodes .node-row").forEach(row => {
+    const self = row.dataset.node, sel = row.querySelector(".n-deps");
+    const chosen = [...sel.selectedOptions].map(o => o.value);
+    sel.innerHTML = ids.filter(i => i !== self)
+      .map(i => `<option value="${i}" ${chosen.includes(i)?"selected":""}>${i}</option>`).join("");
+  });
+}
+function addNode(pre) {
+  nodeSeq++; const id = pre?.node_id || ("n" + nodeSeq);
+  el("f-nodes").insertAdjacentHTML("beforeend", nodeRow(pre || {node_id:id, pipeline_id:(PIPELINES[0]||{}).id, deps:[]}));
+  depOptions(); renderPreview();
+  el("f-nodes").lastElementChild.querySelectorAll("select").forEach(s => s.addEventListener("change", () => { depOptions(); renderPreview(); }));
+}
+function rmNode(id) { const r = [...$$("#f-nodes .node-row")].find(x => x.dataset.node===id); if (r) r.remove(); depOptions(); renderPreview(); }
+function collectNodes() {
+  return [...$$("#f-nodes .node-row")].map(r => ({
+    node_id: r.dataset.node,
+    pipeline_id: r.querySelector(".n-pipe").value,
+    deps: [...r.querySelector(".n-deps").selectedOptions].map(o => o.value),
+  }));
+}
+function renderPreview() {
+  const nodes = collectNodes();
+  const byId = Object.fromEntries(PIPELINES.map(p => [p.id, p.name]));
+  el("f-preview").textContent = nodes.map(n =>
+    `${n.node_id} (${byId[n.pipeline_id]||"?"})` + (n.deps.length ? `  ⟵ ${n.deps.join(", ")}` : "  [root]")
+  ).join("\n") || "—";
+}
+async function save() {
+  const body = { name: el("f-name").value.trim(), nodes: collectNodes(), cron: cron(),
+    timezone: el("f-tz").value.trim() || "UTC",
+    email: { on_success: el("f-succ").value, on_failure: el("f-fail").value } };
+  try {
+    if (editingId) await apiPut(`/api/flows/${editingId}`, body);
+    else await apiPost("/api/flows", body);
+    ok("Saved"); resetForm(); load(); showTab("list");
+  } catch (e) { err(e.message); }
+}
+function resetForm() { editingId=null; el("f-name").value=""; el("f-nodes").innerHTML=""; el("f-reset").hidden=true; el("f-title").textContent="New flow"; renderPreview(); }
+
+async function load() {
+  const d = await apiGet("/api/flows");
+  PIPELINES = d.pipelines; FLOWS = d.flows;
+  el("flow-count").textContent = FLOWS.length;
+  el("dagster-banner").innerHTML = d.dagster.running
+    ? `<div class="banner info">Dagster running — <a href="${d.dagster.url}" target="_blank">open UI</a></div>`
+    : `<div class="banner warn">Dagster is not running. <button class="btn sm" onclick="startDagster()">Start Dagster</button></div>`;
+  renderFlows();
+}
+async function renderFlows() {
+  let status = [];
+  try { status = await apiGet("/api/dagster/flow-status"); } catch (e) {}
+  const byJob = Object.fromEntries(status.map(s => [s.job, s]));
+  $("#flows-table tbody").innerHTML = FLOWS.map(f => {
+    const st = byJob[`flow_${f.id}`] || {};
+    const link = st.run_link ? `<a href="${st.run_link}" target="_blank">${esc(st.last_run_status||"—")}</a>` : (st.last_run_status||"—");
+    return `<tr>
+      <td><b>${esc(f.name)}</b></td>
+      <td class="mono">${esc(f.cron)} <span class="muted">${esc(f.timezone)}</span></td>
+      <td>${pill(f.enabled ? "ok" : "stopped")}</td>
+      <td>${link}</td>
+      <td>${f.nodes.length}</td>
+      <td class="row-flex">
+        <button class="btn sm" onclick="runFlow('${f.id}')">Run now</button>
+        <button class="btn sm" onclick="toggleFlow('${f.id}', ${f.enabled?"false":"true"})">${f.enabled?"Disable":"Enable"}</button>
+        <button class="btn sm ghost" onclick="editFlow('${f.id}')">Edit</button>
+        <button class="btn sm bad" onclick="delFlow('${f.id}')">Delete</button>
+      </td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">No flows yet.</td></tr>`;
+}
+function editFlow(id) {
+  const f = FLOWS.find(x => x.id===id); if (!f) return;
+  editingId=id; el("f-title").textContent="Edit: "+f.name; el("f-reset").hidden=false;
+  el("f-name").value=f.name; el("f-tz").value=f.timezone;
+  const parts=f.cron.split(/\s+/); ["cf-min","cf-hour","cf-dom","cf-mon","cf-dow"].forEach((cid,i)=>el(cid).value=parts[i]||"*");
+  el("f-succ").value=(f.email.on_success||[]).join(", "); el("f-fail").value=(f.email.on_failure||[]).join(", ");
+  el("f-nodes").innerHTML=""; f.nodes.forEach(n => addNode(n)); depOptions(); renderPreview();
+  showTab("build"); window.scrollTo({top:0,behavior:"smooth"});
+}
+async function runFlow(id){ try{ const r=await apiPost(`/api/flows/${id}/run`,{}); r.ok?ok("Launched run "+r.run_id.slice(0,8)):err(r.error); setTimeout(load,1500);}catch(e){err(e.message);} }
+async function toggleFlow(id,en){ try{ await apiPost(`/api/flows/${id}/toggle`,{enabled:en==="true"||en===true}); load(); }catch(e){err(e.message);} }
+async function delFlow(id){ if(!confirm("Delete this flow?"))return; try{ await apiDel(`/api/flows/${id}`); ok("Deleted"); load(); }catch(e){err(e.message);} }
+async function startDagster(){ try{ await apiPost("/api/dagster/start",{}); ok("Starting Dagster…"); setTimeout(load,4000);}catch(e){err(e.message);} }
+
+function showTab(t){ $$(".tab").forEach(b=>b.classList.toggle("primary",b.dataset.tab===t)); $$("[data-panel]").forEach(p=>p.hidden=p.dataset.panel!==t); if(t==="list") renderFlows(); }
+$$(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+el("f-add-node").onclick=()=>addNode();
+el("f-save").onclick=save; el("f-reset").onclick=resetForm; el("f-refresh").onclick=load;
+load();
+</script>
+{% endblock %}
