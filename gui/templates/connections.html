@@ -22,6 +22,35 @@
   </div>
 </div>
 
+<!-- SMTP settings panel -->
+<div class="panel" style="margin-top:18px">
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-envelope"></i> SMTP / email settings</h2>
+    <button class="btn ghost sm" id="smtp-test-btn"><i class="fa-solid fa-paper-plane"></i> Send test</button>
+  </div>
+  <div style="padding:16px 0">
+    <div class="form-row">
+      <div><label>Host</label><input id="s-host" placeholder="smtp.example.com"></div>
+      <div><label>Port</label><input id="s-port" type="number" placeholder="587"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Username</label><input id="s-username" autocomplete="off"></div>
+      <div><label>Password <small>(leave blank to keep current)</small></label><input id="s-password" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="form-row">
+      <div><label>From address</label><input id="s-from" placeholder="etl@example.com"></div>
+      <div style="display:flex;align-items:center;gap:10px;padding-top:22px">
+        <input id="s-tls" type="checkbox" style="width:auto">
+        <label for="s-tls" style="margin:0">Use TLS (STARTTLS)</label>
+      </div>
+    </div>
+    <div id="s-msg"></div>
+    <div class="btn-row">
+      <button class="btn primary" id="s-save">Save SMTP</button>
+    </div>
+  </div>
+</div>
+
 <!-- editor modal -->
 <div class="modal-bg" id="modal">
   <div class="modal" style="width:560px">
@@ -163,5 +192,53 @@ el("c-save").onclick = save;
 el("c-test").onclick = testFromModal;
 el("c-cancel").onclick = () => el("modal").classList.remove("show");
 load();
+
+// --- SMTP ---
+async function loadSmtp() {
+  try {
+    const s = await apiGet("/api/smtp");
+    el("s-host").value     = s.host     || "";
+    el("s-port").value     = s.port     || "";
+    el("s-username").value = s.username || "";
+    el("s-from").value     = s.from     || "";
+    el("s-tls").checked    = !!s.use_tls;
+    el("s-password").value = "";
+    el("s-msg").innerHTML  = s.has_password
+      ? `<div class="hint">A password is stored; leave blank to keep it.</div>` : "";
+  } catch (e) { err(e.message); }
+}
+
+async function saveSmtp() {
+  el("s-save").disabled = true;
+  const payload = {
+    host:     el("s-host").value.trim(),
+    port:     el("s-port").value.trim(),
+    username: el("s-username").value.trim(),
+    password: el("s-password").value,
+    from:     el("s-from").value.trim(),
+    use_tls:  el("s-tls").checked,
+  };
+  try {
+    await apiPut("/api/smtp", payload);
+    ok("SMTP settings saved");
+    loadSmtp();
+  } catch (e) {
+    el("s-msg").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+  }
+  el("s-save").disabled = false;
+}
+
+async function sendSmtpTest() {
+  const to = prompt("Send test email to:");
+  if (!to) return;
+  try {
+    const r = await apiPost("/api/smtp/test", { to });
+    r.ok ? ok(r.message || "Test email sent") : err(r.error || "Send failed");
+  } catch (e) { err(e.message); }
+}
+
+el("s-save").onclick = saveSmtp;
+el("smtp-test-btn").onclick = sendSmtpTest;
+loadSmtp();
 </script>
 {% endblock %}

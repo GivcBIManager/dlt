@@ -295,3 +295,32 @@ check (`hash_matched`, `hash_only_in_oracle`, `hash_only_in_iceberg`,
 `hash_mismatch`, `hash_total_delta`, `hash_columns`), the `columns_only_in_*`
 drift lists, a `status` (`OK` / `MISMATCH` / `ERROR` / `SKIPPED`), and
 `error_details`. Each run is tagged with a `dq-…` `pipeline_run_id`.
+
+## GUI & scheduling
+
+A Flask control panel lives in `gui/` and is launched with `python gui/app.py`
+(or via `setup.sh` / `setup.cmd`). See `gui/README.md` for full details.
+
+### Scheduling model
+
+Scheduling uses **Dagster** rather than cron:
+
+1. **Pipeline library** (`/pipelines`) — define named pipeline specs (run command
+   and parameters) stored in `gui/state/pipelines.json`.
+2. **Flow (DAG) builder** (`/flows`) — compose pipelines into a Dagster job, set a
+   cron schedule / timezone, and configure email alerts.
+3. **Dagster scheduling** — the GUI auto-starts Dagster on launch. To opt out:
+   `OASIS_DAGSTER_AUTOSTART=0`. To change the Dagster UI port:
+   `OASIS_DAGSTER_PORT=<port>` (default 3000).
+
+One-time setup (after `pip install -r requirements.txt`):
+
+```bash
+pip install -e orchestrator
+```
+
+### SMTP / email alerts
+
+Configure outbound email (for Flow alert notifications) in the Connections page
+under **SMTP / email settings**, or via `PUT /api/smtp`. The password is
+write-only and never returned to the browser.

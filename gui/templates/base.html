@@ -17,15 +17,16 @@
     ('dashboard',   '/',            'Dashboard',        'dashboard'),
     ('connections', '/connections', 'Connections',      'lan'),
     ('run',         '/run',         'Run',              'play_circle'),
-    ('schedule',    '/schedule',    'Schedule',         'calendar_month'),
+    ('pipelines',   '/pipelines',   'Pipelines',        'category'),
+    ('flows',       '/flows',       'Flows',            'account_tree'),
     ('logs',        '/logs',        'Monitor',          'monitoring'),
     ('tables',      '/tables',      'Tables',           'table_chart'),
     ('iceberg',     '/iceberg',     'Staging Layer Explorer', 'explore'),
   ] %}
   {% set titles = {
     'dashboard': 'Dashboard', 'connections': 'Connections', 'run': 'Run pipeline',
-    'schedule': 'Schedule', 'logs': 'Monitor', 'tables': 'Tables Configuration',
-    'iceberg': 'Staging Layer Explorer'
+    'pipelines': 'Pipelines', 'flows': 'Flows', 'logs': 'Monitor',
+    'tables': 'Tables Configuration', 'iceberg': 'Staging Layer Explorer'
   } %}
 
   <!-- Side navigation -->

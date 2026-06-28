@@ -1,9 +1,8 @@
 """OASIS pipeline control panel -- a small Flask GUI.
 
-Manage / run / schedule the Oracle->Iceberg pipeline, monitor the workspace
-(run logs, control state, DQ results), edit ``tables.json``, and browse the
-Iceberg lake metadata. Launch with ``python gui/app.py`` (or via the setup
-scripts) and open http://127.0.0.1:8765.
+Manage / run / monitor the Oracle->Iceberg pipeline, browse the Iceberg lake,
+edit ``tables.json``, and orchestrate Flows via Dagster. Launch with
+``python gui/app.py`` (or via the setup scripts) and open http://127.0.0.1:8765.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from flask import Flask, Response, jsonify, render_template, request  # noqa: E4
 import commands  # noqa: E402
 import config  # noqa: E402
 import connections  # noqa: E402
-import cron_manager  # noqa: E402
 import dagster_client  # noqa: E402
 import flows_store  # noqa: E402
 import iceberg_browser  # noqa: E402
@@ -77,11 +75,6 @@ def page_run():
     return render_template("run.html", active="run")
 
 
-@app.route("/schedule")
-def page_schedule():
-    return render_template("schedule.html", active="schedule")
-
-
 @app.route("/logs")
 def page_logs():
     return render_template("logs.html", active="logs")
@@ -124,7 +117,6 @@ def api_overview():
             "branches": workspace.list_branches(),
             "settings": workspace.etl_settings(),
             "active_runs": runner.active_count(),
-            "cron": cron_manager.status()["available"],
         }
     )
 
@@ -480,54 +472,6 @@ def api_ib_aggregate(table):
 def api_ib_system(table):
     limit = request.args.get("limit", 200, type=int)
     return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 2000)))
-
-
-# --------------------------------------------------------------------------- #
-# Schedule API
-# --------------------------------------------------------------------------- #
-@app.get("/api/schedules")
-@api
-def api_sched_list():
-    return jsonify(
-        {
-            "jobs": cron_manager.list_jobs(),
-            "status": cron_manager.status(),
-            "presets": cron_manager.PRESETS,
-            "branches": workspace.branch_keys(),
-        }
-    )
-
-
-@app.post("/api/schedules")
-@api
-def api_sched_add():
-    b = _body()
-    job = cron_manager.add_job(b.get("name", ""), b.get("expr", ""), b.get("spec", {}))
-    return jsonify(job)
-
-
-@app.put("/api/schedules/<job_id>")
-@api
-def api_sched_update(job_id):
-    return jsonify(cron_manager.update_job(job_id, **_body()))
-
-
-@app.delete("/api/schedules/<job_id>")
-@api
-def api_sched_delete(job_id):
-    return jsonify({"deleted": cron_manager.delete_job(job_id)})
-
-
-@app.post("/api/schedules/install")
-@api
-def api_sched_install():
-    return jsonify(cron_manager.install())
-
-
-@app.post("/api/schedules/uninstall")
-@api
-def api_sched_uninstall():
-    return jsonify(cron_manager.uninstall())
 
 
 @app.get("/healthz")

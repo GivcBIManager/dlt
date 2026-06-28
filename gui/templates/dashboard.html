@@ -51,7 +51,6 @@ async function load() {
       ${metric("Table × branch units", c.units, "purple", "fa-layer-group")}
       ${metric("Rows tracked", fmtNum(c.total_rows), "green", "fa-database")}
       ${metric("Active runs", o.active_runs, "amber", "fa-bolt")}
-      ${metric("Cron available", o.cron ? "yes" : "no", "pink", "fa-clock")}
       ${metric("Status", statusBits || "—", "red", "fa-heart-pulse", true)}
       ${metric("Last run", fmtDate(c.last_run_at), "blue", "fa-clock-rotate-left", true)}
     `;

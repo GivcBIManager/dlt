@@ -1,8 +1,8 @@
 # HNH ETLPipeline Manager (GUI)
 
 A small Flask web UI for the Oracle → Iceberg pipeline. It lets you **run**,
-**schedule** (cron), and **monitor** the pipeline, edit **`tables.json`**, and
-browse the **Iceberg lake** — all from a browser.
+**monitor**, and **orchestrate** the pipeline via Dagster Flows, edit
+**`tables.json`**, and browse the **Iceberg lake** — all from a browser.
 
 ## Quick start
 
@@ -25,14 +25,25 @@ Already have a venv? Just run:
 python gui/app.py
 ```
 
+### One-time orchestrator install
+
+```bash
+pip install -e orchestrator
+```
+
+This installs the Dagster workspace that backs the Flows page. The GUI
+auto-starts Dagster on launch.
+
 ### Environment knobs
 
-| Variable           | Default     | Purpose                                   |
-|--------------------|-------------|-------------------------------------------|
-| `OASIS_GUI_HOST`   | `127.0.0.1` | Bind address (use `0.0.0.0` for LAN)      |
-| `OASIS_GUI_PORT`   | `8765`      | HTTP port                                 |
-| `OASIS_GUI_DEBUG`  | `0`         | `1` enables Flask debug                   |
-| `OASIS_PYTHON`     | venv python | Interpreter used to launch pipeline runs  |
+| Variable                  | Default     | Purpose                                           |
+|---------------------------|-------------|---------------------------------------------------|
+| `OASIS_GUI_HOST`          | `127.0.0.1` | Bind address (use `0.0.0.0` for LAN)              |
+| `OASIS_GUI_PORT`          | `8765`      | HTTP port                                         |
+| `OASIS_GUI_DEBUG`         | `0`         | `1` enables Flask debug                           |
+| `OASIS_PYTHON`            | venv python | Interpreter used to launch pipeline runs          |
+| `OASIS_DAGSTER_AUTOSTART` | `1`         | Set to `0` to skip auto-starting Dagster          |
+| `OASIS_DAGSTER_PORT`      | `3000`      | Port for the embedded Dagster UI                  |
 
 ## Pages
 
@@ -44,20 +55,22 @@ python gui/app.py
   `.dlt/secrets.toml` and test connectivity. Edits are surgical (only the
   `[oracle_branches.*]` block is rewritten; comments and other sections are
   preserved) and a backup is kept. Passwords are write-only — never sent back to
-  the browser.
+  the browser. Also hosts the **SMTP settings** form (host, port, credentials,
+  from address, TLS toggle) and a test-email button; bound to `GET/PUT /api/smtp`.
 - **Run** — build an `oracle_to_iceberg` / `dq_check` / `snapshot_diff` / custom
   command (mode, category, branch/table filters, extra-args picker, …), run it,
-  and watch live output. **Command generation lives here**: *Schedule this…*
-  carries the built command to the Schedule page.
-- **Schedule** — pick *when* a command (built on the Run page) recurs via a
-  per-field cron builder (no presets), and review **All schedules** with their
-  status (enabled, live-in-crontab, last log write/size). Job definitions live in
-  `gui/state/schedules.json`; **Apply** renders enabled jobs into a managed
-  crontab block (hand-written lines preserved). On Windows the block is shown to
-  copy onto the Ubuntu host.
-- **Monitor** — tail run/cron log files (`run_logs/`), purge logs older than a
-  chosen date, and view the Iceberg observability tables. `etl_dq_results` adds a
-  date filter and a branch × table summary; `etl_run_log` / `etl_control` add
+  and watch live output.
+- **Pipelines** — define and manage named pipeline specs (the building blocks for
+  Flows). Each pipeline wraps a run command configuration stored in
+  `gui/state/pipelines.json`.
+- **Flows** — compose Dagster DAGs from pipeline nodes, set a cron schedule and
+  timezone, configure email alerts, and enable/disable schedules. The GUI
+  auto-starts Dagster (`OASIS_DAGSTER_AUTOSTART=0` to opt out,
+  `OASIS_DAGSTER_PORT` to change the Dagster UI port). Scheduling model:
+  **Pipeline library → Flow (DAG) builder → Dagster scheduling**.
+- **Monitor** — tail run log files (`run_logs/`), purge logs older than a chosen
+  date, and view the Iceberg observability tables. `etl_dq_results` adds a date
+  filter and a branch × table summary; `etl_run_log` / `etl_control` add
   date/table/branch/status filters.
 - **Tables** — structured add/edit/delete + raw-JSON editor for `tables.json`,
   with validation that mirrors the pipeline loader. The masters/transactions
