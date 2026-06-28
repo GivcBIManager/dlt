@@ -92,7 +92,6 @@
     <div id="preview" class="codeline">—</div>
     <div class="btn-row">
       <button class="btn primary" id="run-btn"><i class="fa-solid fa-play"></i> Run now</button>
-      <button class="btn" id="sched-btn"><i class="fa-solid fa-calendar-plus"></i> Schedule this…</button>
       <button class="btn ghost" id="copy-btn"><i class="fa-solid fa-copy"></i> Copy command</button>
     </div>
   </div>
@@ -449,12 +448,6 @@ el("stop-btn").onclick = stopRun;
 el("toggle-raw").onclick = () => el("run-panel").classList.toggle("raw-hidden");
 el("refresh-runs").onclick = loadRuns;
 el("copy-btn").onclick = () => { navigator.clipboard.writeText(el("preview").textContent); ok("Copied"); };
-el("sched-btn").onclick = () => {
-  // Carry the built command to the Schedule page (command generation lives here).
-  sessionStorage.setItem("oasis_schedule_spec",
-    JSON.stringify({ spec: buildSpec(), preview: el("preview").textContent, name: el("script").value }));
-  window.location.href = "/schedule";
-};
 init();
 </script>
 {% endblock %}
