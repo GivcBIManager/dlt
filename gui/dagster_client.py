@@ -45,6 +45,14 @@ def _query(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any
         return {"errors": [{"message": str(exc)}]}
 
 
+def _first_error(res: dict[str, Any]) -> str:
+    """Safely extract the first GraphQL error message (never raises)."""
+    errs = res.get("errors") or []
+    if errs and isinstance(errs[0], dict) and errs[0].get("message"):
+        return errs[0]["message"]
+    return "request failed"
+
+
 def reload_location() -> dict[str, Any]:
     q = """
     mutation Reload {
@@ -56,7 +64,7 @@ def reload_location() -> dict[str, Any]:
     }"""
     res = _query(q)
     if "errors" in res:
-        return {"ok": False, "error": res["errors"][0]["message"]}
+        return {"ok": False, "error": _first_error(res)}
     node = res.get("data", {}).get("reloadWorkspace", {})
     ok = node.get("__typename") == "Workspace"
     return {"ok": ok, "error": None if ok else node.get("message", "reload failed")}
@@ -73,7 +81,7 @@ def start_schedule(name: str) -> dict[str, Any]:
     sel = {"repositoryLocationName": _LOCATION, "repositoryName": _REPOSITORY, "scheduleName": name}
     res = _query(q, {"sel": sel})
     if "errors" in res:
-        return {"ok": False, "error": res["errors"][0]["message"]}
+        return {"ok": False, "error": _first_error(res)}
     node = res.get("data", {}).get("startSchedule", {})
     ok = node.get("__typename") == "ScheduleStateResult"
     return {"ok": ok, "error": None if ok else node.get("message", "start failed")}
@@ -92,7 +100,7 @@ def _schedule_id(name: str) -> str | None:
         return None
     for repo in nodes:
         for s in repo.get("schedules", []):
-            if s["name"] == name:
+            if s.get("name") == name and s.get("id"):
                 return s["id"]
     return None
 
@@ -110,7 +118,7 @@ def stop_schedule(name: str) -> dict[str, Any]:
     }"""
     res = _query(q, {"id": sid})
     if "errors" in res:
-        return {"ok": False, "error": res["errors"][0]["message"]}
+        return {"ok": False, "error": _first_error(res)}
     node = res.get("data", {}).get("stopRunningSchedule", {})
     ok = node.get("__typename") == "ScheduleStateResult"
     return {"ok": ok, "error": None if ok else node.get("message", "stop failed")}
@@ -130,7 +138,7 @@ def launch_job(job_name: str) -> dict[str, Any]:
                            "repositoryName": _REPOSITORY, "jobName": job_name}}
     res = _query(q, {"p": params})
     if "errors" in res:
-        return {"ok": False, "error": res["errors"][0]["message"]}
+        return {"ok": False, "error": _first_error(res)}
     node = res.get("data", {}).get("launchRun", {})
     if node.get("__typename") == "LaunchRunSuccess":
         return {"ok": True, "run_id": node["run"]["runId"]}
