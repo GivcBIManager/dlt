@@ -490,3 +490,41 @@ def _run_detail_rows(log_rows: list[dict], control_rows: list[dict]) -> list[dic
         d["branch_id"] or 0,
     ))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# I/O wrappers (system table reads)
+# --------------------------------------------------------------------------- #
+def _scan_pylist(table: str) -> list[dict]:
+    """Whole system table as a list of plain dicts (timestamps -> datetime)."""
+    tbl = _open_static(table)
+    return tbl.scan().to_arrow().to_pylist()
+
+
+def read_run_summary(limit_runs: int = 100) -> dict[str, Any]:
+    """Per-run rollup of etl_run_log, newest first. Empty when the table is absent."""
+    try:
+        rows = _scan_pylist("etl_run_log")
+    except FileNotFoundError:
+        return {"runs": []}
+    return {"runs": _summarize_runs(rows, limit_runs=limit_runs)}
+
+
+def read_run_detail(run_id: str) -> dict[str, Any]:
+    """One run's units joined to the current etl_control watermark."""
+    try:
+        log_rows = [
+            r for r in _scan_pylist("etl_run_log")
+            if r.get("pipeline_run_id") == run_id
+        ]
+    except FileNotFoundError:
+        log_rows = []
+    try:
+        control_rows = _scan_pylist("etl_control")
+    except FileNotFoundError:
+        control_rows = []
+    return {
+        "run_id": run_id,
+        "columns": RUN_DETAIL_COLUMNS,
+        "rows": _run_detail_rows(log_rows, control_rows),
+    }

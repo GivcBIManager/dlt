@@ -114,3 +114,50 @@ def test_detail_failed_rows_first():
     out = ib._run_detail_rows(logs, [])
     assert out[0]["status"] == "FAILED"
     assert out[1]["status"] == "SUCCESS"
+
+
+def test_read_run_summary_uses_scan(monkeypatch):
+    rows = [_log_row(run="r1", branch=1), _log_row(run="r1", branch=2)]
+    monkeypatch.setattr(ib, "_scan_pylist", lambda table: rows)
+    out = ib.read_run_summary()
+    assert out["runs"][0]["run_id"] == "r1"
+    assert out["runs"][0]["units"] == 2
+
+
+def test_read_run_summary_missing_table(monkeypatch):
+    def boom(table):
+        raise FileNotFoundError(table)
+    monkeypatch.setattr(ib, "_scan_pylist", boom)
+    assert ib.read_run_summary() == {"runs": []}
+
+
+def test_read_run_detail_filters_and_joins(monkeypatch):
+    logs = [
+        _log_row(run="r1", table="APPT", branch=1),
+        _log_row(run="r2", table="APPT", branch=1),  # different run, must be excluded
+    ]
+    ctrl = [_ctrl_row(table="APPT", branch=1, cdc="777")]
+
+    def fake_scan(table):
+        return {"etl_run_log": logs, "etl_control": ctrl}[table]
+    monkeypatch.setattr(ib, "_scan_pylist", fake_scan)
+
+    out = ib.read_run_detail("r1")
+    assert out["run_id"] == "r1"
+    assert out["columns"] == ib.RUN_DETAIL_COLUMNS
+    assert len(out["rows"]) == 1
+    assert out["rows"][0]["last_cdc_value"] == "777"
+
+
+def test_read_run_detail_missing_control(monkeypatch):
+    logs = [_log_row(run="r1", table="APPT", branch=1)]
+
+    def fake_scan(table):
+        if table == "etl_control":
+            raise FileNotFoundError(table)
+        return logs
+    monkeypatch.setattr(ib, "_scan_pylist", fake_scan)
+
+    out = ib.read_run_detail("r1")
+    assert len(out["rows"]) == 1
+    assert out["rows"][0]["control_status"] is None
