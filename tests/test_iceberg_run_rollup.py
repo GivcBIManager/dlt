@@ -76,3 +76,41 @@ def test_null_times_are_tolerated():
     out = ib._summarize_runs(rows)
     assert out[0]["duration_wall_ms"] is None
     assert out[0]["start_time"] is None
+
+
+def _ctrl_row(table="APPT", branch=1, status="OK", cdc="500", date="2026-07-02",
+              updated="2026-07-02 06:05:00"):
+    return {
+        "table_name": table, "branch_id": branch, "status": status,
+        "last_cdc_value": cdc, "last_date_value": date,
+        "updated_at": dt.datetime.fromisoformat(updated),
+    }
+
+
+def test_detail_joins_control_watermark():
+    logs = [_log_row(table="APPT", branch=1, status="SUCCESS")]
+    ctrl = [_ctrl_row(table="APPT", branch=1, status="OK", cdc="500")]
+    out = ib._run_detail_rows(logs, ctrl)
+    assert len(out) == 1
+    row = out[0]
+    assert set(ib.RUN_DETAIL_COLUMNS).issubset(row.keys())
+    assert row["control_status"] == "OK"
+    assert row["last_cdc_value"] == "500"
+
+
+def test_detail_null_control_when_no_match():
+    logs = [_log_row(table="APPT", branch=9, status="SUCCESS")]
+    out = ib._run_detail_rows(logs, [])  # no control rows at all
+    assert out[0]["control_status"] is None
+    assert out[0]["last_cdc_value"] is None
+    assert out[0]["control_updated_at"] is None
+
+
+def test_detail_failed_rows_first():
+    logs = [
+        _log_row(table="APPT", branch=1, status="SUCCESS"),
+        _log_row(table="APPT", branch=2, status="FAILED"),
+    ]
+    out = ib._run_detail_rows(logs, [])
+    assert out[0]["status"] == "FAILED"
+    assert out[1]["status"] == "SUCCESS"

@@ -440,3 +440,53 @@ def _summarize_runs(rows: list[dict], limit_runs: int = 100) -> list[dict]:
 
     ranked.sort(key=lambda t: t[0], reverse=True)
     return [summary for _, summary in ranked[:limit_runs]]
+
+
+RUN_DETAIL_COLUMNS = [
+    "table_name", "branch_id", "load_mode", "status", "row_count", "duration_ms",
+    "write_disposition", "attempts", "control_status", "last_cdc_value",
+    "last_date_value", "control_updated_at", "start_time", "end_time",
+    "schema_discrepancy", "error_details",
+]
+
+
+def _control_index(control_rows: list[dict]) -> dict[tuple, dict]:
+    """Index the latest etl_control rows by (table_name, branch_id)."""
+    return {(r.get("table_name"), r.get("branch_id")): r for r in control_rows}
+
+
+def _run_detail_rows(log_rows: list[dict], control_rows: list[dict]) -> list[dict]:
+    """One row per etl_run_log unit, joined to its current etl_control watermark.
+
+    Failed units sort first, then by table then branch. Control columns are None
+    when etl_control has no matching (table_name, branch_id).
+    """
+    idx = _control_index(control_rows)
+    out: list[dict] = []
+    for r in log_rows:
+        c = idx.get((r.get("table_name"), r.get("branch_id"))) or {}
+        out.append({
+            "table_name": r.get("table_name"),
+            "branch_id": r.get("branch_id"),
+            "load_mode": r.get("load_mode"),
+            "status": r.get("status"),
+            "row_count": r.get("row_count"),
+            "duration_ms": r.get("duration_ms"),
+            "write_disposition": r.get("write_disposition"),
+            "attempts": r.get("attempts"),
+            "control_status": c.get("status"),
+            "last_cdc_value": c.get("last_cdc_value"),
+            "last_date_value": c.get("last_date_value"),
+            "control_updated_at": _jsonable(c.get("updated_at")),
+            "start_time": _jsonable(r.get("start_time")),
+            "end_time": _jsonable(r.get("end_time")),
+            "schema_discrepancy": r.get("schema_discrepancy"),
+            "error_details": r.get("error_details"),
+        })
+    out.sort(key=lambda d: (
+        d["status"] == "SUCCESS",
+        str(d["table_name"] or ""),
+        d["branch_id"] is None,
+        d["branch_id"] or 0,
+    ))
+    return out
