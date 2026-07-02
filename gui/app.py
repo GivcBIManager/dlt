@@ -469,6 +469,19 @@ def api_ib_system(table):
     return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 2000)))
 
 
+@app.get("/api/iceberg/runs")
+@api
+def api_ib_runs():
+    limit = request.args.get("limit", 100, type=int)
+    return jsonify(iceberg_browser.read_run_summary(limit_runs=min(limit, 500)))
+
+
+@app.get("/api/iceberg/runs/<run_id>")
+@api
+def api_ib_run_detail(run_id):
+    return jsonify(iceberg_browser.read_run_detail(run_id))
+
+
 @app.get("/healthz")
 def healthz():
     return "ok"
