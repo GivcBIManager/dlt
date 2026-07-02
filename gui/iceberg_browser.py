@@ -398,3 +398,45 @@ def read_system_table(table: str, limit: int = 200) -> dict[str, Any]:
         for r in arrow.slice(0, limit).to_pylist()
     ]
     return {"table": table, "columns": columns, "rows": rows, "total": arrow.num_rows}
+
+
+def _summarize_runs(rows: list[dict], limit_runs: int = 100) -> list[dict]:
+    """Group etl_run_log rows by pipeline_run_id into per-run summaries.
+
+    Duration is *wall clock* (max end_time - min start_time), NOT the sum of
+    per-unit duration_ms. Returns the newest ``limit_runs`` runs, newest first.
+    """
+    groups: dict[Any, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r.get("pipeline_run_id"), []).append(r)
+
+    ranked: list[tuple[float, dict]] = []
+    for run_id, grp in groups.items():
+        starts = [r["start_time"] for r in grp if r.get("start_time") is not None]
+        ends = [r["end_time"] for r in grp if r.get("end_time") is not None]
+        start = min(starts) if starts else None
+        end = max(ends) if ends else None
+        duration_wall_ms = (
+            int((end - start).total_seconds() * 1000) if (start and end) else None
+        )
+        ok = sum(1 for r in grp if r.get("status") == "SUCCESS")
+        recorded = [r["recorded_at"] for r in grp if r.get("recorded_at") is not None]
+        sort_dt = start or (max(recorded) if recorded else None)
+        sort_ts = sort_dt.timestamp() if sort_dt is not None else float("-inf")
+        ranked.append((sort_ts, {
+            "run_id": run_id,
+            "load_mode": next((r.get("load_mode") for r in grp if r.get("load_mode")), None),
+            "start_time": _jsonable(start),
+            "end_time": _jsonable(end),
+            "duration_wall_ms": duration_wall_ms,
+            "rows_total": sum(int(r.get("row_count") or 0) for r in grp),
+            "units": len(grp),
+            "ok": ok,
+            "failed": len(grp) - ok,
+            "schema_drift": sum(1 for r in grp if r.get("schema_discrepancy")),
+            "errors": sum(1 for r in grp if r.get("error_details")),
+            "tables": len({r.get("table_name") for r in grp}),
+        }))
+
+    ranked.sort(key=lambda t: t[0], reverse=True)
+    return [summary for _, summary in ranked[:limit_runs]]
