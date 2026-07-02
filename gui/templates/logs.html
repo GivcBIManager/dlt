@@ -8,6 +8,7 @@
 <div class="row-flex" style="margin-bottom:16px">
   <button class="btn tab primary" data-tab="files">Log files</button>
   <button class="btn tab" data-tab="dq">DQ results</button>
+  <button class="btn tab" data-tab="runs">Runs</button>
   <button class="btn tab" data-tab="runlog">ETL run log</button>
   <button class="btn tab" data-tab="control">ETL control</button>
 </div>
@@ -54,6 +55,17 @@
     <div id="dq-summary"></div>
     <h2 style="font-size:.95rem;margin:18px 0 10px">Detail</h2>
     <div id="dq"></div>
+  </div>
+</section>
+
+<section data-panel="runs" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Runs <small id="runs-stat" class="muted"></small></h2>
+      <button class="btn sm ghost" id="refresh-runs">↻</button>
+    </div>
+    <div class="filter-bar" id="runs-bar"></div>
+    <div id="runs-list"></div>
   </div>
 </section>
 
@@ -207,6 +219,7 @@ const controlView = SysTable({
 function showTab(tab) {
   $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
   $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
+  if (tab === "runs") runsView.load();
   if (tab === "dq") dqView.load();
   if (tab === "runlog") runlogView.load();
   if (tab === "control") controlView.load();
@@ -252,10 +265,114 @@ async function purgeLogs() {
   } catch (e) { err(e.message); }
 }
 
+// ---------- Runs rollup (per pipeline_run_id) ----------
+function fmtDur(ms) {
+  if (ms === null || ms === undefined) return "—";
+  let s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  return (h ? `${h}h ` : "") + (h || m ? `${m}m ` : "") + `${s}s`;
+}
+function runBadge(n, label, cls) {
+  return n ? `<span class="run-badge ${cls}">${n} ${label}</span>` : "";
+}
+const RUN_DETAIL_PILLS = ["status", "control_status"];
+const RUN_DETAIL_NUMS  = ["row_count", "duration_ms", "attempts"];
+
+const runsView = (function () {
+  let RUNS = [];
+  const state = { mode: "", from: "", to: "" };
+
+  function buildBar() {
+    const modes = [...new Set(RUNS.map(r => r.load_mode).filter(Boolean))].sort();
+    const bar = el("runs-bar");
+    bar.innerHTML =
+      `<div><label>Mode</label><select data-f="mode"><option value="">All</option>` +
+        modes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("") + `</select></div>` +
+      `<div><label>From</label><input type="date" data-f="from"></div>` +
+      `<div><label>To</label><input type="date" data-f="to"></div>` +
+      `<button class="btn ghost sm" data-f="clear" style="align-self:flex-end">Clear</button>` +
+      `<span class="spacer"></span><span class="muted" data-f="count"></span>`;
+    bar.querySelectorAll("select,input").forEach(n =>
+      n.addEventListener("input", () => { state[n.dataset.f] = n.value; render(); }));
+    bar.querySelector('[data-f="clear"]').onclick = () => {
+      state.mode = state.from = state.to = "";
+      bar.querySelectorAll("select,input").forEach(n => n.value = "");
+      render();
+    };
+  }
+
+  function filtered() {
+    return RUNS.filter(r => {
+      if (state.mode && r.load_mode !== state.mode) return false;
+      const d = (r.start_time || "").slice(0, 10);
+      if (state.from && d && d < state.from) return false;
+      if (state.to && d && d > state.to) return false;
+      return true;
+    });
+  }
+
+  function card(r) {
+    const badges =
+      `<span class="run-badge ok">${r.ok} ok</span>` +
+      runBadge(r.failed, "failed", "failed") +
+      runBadge(r.schema_drift, "drift", "warn") +
+      runBadge(r.errors, "err", "warn");
+    return `<details class="run-card" data-run="${esc(r.run_id)}">
+      <summary>
+        <span class="run-head">
+          <span class="run-rows">${fmtNum(r.rows_total)} rows</span>
+          <span class="rd-sep">·</span><span>${fmtDur(r.duration_wall_ms)}</span>
+          ${badges}
+        </span>
+        <span class="run-meta muted">${esc(r.load_mode || "—")} · ${esc(fmtDate(r.start_time))} · ${r.tables} tables</span>
+      </summary>
+      <div class="run-detail"><div class="muted">Loading…</div></div>
+    </details>`;
+  }
+
+  async function loadDetail(d) {
+    if (d.dataset.loaded) return;
+    d.dataset.loaded = "1";
+    const box = d.querySelector(".run-detail");
+    try {
+      const r = await apiGet(`/api/iceberg/runs/${encodeURIComponent(d.dataset.run)}`);
+      box.innerHTML = renderTable(r.columns, r.rows, { pillCols: RUN_DETAIL_PILLS, numCols: RUN_DETAIL_NUMS });
+    } catch (e) {
+      d.dataset.loaded = "";
+      box.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    }
+  }
+
+  function render() {
+    const rows = filtered();
+    el("runs-list").innerHTML = rows.map(card).join("") || `<div class="muted">No runs yet.</div>`;
+    const cnt = el("runs-bar").querySelector('[data-f="count"]');
+    if (cnt) cnt.textContent = `${rows.length} of ${RUNS.length} runs`;
+    $$("#runs-list details.run-card").forEach(d =>
+      d.addEventListener("toggle", () => { if (d.open) loadDetail(d); }));
+  }
+
+  async function load() {
+    try {
+      const data = await apiGet("/api/iceberg/runs?limit=100");
+      RUNS = data.runs || [];
+      el("runs-stat").textContent =
+        RUNS.length ? `${RUNS.length} runs · last ${fmtDate(RUNS[0].start_time)}` : "";
+      buildBar();
+      render();
+    } catch (e) {
+      el("runs-list").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    }
+  }
+  return { load };
+})();
+
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("toggle-raw").onclick = () => el("file-panel").classList.toggle("raw-hidden");
 el("refresh-files").onclick = loadFiles;
 el("purge-btn").onclick = purgeLogs;
+el("refresh-runs").onclick = () => runsView.load();
 el("refresh-dq").onclick = () => dqView.load();
 el("refresh-runlog").onclick = () => runlogView.load();
 el("refresh-control").onclick = () => controlView.load();
