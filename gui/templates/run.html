@@ -36,7 +36,7 @@
         <div><label>Mode</label>
           <select id="mode"><option>INCREMENTAL</option><option>INITIAL</option></select></div>
         <div><label>Category</label>
-          <select id="category"><option>both</option><option>masters</option><option>transactions</option></select></div>
+          <select id="category"><option>both</option><option>masters</option><option>transactions</option><option>snapshots</option></select></div>
       </div>
       <div class="checkbox"><input type="checkbox" id="self_test_o"><label for="self_test_o">--self-test (synthetic data, no Oracle)</label></div>
       <div class="checkbox"><input type="checkbox" id="no_progress"><label for="no_progress">--no-progress</label></div>
@@ -151,7 +151,7 @@
 
 {% block scripts %}
 <script>
-let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [] };
+let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [], snapshots: [] };
 const selBranches = new Set(), selTables = new Set();
 let curRun = null, tailOffset = 0, tailTimer = null;
 
@@ -261,6 +261,7 @@ function tablePool() {
   const cat = currentCategory();
   const pool = cat === "masters" ? TABLES_BY_CAT.masters
              : cat === "transactions" ? TABLES_BY_CAT.transactions
+             : cat === "snapshots" ? TABLES_BY_CAT.snapshots
              : [...TABLES_BY_CAT.masters, ...TABLES_BY_CAT.transactions];
   return [...new Set(pool)].filter(Boolean).sort();
 }
@@ -549,7 +550,7 @@ async function init() {
   try {
     const t = await apiGet("/api/tables");
     BRANCHES = t._branches || [];
-    for (const cat of ["masters", "transactions"])
+    for (const cat of ["masters", "transactions", "snapshots"])
       TABLES_BY_CAT[cat] = (t[cat] || []).map(e => {
         const full = e.table || "";
         return full.includes(".") ? full.split(".").pop() : full;

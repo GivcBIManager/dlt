@@ -13,6 +13,7 @@
   <div class="btn-row">
     <button class="btn" id="add-master"><i class="fa-solid fa-plus"></i> Master</button>
     <button class="btn" id="add-trans"><i class="fa-solid fa-plus"></i> Transaction</button>
+    <button class="btn" id="add-snap"><i class="fa-solid fa-plus"></i> Snapshot</button>
     <span class="spacer"></span>
     <button class="btn ghost" id="toggle-raw"><i class="fa-solid fa-code"></i> Raw JSON</button>
     <button class="btn" id="validate"><i class="fa-solid fa-circle-check"></i> Validate</button>
@@ -33,6 +34,12 @@
       <input class="list-filter" id="t-filter" placeholder="Filter by table name — wildcard, e.g. *order*">
       <div id="transactions" class="scroll-list"></div>
     </div>
+  </div>
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><h2>Snapshots</h2><span id="s-count" class="tag"></span></div>
+    <div class="hint">Append-only full copies stamped with a per-run <span class="mono">version</span> timestamp. No unique key needed.</div>
+    <input class="list-filter" id="s-filter" placeholder="Filter by table name — wildcard, e.g. *lookup*">
+    <div id="snapshots" class="scroll-list"></div>
   </div>
 </div>
 
@@ -82,9 +89,16 @@
 
 {% block scripts %}
 <script>
-let DOC = { schema: "", description: "", masters: [], transactions: [] };
+let DOC = { schema: "", description: "", masters: [], transactions: [], snapshots: [] };
 let editing = { category: "masters", index: -1 };
 let rawMode = false;
+
+// Per-category filter/count element ids.
+const CAT_UI = {
+  masters: { filter: "m-filter", count: "m-count" },
+  transactions: { filter: "t-filter", count: "t-count" },
+  snapshots: { filter: "s-filter", count: "s-count" },
+};
 
 function summarize(e) {
   const bits = [];
@@ -112,7 +126,8 @@ function matchFilter(name, q) {
 function renderList(category) {
   const items = DOC[category] || [];
   const box = el(category);
-  const q = el(category === "masters" ? "m-filter" : "t-filter").value;
+  const ui = CAT_UI[category];
+  const q = el(ui.filter).value;
   const shown = items.map((e, i) => ({ e, i })).filter(({ e }) => matchFilter(e.table, q));
   box.innerHTML = shown.map(({ e, i }) => `
     <div class="card" style="margin-bottom:8px">
@@ -124,15 +139,16 @@ function renderList(category) {
       </div>
       <div class="muted" style="margin-top:6px;white-space:normal">${esc(summarize(e)) || "—"}</div>
     </div>`).join("") || `<div class="muted">${q ? "no matches" : "none"}</div>`;
-  el(category === "masters" ? "m-count" : "t-count").textContent =
+  el(ui.count).textContent =
     q ? `${shown.length}/${items.length}` : `${items.length}`;
 }
-function renderAll() { renderList("masters"); renderList("transactions"); }
+function renderAll() { renderList("masters"); renderList("transactions"); renderList("snapshots"); }
 
 function openEdit(category, index) {
   editing = { category, index };
   const e = index >= 0 ? DOC[category][index] : {};
-  const catLabel = category === "masters" ? "master" : "transaction";
+  const catLabel = category === "masters" ? "master"
+                 : category === "snapshots" ? "snapshot" : "transaction";
   el("modal-title").textContent = (index >= 0 ? "Edit " : "New ") + catLabel + " table";
   el("f-table").value = e.table || "";
   el("f-key").value = e.unique_key || "";
@@ -154,8 +170,10 @@ function applyEdit() {
   const table = el("f-table").value.trim();
   const key = el("f-key").value.trim();
   if (!table) return err("Table is required");
-  if (!key) return err("Unique key is required");
-  const e = { table, unique_key: key };
+  // Snapshot tables are append-only, so a unique key is optional for them.
+  if (!key && editing.category !== "snapshots") return err("Unique key is required");
+  const e = { table };
+  if (key) e.unique_key = key;
   const cdc = el("f-cdc").value.trim();
   const wdate = el("f-wdate").value.trim();
   const wop = el("f-wop").value.trim();
@@ -205,6 +223,7 @@ function currentDoc() {
     description: el("t-desc").value,
     masters: DOC.masters || [],
     transactions: DOC.transactions || [],
+    snapshots: DOC.snapshots || [],
   };
 }
 
@@ -223,7 +242,7 @@ async function validate() {
   try {
     const r = await apiPost("/api/tables/validate", doc);
     el("valbox").innerHTML = r.valid
-      ? `<div class="banner info">✓ Valid — ${(doc.masters||[]).length} masters, ${(doc.transactions||[]).length} transactions.</div>`
+      ? `<div class="banner info">✓ Valid — ${(doc.masters||[]).length} masters, ${(doc.transactions||[]).length} transactions, ${(doc.snapshots||[]).length} snapshots.</div>`
       : `<div class="banner warn">${r.errors.map(esc).join("<br>")}</div>`;
     return r.valid;
   } catch (e) { err(e.message); }
@@ -243,7 +262,7 @@ async function save() {
 async function load() {
   try {
     const doc = await apiGet("/api/tables");
-    DOC = { schema: doc.schema||"", description: doc.description||"", masters: doc.masters||[], transactions: doc.transactions||[] };
+    DOC = { schema: doc.schema||"", description: doc.description||"", masters: doc.masters||[], transactions: doc.transactions||[], snapshots: doc.snapshots||[] };
     el("t-schema").value = DOC.schema; el("t-desc").value = DOC.description;
     renderAll();
   } catch (e) { err(e.message); }
@@ -251,8 +270,10 @@ async function load() {
 
 el("add-master").onclick = () => openEdit("masters", -1);
 el("add-trans").onclick = () => openEdit("transactions", -1);
+el("add-snap").onclick = () => openEdit("snapshots", -1);
 el("m-filter").oninput = () => renderList("masters");
 el("t-filter").oninput = () => renderList("transactions");
+el("s-filter").oninput = () => renderList("snapshots");
 el("f-save").onclick = applyEdit;
 el("f-cancel").onclick = () => el("modal").classList.remove("show");
 el("toggle-raw").onclick = toggleRaw;

@@ -16,7 +16,7 @@ from typing import Any
 
 from config import STATE_DIR, TABLES_JSON
 
-CATEGORIES = ("masters", "transactions")
+CATEGORIES = ("masters", "transactions", "snapshots")
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
 
 # Recognised keys on a table entry (used to warn about typos, not to reject).
@@ -37,7 +37,7 @@ KNOWN_HELPER_KEYS = {"table", "join", "join_keys", "cdc_column", "where_date_col
 def load_raw() -> dict[str, Any]:
     """Full tables.json document (creates a minimal skeleton if missing)."""
     if not TABLES_JSON.exists():
-        return {"schema": "", "description": "", "masters": [], "transactions": []}
+        return {"schema": "", "description": "", "masters": [], "transactions": [], "snapshots": []}
     return json.loads(TABLES_JSON.read_text(encoding="utf-8"))
 
 
@@ -53,7 +53,8 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
     name = table or where
 
     unique_key = str(entry.get("unique_key") or "").strip()
-    if not unique_key:
+    # Snapshot tables are append-only (no merge), so they need no unique_key.
+    if not unique_key and category != "snapshots":
         errs.append(f"{name}: 'unique_key' is required")
 
     for k in entry:

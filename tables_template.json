@@ -75,5 +75,10 @@
       "cdc_column": "AMEND_LAST_DATE", "where_date_column": "AMEND_LAST_DATE"
   }
     }
+  ],
+  "snapshots": [
+    {
+      "table": "OASIS.SOME_LOOKUP_TABLE"
+    }
   ]
 }

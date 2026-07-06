@@ -46,10 +46,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--tables", help="comma/space separated table object names to load "
                                     "(default: all tables in tables.json)")
     p.add_argument("--tables-file", default="tables.json", help="path to tables.json")
-    p.add_argument("--category", choices=["masters", "transactions", "both"],
+    p.add_argument("--category", choices=["masters", "transactions", "snapshots", "both"],
                    default="both",
                    help="which group to run; 'both' runs masters first, then "
-                        "transactions as a separate phase (never together)")
+                        "transactions as a separate phase (never together). "
+                        "'snapshots' (append-only full copies) run only when "
+                        "selected explicitly, never as part of 'both'.")
 
     p.add_argument("--max-branch-workers", type=int, help="outer pool size (branches)")
     p.add_argument("--max-table-workers", type=int, help="inner pool size (tables/branch)")
@@ -136,15 +138,25 @@ def main(argv: list[str]) -> int:
     else:
         tables = all_tables
 
-    # Split into masters and transactions; they run as separate, sequential
-    # phases (masters first) and are never extracted/loaded together.
-    masters = [t for t in tables if t.is_master]
-    transactions = [t for t in tables if not t.is_master]
+    # Split into masters, transactions and snapshots; each runs as a separate,
+    # sequential phase and is never extracted/loaded together. Snapshot tables
+    # (append-only full copies) only run when '--category snapshots' is asked
+    # for -- they are never part of 'both'.
+    masters = [t for t in tables if t.category == config.CATEGORY_MASTER]
+    transactions = [t for t in tables if t.category == config.CATEGORY_TRANSACTION]
+    snapshots = [t for t in tables if t.is_snapshot]
     phases: list[tuple[str, list]] = []
     if args.category in ("masters", "both"):
         phases.append(("masters", masters))
     if args.category in ("transactions", "both"):
         phases.append(("transactions", transactions))
+    if args.category == "snapshots":
+        phases.append(("snapshots", snapshots))
+
+    # One shared snapshot timestamp for the whole run: every snapshot record from
+    # every branch is stamped with this exact value (see etl.oracle_extract.
+    # inject_columns), so a run's full copy is identifiable by a single version.
+    settings.snapshot_ts = config.now_local()
 
     run_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
     log.info("Run %s | mode=%s | branches=%s | phases=%s | dest=%s",

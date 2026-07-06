@@ -31,6 +31,10 @@ MODE_INCREMENTAL = "INCREMENTAL"
 
 CATEGORY_MASTER = "masters"
 CATEGORY_TRANSACTION = "transactions"
+# Append-only "snapshot" tables: the whole table is pulled from every branch on
+# every run and appended (never merged/replaced), so each run accumulates a full
+# historical copy stamped with a single shared ``version`` timestamp.
+CATEGORY_SNAPSHOT = "snapshots"
 
 # --------------------------------------------------------------------------- #
 # Timestamps
@@ -103,7 +107,7 @@ class TableDef:
     """A single source table and how it should be loaded."""
 
     table: str                              # e.g. "OASIS.STAFF_MASTER_DATA"
-    unique_key: str                         # column, "A,B", or a SQL expression
+    unique_key: Optional[str]               # column, "A,B", SQL expression, or None (snapshots)
     cdc_column: Optional[str]               # column used for INCREMENTAL "updated" rows
     where_date_column: Optional[str]        # column used for INCREMENTAL "new" rows
     where_operator: Optional[str]           # operator for the INITIAL range filter
@@ -138,6 +142,11 @@ class TableDef:
     def is_master(self) -> bool:
         return self.category == CATEGORY_MASTER
 
+    @property
+    def is_snapshot(self) -> bool:
+        """True for append-only snapshot tables (full copy stamped per run)."""
+        return self.category == CATEGORY_SNAPSHOT
+
     # ----- helper-driven CDC --------------------------------------------------
     @property
     def is_helper_driven(self) -> bool:
@@ -166,6 +175,8 @@ class TableDef:
     @property
     def key_is_expression(self) -> bool:
         """True when unique_key is a SQL expression rather than plain column(s)."""
+        if not self.unique_key:
+            return False
         parts = [p.strip() for p in self.unique_key.split(",")]
         return not all(_IDENT_RE.match(p) for p in parts)
 
@@ -179,7 +190,10 @@ class TableDef:
 
         Expression keys are projected into a single ``DERIVED_KEY`` column in the
         SELECT, so the merge key is that alias; simple keys split on commas.
+        Snapshot (append-only) tables have no merge key, so this is empty.
         """
+        if not self.unique_key:
+            return []
         if self.key_is_expression:
             return [self.derived_key_alias]
         return [p.strip() for p in self.unique_key.split(",") if p.strip()]
@@ -249,6 +263,14 @@ class Settings:
     branch_id_column: str = "BRANCH_ID"
     recorded_ts_column: str = "Recorded_updated_at"   # ETL last-load time (updates every run)
     inserted_ts_column: str = "insert_at"             # ETL first-load time (preserved across updates)
+
+    # snapshot (append-only) tables: a single per-run timestamp stamped into every
+    # record of every branch (``version``), plus a derived date used purely as the
+    # snapshot-date partition column. ``snapshot_ts`` is set once per run (see
+    # oracle_to_iceberg.main) so all branches share the exact same value.
+    snapshot_version_column: str = "version"          # run timestamp, identical across all branches
+    snapshot_date_column: str = "version_date"        # date(version), snapshot-date partition
+    snapshot_ts: Optional[dt.datetime] = None
 
     # Iceberg snapshot retention (keep this many days; min always retained)
     snapshot_maintenance: bool = True
@@ -337,12 +359,12 @@ def load_table_defs(path: Path) -> list[TableDef]:
     """Parse tables.json into TableDef objects (masters + transactions)."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     defs: list[TableDef] = []
-    for category in (CATEGORY_MASTER, CATEGORY_TRANSACTION):
+    for category in (CATEGORY_MASTER, CATEGORY_TRANSACTION, CATEGORY_SNAPSHOT):
         for entry in data.get(category, []):
             defs.append(
                 TableDef(
                     table=entry["table"],
-                    unique_key=entry["unique_key"],
+                    unique_key=entry.get("unique_key"),
                     cdc_column=entry.get("cdc_column"),
                     where_date_column=entry.get("where_date_column"),
                     where_operator=entry.get("where_operator"),

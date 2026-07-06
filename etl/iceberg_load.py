@@ -185,6 +185,9 @@ def _plan_table(
         plan.load_error = "no successful branches"
         return plan
 
+    # Snapshot (append-only) tables append a full copy every run and are never
+    # merged or replaced, so the schema-unify still runs below but the write is
+    # a plain append regardless of mode/branch coverage.
     # Unify schemas across the successful branches and record per-branch drift.
     # Reserved helper watermark columns are stripped first so they are absent
     # from the unified schema (and thus dropped on cast) and never flagged as
@@ -219,7 +222,10 @@ def _plan_table(
         settings.mode == MODE_INITIAL
         and branches_in_run == total_branches
     )
-    plan.disposition = "replace" if full_rebuild else "merge"
+    if tdef.is_snapshot:
+        plan.disposition = "append"
+    else:
+        plan.disposition = "replace" if full_rebuild else "merge"
     return plan
 
 
@@ -391,7 +397,10 @@ def _iceberg_resource(
     time -- a true ``created_at`` -- while new rows keep this run's load time.
     """
     tdef = plan.tdef
-    primary_key = list(tdef.key_columns) + [settings.branch_id_column]
+    is_snapshot = tdef.is_snapshot
+    # Snapshot tables are append-only: no merge key. Every other table merges on
+    # its compound (PK + BRANCH_ID) key.
+    primary_key = [] if is_snapshot else list(tdef.key_columns) + [settings.branch_id_column]
     # Make the merge-key columns NOT NULL so the Arrow schema agrees with the
     # resource's primary_key hint (otherwise dlt warns about differing hints on
     # every load -- see _require_non_null).
@@ -406,16 +415,24 @@ def _iceberg_resource(
                                            primary_key, insert_col)
         return tbl
 
+    # Partition by BRANCH_ID always; snapshot tables additionally partition by
+    # the snapshot date (version_date) so a run/day's copy prunes to its own
+    # files. Snapshot tables also carry the run-scoped ``version`` timestamp.
+    columns = {
+        settings.branch_id_column: {"partition": True},
+        settings.inserted_ts_column: _naive_ts_hint(),
+        settings.recorded_ts_column: _naive_ts_hint(),
+    }
+    if is_snapshot:
+        columns[settings.snapshot_date_column] = {"partition": True}
+        columns[settings.snapshot_version_column] = _naive_ts_hint()
+
     @dlt.resource(
         name=tdef.dataset_table_name,
         write_disposition=disposition,
-        primary_key=primary_key,
+        primary_key=primary_key or None,
         table_format="iceberg",
-        columns={
-            settings.branch_id_column: {"partition": True},
-            settings.inserted_ts_column: _naive_ts_hint(),
-            settings.recorded_ts_column: _naive_ts_hint(),
-        },
+        columns=columns,
     )
     def _resource():
         for path in paths:
@@ -461,6 +478,25 @@ def _run_per_branch_rebuild(
         disposition = "append"  # everything after the first adds on
 
 
+def _run_per_branch_append(
+    pipeline,
+    plan: TableLoadPlan,
+    settings: Settings,
+    control: ControlStore,
+) -> None:
+    """Append a snapshot table one branch per dlt run (memory-bounded).
+
+    Like ``_run_per_branch_rebuild`` this bounds the loader's peak to a single
+    branch, but *every* branch appends -- including the first -- so snapshots
+    stored by earlier runs are preserved (the whole point of a snapshot table).
+    Watermarks advance per branch as it commits so a mid-stream failure leaves
+    the already-appended branches correct.
+    """
+    for r in plan.success:
+        pipeline.run([_iceberg_resource(plan, settings, [r.staged_path], "append")])
+        control.advance(r)
+
+
 # --------------------------------------------------------------------------- #
 # Control + log Iceberg tables
 # --------------------------------------------------------------------------- #
@@ -468,11 +504,12 @@ def _control_rows(plans: list[TableLoadPlan], settings: Settings, run_id: str) -
     now = now_local()
     rows = []
     for plan in plans:
+        load_mode = "SNAPSHOT" if plan.tdef.is_snapshot else settings.mode
         for r in plan.success + plan.failed:
             rows.append({
                 "table_name": r.table,
                 "branch_id": r.branch_id,
-                "load_mode": settings.mode,
+                "load_mode": load_mode,
                 "status": r.status if plan.load_status != "FAILED" else "FAILED",
                 "row_count": r.row_count,
                 "attempts": r.attempts,
@@ -494,13 +531,14 @@ def _log_rows(plans: list[TableLoadPlan], settings: Settings, run_id: str) -> li
     now = now_local()
     rows = []
     for plan in plans:
+        load_mode = "SNAPSHOT" if plan.tdef.is_snapshot else settings.mode
         for r in plan.success + plan.failed:
             diff = plan.schema_diffs.get(r.branch)
             rows.append({
                 "pipeline_run_id": run_id,
                 "table_name": r.table,
                 "branch_id": r.branch_id,
-                "load_mode": settings.mode,
+                "load_mode": load_mode,
                 "row_count": r.row_count,
                 "start_time": r.start_time,
                 "end_time": r.end_time,
@@ -683,6 +721,10 @@ def _load_one_table(
             # so the loader never materializes more than one branch at a time.
             # Watermarks advance inside the loop as each branch commits.
             _run_per_branch_rebuild(pipeline, plan, settings, control)
+        elif plan.disposition == "append":
+            # Snapshot append: one branch per dlt run (all append) so history
+            # from earlier runs is preserved and memory stays bounded.
+            _run_per_branch_append(pipeline, plan, settings, control)
         else:
             # Incremental / branch-subset merge: small deltas, one run is fine.
             # Preserve each row's original insert_at across updates by carrying

@@ -216,6 +216,11 @@ def build_query(
     date_wm: Watermark,
 ) -> str:
     """Construct the SELECT for a table given the load mode + watermarks."""
+    if tdef.is_snapshot:
+        # Snapshot tables are pulled in full every run (no CDC/range/ceiling
+        # filter) and appended, never merged -- so no helper join or derived
+        # key is needed either. A plain full copy of the source table.
+        return f"SELECT * FROM {tdef.table}"
     shape = _query_shape(tdef)
     base = f"SELECT {shape.select} FROM {shape.frm}"
     ceiling_pred = _date_ceiling_pred(tdef, shape)
@@ -438,6 +443,7 @@ def inject_columns(
     table: pa.Table,
     branch_id: int,
     settings: Settings,
+    tdef: TableDef,
     now: Optional[dt.datetime] = None,
 ) -> pa.Table:
     """Add BRANCH_ID + insert_at + Recorded_updated_at to every result set.
@@ -447,6 +453,12 @@ def inject_columns(
     default; for INCREMENTAL merges the load step carries forward the *existing*
     insert_at for rows that are updates (see iceberg_load), so it ends up holding
     each row's first-load time while ``Recorded_updated_at`` tracks the latest.
+
+    Snapshot (append-only) tables additionally get a ``version`` timestamp and a
+    derived ``version_date`` (the snapshot-date partition). ``version`` is the
+    single run-scoped ``settings.snapshot_ts`` -- identical across every branch
+    and every record of the run -- so a whole run's copy is one addressable
+    version.
     """
     n = table.num_rows
     if now is None:
@@ -460,6 +472,16 @@ def inject_columns(
     table = table.append_column(
         settings.recorded_ts_column, pa.array([now] * n, pa.timestamp("us"))
     )
+    if tdef.is_snapshot:
+        version = settings.snapshot_ts or now
+        table = table.append_column(
+            settings.snapshot_version_column,
+            pa.array([version] * n, pa.timestamp("us")),
+        )
+        table = table.append_column(
+            settings.snapshot_date_column,
+            pa.array([version.date()] * n, pa.date32()),
+        )
     return table
 
 
@@ -530,7 +552,7 @@ def _stage_via_arrow(conn, query, tdef, branch_key, branch_id, settings, fetch_b
             batch = pa.table(odf)
             if batch.num_rows == 0:
                 continue
-            batch = inject_columns(batch, branch_id, settings, now=now)
+            batch = inject_columns(batch, branch_id, settings, tdef, now=now)
             if writer is None:
                 out_schema = batch.schema
                 writer = pq.ParquetWriter(tmp_path, out_schema)
@@ -549,7 +571,7 @@ def _stage_via_arrow(conn, query, tdef, branch_key, branch_id, settings, fetch_b
 
 def _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:
     table = fetch_to_arrow(conn, query, fetch_batch_size)
-    table = inject_columns(table, branch_id, settings, now=now)
+    table = inject_columns(table, branch_id, settings, tdef, now=now)
     path = _stage(table, tdef, branch_key, settings)
     return table.num_rows, table.schema, path
 
@@ -880,7 +902,7 @@ def _self_test_extraction(
                 r.new_cdc = _column_max_watermark(table, tdef.cdc_capture_column)
             if tdef.date_capture_column:
                 r.new_date = _column_max_watermark(table, tdef.date_capture_column)
-            table = inject_columns(table, branch.id, settings)
+            table = inject_columns(table, branch.id, settings, tdef)
             r.row_count = table.num_rows
             r.schema = table.schema
             r.staged_path = _stage(table, tdef, branch.key, settings)

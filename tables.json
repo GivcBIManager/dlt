@@ -780,7 +780,7 @@
       "table": "OASIS.PATIENT_ELIGIBILITY",
       "unique_key": "PATIENT_ELIGIBILITY_ID",
       "where_date_column": "ELIGIBILITY_START",
-      "where_operator": ">=",
+      "where_operator": null,
       "where_value_of_initial_run": null,
       "cdc_column": "AMEND_LAST_DATE"
     },
@@ -824,5 +824,6 @@
       "where_value_of_initial_run": "2022-01-01",
       "cdc_column": "AMEND_LAST_DATE"
     }
-  ]
+  ],
+  "snapshots": []
 }
