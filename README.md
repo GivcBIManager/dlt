@@ -301,6 +301,35 @@ drift lists, a `status` (`OK` / `MISMATCH` / `ERROR` / `SKIPPED`), and
 A Flask control panel lives in `gui/` and is launched with `python gui/app.py`
 (or via `setup.sh` / `setup.cmd`). See `gui/README.md` for full details.
 
+### Start / stop the control panel
+
+Once dependencies are installed (`setup.ps1` / `setup.sh`), use the deployment
+scripts to run the panel in a **development** or **production** profile:
+
+```powershell
+# Windows (PowerShell)
+.\start-app.ps1                     # dev:  127.0.0.1, debug on, foreground
+.\start-app.ps1 -Environment prod   # prod: 0.0.0.0, debug off, background
+.\stop-app.ps1                      # stop the background instance
+```
+
+```bash
+# Ubuntu / Linux / macOS
+./start-app.sh                      # dev:  127.0.0.1, debug on, foreground
+./start-app.sh prod                 # prod: 0.0.0.0, debug off, background
+./stop-app.sh                       # stop the background instance
+```
+
+- **dev** runs in the foreground (Ctrl+C to stop); **prod** detaches into the
+  background, writes its PID to `run_logs/gui-app.pid`, and logs to
+  `gui-server.log` / `gui-server.err.log`. Force either mode with
+  `-Foreground` / `-Background` (PowerShell) or `--foreground` / `--background`
+  (bash).
+- Any environment variable set beforehand overrides the profile preset —
+  `OASIS_GUI_HOST`, `OASIS_GUI_PORT` (default 8765), `OASIS_GUI_DEBUG`,
+  `OASIS_DAGSTER_AUTOSTART` (default 1), `OASIS_DAGSTER_PORT` (default 3000).
+- Stopping also terminates the embedded Dagster webserver + daemon.
+
 ### Scheduling model
 
 Scheduling uses **Dagster** rather than cron:

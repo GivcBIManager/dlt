@@ -76,9 +76,11 @@ existing per-unit `try/except`, which still yields `ERROR`):
 where `tol = settings.dq_hash_delta_tolerance_pct / 100.0` and
 `oracle_hashed_rows = res.hash.oracle_rows`.
 
-- Compute `hash_delta_pct = 100 * total_delta / oracle_hashed_rows` (or `None` when no hash
-  ran; `inf`/capped sentinel when `oracle_hashed_rows == 0` and `total_delta > 0`). Store on
-  `DqResult` as `hash_delta_pct: Optional[float]`.
+- Compute `hash_delta_pct = 100 * total_delta / oracle_hashed_rows`. Store on `DqResult` as
+  `hash_delta_pct: Optional[float]`. It is `None` when no hash ran, when `total_delta == 0`
+  (i.e. `OK`, so `0.0`), **and** when `oracle_hashed_rows == 0` with `total_delta > 0` (ratio
+  undefined → `None`, status resolves to `MISMATCH`). Concretely: `OK` → `0.0`;
+  undefined-denominator `MISMATCH` → `None`; no-hash → `None`; otherwise the computed percent.
 - `check_unit` needs the tolerance value: pass `settings` (already available) — read
   `settings.dq_hash_delta_tolerance_pct` inside `check_unit`.
 

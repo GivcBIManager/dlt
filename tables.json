@@ -3,827 +3,826 @@
   "description": "Tables extracted from the ClickHouse SQL source files. 'table' = primary source table in the script's FROM clause. 'joined_tables' = all other tables referenced via JOIN / subquery in the same script. Classification (masters vs transactions) is based on file location: clickhouse_masters/ -> masters, clickhouse_trans/ -> transactions. unique_key = column aliased as ID / TABLE_ID. where_date_column = date column used to filter rows in the WHERE clause (null if none). table_date_column = column aliased as TABLE_DATE in the SELECT (null if absent). where_value_of_initial_run / where_operator = lower bound of the date filter for the first (un-watermarked) load. where_value_max / where_operator_max = OPTIONAL upper bound that turns the open-ended 'date >= floor' filter into a bounded window 'floor <= date <= ceiling'; needed when where_date_column is a FUTURE (scheduled) date such as APPOINTMENTS.JULIAN_DATE, where an unbounded '>= today' would pull the whole forward booking book. The ceiling is typically a rolling SYSDATE expression (e.g. TO_NUMBER(TO_CHAR(TRUNC(SYSDATE),'J'))) so the window edge advances each run; it applies to the INITIAL filter and the INCREMENTAL new-rows branch.",
   "masters": [
     {
+      "cdc_column": "CREATION_DATE",
       "table": "DEVDBA.HNH_INTERNAL_DOCTOR_LIST",
       "unique_key": "STAFF_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "CREATION_DATE"
+      "where_value_of_initial_run": null
     },
-     {
+    {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ER_PRIORITIES",
       "unique_key": "PRIORITY",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.ANALYSIS_CODES_DATA",
       "unique_key": "ANALYSIS_CODES_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.ANALYSIS_CATEGORIES_DATA",
       "unique_key": "CATEGORY_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.CODES_DATA",
       "unique_key": "CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": null,
       "table": "APP_ADMIN.HNH_DISACHARGE_MODE_MAPPING",
-      "unique_key": null,
+      "unique_key": "MOH_CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": null,
       "table": "APP_ADMIN.HNH_ADMISSION_REASON_MAPPING",
-      "unique_key": null,
+      "unique_key": "MOH_CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": null,
       "table": "DEVDBA.EXCHANGE_RATES",
       "unique_key": "CURRENCY_CODE_CONVERT_FROM,CURRENCY_CODE_CONVERT_TO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.CONTROL_CONTEXTS_DATA",
       "unique_key": "C_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.SERVICE_DEPT_DATA",
       "unique_key": "SERVICE_DEPT",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.DIAGNOSIS_CODES",
       "unique_key": "DIAG_CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.DIAGNOSIS_DESC",
       "unique_key": "DIAG_CODE,LANGUAGE_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.GENERICS",
       "unique_key": "GENERIC_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.GL_CODE",
       "unique_key": "CODE,C_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.IOS_MASTER_DATA",
       "unique_key": "IOS",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.ITEM_BARCODE",
       "unique_key": "BAR_CODE,PRODUCT_CODE,ACCOUNT_CODE,C_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.PRODUCT_SUPPLY_DETAIL",
       "unique_key": "ACCOUNT_CODE,PRODUCT_CODE,C_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PH_IOS_MEDICINE",
       "unique_key": "IOS_MAIN",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PH_CAUTIONARY_ADVISORY_LABELS",
       "unique_key": "CAUTIONARY_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "XY.XY_IOS",
       "unique_key": "IOS_MAIN",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "XY.XY_MODALITIES",
       "unique_key": "MODALITY_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.LAB_IOS",
       "unique_key": "IOS",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.LAB_DEPARTMENT_CODE",
       "unique_key": "LAB_DEPT_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.IOS_PRICES",
       "unique_key": "IOS,APPLIES_START,FACILITY_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "LAST_AMEND_DATE",
       "table": "OASIS.PRODUCTS_MARKUP_MASTER",
       "unique_key": "MASTER_SEQ_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "LAST_AMEND_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PRODUCTS_MARKUP",
       "unique_key": "DETAIL_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_MASTER_DATA",
       "unique_key": "PATIENT_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_FILE_MASTER",
       "unique_key": "PAT_FILE_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_IDS",
       "unique_key": "PATIENT_ID_SEQ",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_CONTRACTS",
       "unique_key": "PAT_CONTRACT_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.CONTRACTS",
       "unique_key": "CONTRACT_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_EPISODE_PACKAGES",
       "unique_key": "PACKAGE_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PERSONNEL_DOCUMENTS",
       "unique_key": "DOCUMENT_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
-      "table": "APP_ADMIN.HNH_DOCTOR_SAUDI_COMM_ID",
-      "unique_key": null,
-      "where_date_column": null,
-      "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
-    },
-    {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.POLICIES",
       "unique_key": "POLICY_CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.POLICY_CLASSES",
       "unique_key": "CLASS_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.CONTRACT_RULES",
       "unique_key": "CONTRACT_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.TERMS",
       "unique_key": "TERM_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.RULE_MASTER",
       "unique_key": "RULE_IOS",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": null,
       "table": "OASIS.TERM_DETAILS",
-      "unique_key": null,
+      "unique_key": "TERM_ID, SEQUENCE_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.POLICY_CLASS_RULES",
       "unique_key": "CLASS_ID,RULE_IOS,TERM_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PURCHASERS",
       "unique_key": "PURCHASER_CODE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.EXTERNAL_ACCOUNTS_DATA",
       "unique_key": "ACCOUNT_CODE,ACCOUNT_TYPE,C_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PURCHASER_IOS_PRICES",
       "unique_key": "PURCHASER_CODE,IOS,APPLIES_START,PRICE_LIST_ID,FACILITY_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.CASHIERS_SIGNON",
       "unique_key": "SIGNON_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.STAFF_MASTER_DATA",
       "unique_key": "STAFF_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.STAFF_TYPES_DATA",
       "unique_key": "STAFF_TYPE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.STAFF_POSTS",
       "unique_key": "POST_NUMBER,DATE_STARTED",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.POSITIONS_DATA",
       "unique_key": "POSITION_TYPE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.STAFF_CONTRACTS",
       "unique_key": "STAFF_CONTRACT_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.TIME_PERIODS",
       "unique_key": "SEQUENCE_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.MAPS006",
       "unique_key": "USER_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.WORK_ENTITIES_DATA",
       "unique_key": "WORK_ENTITY",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.TRANSACTION_TYPES",
       "unique_key": "TRANSACTION_TYPE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.TRANSACTION_TYPES_MASTER",
       "unique_key": "TRANSACTION_TYPE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.BED_DETAILS",
       "unique_key": "BED_DETAIL_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.BED_CLASS_MASTER_DATA",
       "unique_key": "BED_CLASS",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ROOM_MASTER",
       "unique_key": "ROOM_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_EPISODES",
       "unique_key": "PATIENT_ID,EPISODE_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ELIGIBILITY_TYPES",
       "unique_key": "ELIGIBILITY_TYPE",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_BILL_AGREEMENTS",
       "unique_key": "PATIENT_ID,EPISODE_NO,RESPONSIBILITY_SEQ",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": null,
       "table": "DEVDBA.GL_DISTRIBUTION",
       "unique_key": "DOC_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": null
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_AD",
       "unique_key": "ADMISSION_NO",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_ORDER_SETS",
       "unique_key": "PATIENT_ID,EPISODE_NO,ENCOUNTER_ID,ORDER_SET_ID,HOSPITAL_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ORDER_SETS",
       "unique_key": "ORDER_SET_ID,HOSPITAL_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.STAFF_VACATIONS",
       "unique_key": "STAFF_VACATION_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.VACATION_TYPES",
       "unique_key": "VACATION_TYPE_ID",
       "where_date_column": null,
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     }
   ],
   "transactions": [
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ADMISSION_REQUEST",
       "unique_key": "ADMISSION_REQUEST_ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "DEVDBA.DOCL",
-      "unique_key": "LINE_ID",
-      "where_date_column": "DOC_DATE",
-      "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
       "cdc_column": "AMEND_LAST_DATE",
       "helper": {
-        "table": "DEVDBA.DOC",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "DOC_ID",
             "DOC_ID"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "DEVDBA.DOC",
         "where_date_column": "DOC_DATE"
-      }
+      },
+      "table": "DEVDBA.DOCL",
+      "unique_key": "LINE_ID",
+      "where_date_column": "DOC_DATE",
+      "where_operator": ">=",
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.DOC",
       "unique_key": "DOC_ID",
       "where_date_column": "DOC_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.APPOINTMENTS",
       "unique_key": "APPOINTMENT_ID",
       "where_date_column": "JULIAN_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "TO_NUMBER(TO_CHAR(TO_DATE('2026-06-20', 'YYYY-MM-DD'), 'J'))",
       "where_operator_max": "<=",
       "where_value_max": "TO_NUMBER(TO_CHAR(TRUNC(SYSDATE), 'J'))",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "TO_NUMBER(TO_CHAR(TO_DATE('2026-06-20', 'YYYY-MM-DD'), 'J'))"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.AR_EPISODE_INVOICES",
       "unique_key": "INVOICE_NO",
       "where_date_column": "STAT_END_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.AR_STAT_OF_INVOICES",
       "unique_key": "STAT_INVOICE_NO",
       "where_date_column": "STAT_END_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_PRE_APPROVAL_REQ_DETAILS",
       "unique_key": "OASIS_REQUEST_NO",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_PRE_APPROVAL_REQ",
       "unique_key": "API_TRANS_ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.AUTHORISATIONS_MASTER",
       "unique_key": "REQUEST_NO",
       "where_date_column": "REQUEST_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_PRE_APPROVAL_RES",
       "unique_key": "ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_PRE_APPROVAL_RES_DETAILS",
       "unique_key": "ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "OASIS.AUTHORISATIONS",
-      "unique_key": "AUTHORISATION_NO",
-      "where_date_column": null,
-      "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
       "cdc_column": null,
       "helper": {
-        "table": "OASIS.AUTHORISATIONS_MASTER",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "REQUEST_NO",
             "REQUEST_NO"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "OASIS.AUTHORISATIONS_MASTER",
         "where_date_column": "REQUEST_DATE"
-      }
+      },
+      "table": "OASIS.AUTHORISATIONS",
+      "unique_key": "AUTHORISATION_NO",
+      "where_date_column": null,
+      "where_operator": ">=",
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_COMMUNICATION_REQUEST",
       "unique_key": "API_TRANS_ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "DEVDBA.CLAIM_SERVICE_DETAIL",
-      "unique_key": "VISIT_ID",
-      "where_date_column": null,
-      "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
       "cdc_column": null,
       "helper": {
-        "table": "OASIS.CLAIM_VISIT_DETAIL",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "VISIT_ID",
             "VISIT_ID"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "OASIS.CLAIM_VISIT_DETAIL",
         "where_date_column": "STAT_END_DATE"
-      }
+      },
+      "table": "DEVDBA.CLAIM_SERVICE_DETAIL",
+      "unique_key": "VISIT_ID",
+      "where_date_column": null,
+      "where_operator": ">=",
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.CLAIM_VISIT_DETAIL",
       "unique_key": "VISIT_ID",
       "where_date_column": "STAT_END_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "OASIS.DELIVERY_CHARGE",
-      "unique_key": "DELIVERY_CHARGE_ID",
-      "where_date_column": "DELIVERY_DATE",
-      "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
       "cdc_column": null,
       "helper": {
-        "table": "OASIS.DELIVERY_LINES",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "DELIVERY_LINE",
             "DELIVERY_LINE"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "OASIS.DELIVERY_LINES",
         "where_date_column": "AMEND_LAST_DATE"
-      }
+      },
+      "table": "OASIS.DELIVERY_CHARGE",
+      "unique_key": "DELIVERY_CHARGE_ID",
+      "where_date_column": "DELIVERY_DATE",
+      "where_operator": ">=",
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "OASIS.DELIVERY_LINES",
-      "unique_key": "DELIVERY_LINE",
-      "where_date_column": null,
-      "where_operator": null,
-      "where_value_of_initial_run": null,
       "cdc_column": null,
       "helper": {
-        "table": "OASIS.MASTER_DELIVERIES",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "MASTER_DELIVERY_NO",
             "MASTER_DELIVERY_NO"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "OASIS.MASTER_DELIVERIES",
         "where_date_column": "DELIVERY_DATE"
-      }
+      },
+      "table": "OASIS.DELIVERY_LINES",
+      "unique_key": "DELIVERY_LINE",
+      "where_date_column": null,
+      "where_operator": null,
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.MASTER_DELIVERIES",
       "unique_key": "MASTER_DELIVERY_NO",
       "where_date_column": "DELIVERY_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_DIAGNOSIS_NOTES",
       "unique_key": "PATIENT_DIAGNOSIS_ID",
       "where_date_column": "DATE_RECORDED",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.API_PULL_RESPONSE_DETAILS",
       "unique_key": "RESPONSE_ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
-      "table": "DEVDBA.GL_INTERFACE",
-      "unique_key": null,
-      "where_date_column": null,
-      "where_operator": null,
-      "where_value_of_initial_run": "2022-01-01",
       "cdc_column": null,
       "helper": {
-        "table": "DEVDBA.DOC",
+        "cdc_column": "AMEND_LAST_DATE",
         "join": [
           [
             "DOC_ID",
             "DOC_ID"
           ]
         ],
-        "cdc_column": "AMEND_LAST_DATE",
+        "table": "DEVDBA.DOC",
         "where_date_column": "POSTED_DATE"
-      }
+      },
+      "table": "(SELECT BATCH_ID,GL_DOC_ID ,DOC_ID,sum(CASE WHEN AMOUNT >0 THEN AMOUNT ELSE 0 END) DEBIT,sum(CASE WHEN AMOUNT <0 THEN AMOUNT ELSE 0 END) CREDIT FROM DEVDBA.GL_INTERFACE gi GROUP BY BATCH_ID,GL_DOC_ID ,DOC_ID)",
+      "unique_key": "BATCH_ID,GL_DOC_ID ,DOC_ID",
+      "where_date_column": null,
+      "where_operator": ">=",
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_ELIGIBILITY",
       "unique_key": "PATIENT_ELIGIBILITY_ID",
       "where_date_column": "ELIGIBILITY_START",
       "where_operator": null,
-      "where_value_of_initial_run": null,
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": null
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ORDERS_MASTER",
       "unique_key": "MASTER_ORDER_NO",
       "where_date_column": "ORDER_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
-     {
+    {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ORDER_LINES",
       "unique_key": "ORDER_LINE",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
     {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.PATIENT_EMERGENCY_VISIT",
       "unique_key": "ER_VISIT_ID",
       "where_date_column": "TIME_ARRIVED",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
-     {
+    {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "DEVDBA.BINTRAN",
       "unique_key": "BINTRAN_ID",
       "where_date_column": "CREATION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     },
-     {
+    {
+      "cdc_column": "AMEND_LAST_DATE",
       "table": "OASIS.ACCOUNT_TRANSACTIONS",
       "unique_key": "ACCOUNT_TRANSACTION_NO",
       "where_date_column": "TRANSACTION_DATE",
       "where_operator": ">=",
-      "where_value_of_initial_run": "2022-01-01",
-      "cdc_column": "AMEND_LAST_DATE"
+      "where_value_of_initial_run": "2022-01-01"
     }
   ],
-  "snapshots": []
+  "snapshots": [
+    {
+      "table": "DEVDBA.PRODUCT_BASE",
+      "unique_key": "PRODUCT_CODE, C_ID",
+      "cdc_column": null,
+      "where_date_column": null
+    }
+  ]
 }
