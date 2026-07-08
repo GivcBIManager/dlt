@@ -161,12 +161,13 @@ let editingSettings = false;
 // Keys editable in .dlt/config.toml [etl] (mirrors workspace.EDITABLE_ETL_KEYS).
 const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
   "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
-  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode"]);
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode",
+  "dq_hash_delta_tolerance_pct"]);
 const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
   "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
-  "snapshot_expire_days","snapshot_min_to_keep"]);
+  "snapshot_expire_days","snapshot_min_to_keep","dq_hash_delta_tolerance_pct"]);
 const SET_SHOWN = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
-  "max_retries","retry_interval_s","snapshot_expire_days"];
+  "max_retries","retry_interval_s","snapshot_expire_days","dq_hash_delta_tolerance_pct"];
 
 // Extra args: each is a flag, optionally taking a value. The value field's
 // tooltip shows example values (so the user knows the expected shape) and ticking

@@ -85,6 +85,7 @@ EDITABLE_ETL_KEYS = {
     "pool_min", "pool_max", "pool_increment", "pool_acquire_timeout_s",
     "pool_acquire_attempts", "max_retries", "retry_interval_s",
     "snapshot_expire_days", "snapshot_min_to_keep", "dsn_mode",
+    "dq_hash_delta_tolerance_pct",
 }
 _ETL_KV_RE = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=\s*)(.*?)(\s*(?:#.*)?)$")
 

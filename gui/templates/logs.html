@@ -205,7 +205,7 @@ function SysTable(cfg) {
 const dqView = SysTable({
   endpoint: "/api/iceberg/system/etl_dq_results?limit=2000", barId: "dq-bar", outId: "dq",
   summaryOutId: "dq-summary", pillCols: ["status"],
-  numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta"],
+  numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta","hash_delta_pct"],
 });
 const runlogView = SysTable({
   endpoint: "/api/iceberg/system/etl_run_log?limit=2000", barId: "runlog-bar", outId: "runlog",
