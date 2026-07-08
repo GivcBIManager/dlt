@@ -1,23 +1,105 @@
-/* Shared live-log -> progress dashboard, used by the Run page (live tail) and
- * the Monitor "Log files" tab (whole-file). Parses the pipeline's own log lines
- * into per-table / per-branch progress + an issues feed, and renders into the
- * markup from templates/_dash.html (the rd-* element ids).
- *
- * Recognised lines:
- *   PROGRESS 0:01:23 | load:appointments | tables 2/8 | extract 14/56 1 failed | rows=1,234 | rss=..(peak ..) arrow=..
- *   [branch/table] 1703887 rows (attempt 1)            -> one extract unit done
- *   [table] loaded: disp=merge ok=7 fail=0 rows=4       -> table load result
- *   [table] load failed: <err> / [table] skipped: <why>
- *     master_deliveries  SUCCESS  disp=replace ok=7 fail=0 rows=434154   (final summary)
- * Any WARNING/ERROR line (etl or dlt format) is collected as an issue. Logs that
- * emit none of these keep the dashboard hidden and only the raw text shows.
- *
- * createLogDash(opts) -> { reset(), feed(chunk), flush(), render(), load(text), get dash() }
+/* Shared log -> progress/summary dashboard, used by the Run page (live tail) and
+ * the Monitor "Log files" tab (whole-file). Detects the log's command type from
+ * the runner header ("# command : ...", falling back to characteristic lines) and
+ * routes parsing + rendering to a per-type view. Public API is unchanged:
+ *   createLogDash(opts) -> { reset(), feed(chunk), flush(), render(), load(text), get dash() }
  *   opts.branchHint : () => number  best guess of total branches (Run page only)
  */
 function createLogDash(opts = {}) {
   const branchHint = opts.branchHint || (() => 0);
 
+  const HDR = {
+    command: /^#\s*command\s*:\s*(.+)$/,
+    started: /^#\s*started\s*:\s*(.+)$/,
+    exit: /\[runner\] exited with code (-?\d+)/,
+    ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
+  };
+
+  function classifyCommand(cmd) {
+    if (/dq_check\.py/.test(cmd)) return "dq";
+    if (/oracle_to_iceberg\.py/.test(cmd)) return "pipeline";
+    if (/snapshot_diff\.py/.test(cmd)) return "snapshot";
+    return "generic";               // fresh_run / custom / unknown
+  }
+  function sniff(line) {
+    if (/DQ-PROGRESS|DQ-UNIT|DQ run /.test(line)) return "dq";
+    if (/\bPROGRESS\s+\d/.test(line)) return "pipeline";
+    if (/^Baseline \(as-of|^Updated\s*:/.test(line)) return "snapshot";
+    return null;
+  }
+  function freshMeta() {
+    return { command: "", started: "", exit: null, firstTs: null, lastTs: null };
+  }
+  function elapsedFromTs(meta) {
+    if (!meta.firstTs || !meta.lastTs) return "";
+    const a = Date.parse(meta.firstTs.replace(" ", "T")), b = Date.parse(meta.lastTs.replace(" ", "T"));
+    if (isNaN(a) || isNaN(b) || b < a) return "";
+    const s = Math.floor((b - a) / 1000);
+    return `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function stripPrefix(line) {
+    return line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}\s*\|?\s*(?:\w+\s*\|\s*[\w.]+\s*\|\s*)?/, "").trim();
+  }
+
+  const views = {
+    pipeline: makePipelineView({ branchHint }),
+    dq: makeDqView(),
+    snapshot: makeGenericView("snapshot"),
+    generic: makeGenericView("generic"),
+  };
+
+  let type = null, active = null, meta = freshMeta(), lineBuf = "";
+
+  function setType(t) {
+    if (!t || t === type) return;
+    type = t;
+    active = views[t] || views.generic;
+  }
+
+  function feedLine(line) {
+    if (line == null) return;
+    let m;
+    if ((m = HDR.command.exec(line))) { meta.command = m[1].trim(); setType(classifyCommand(meta.command)); return; }
+    if ((m = HDR.started.exec(line))) { meta.started = m[1].trim(); return; }
+    if ((m = HDR.ts.exec(line))) { if (!meta.firstTs) meta.firstTs = m[1]; meta.lastTs = m[1]; }
+    if ((m = HDR.exit.exec(line))) { meta.exit = +m[1]; }
+    if (!type) { const s = sniff(line); if (s) setType(s); }
+    if (active) active.feedLine(line, meta);
+  }
+
+  function feed(chunk) {
+    lineBuf += chunk;
+    const parts = lineBuf.split("\n");
+    lineBuf = parts.pop();
+    for (const ln of parts) feedLine(ln);
+  }
+  function flush() { if (lineBuf) { feedLine(lineBuf); lineBuf = ""; } }
+
+  function render() {
+    const box = el("run-dash");
+    if (!box) return;
+    for (const id of ["rd-pipeline", "rd-dq", "rd-generic"]) { const s = el(id); if (s) s.hidden = true; }
+    if (!active || !active.hasContent()) { box.hidden = true; return; }
+    box.hidden = false;
+    active.render(meta, { elapsedFromTs, stripPrefix });
+  }
+
+  function reset() {
+    type = null; active = null; meta = freshMeta(); lineBuf = "";
+    for (const v of Object.values(views)) v.reset();
+    render();
+  }
+  function load(text) { reset(); feed(text || ""); flush(); render(); }
+
+  reset();
+  return { reset, feed, flush, render, load, get dash() { return active && active.model ? active.model() : null; } };
+}
+
+/* ------------------------------------------------------------------ pipeline */
+/* oracle_to_iceberg: PROGRESS heartbeats, per-unit extract lines, table loads,
+ * the final summary rows. Renders into the #rd-pipeline section. */
+function makePipelineView(opts = {}) {
+  const branchHint = opts.branchHint || (() => 0);
   const RE = {
     ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
     prog: /PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+([^|]+?)\s+\|\s+tables\s+(\d+)\/(\d+)\s+\|\s+extract\s+(\d+)\/(\d+)(?:\s+(\d+)\s+failed)?\s+\|\s+rows=([\d,]+)\s+\|\s+rss=([^( ]+)\(peak\s+([^)]+)\)\s+arrow=(\S+)/,
@@ -27,19 +109,15 @@ function createLogDash(opts = {}) {
     loadFail: /\[([^/\]]+)\]\s+load failed:\s*(.+)/,
     skipped: /\[([^/\]]+)\]\s+skipped:\s*(.+)/,
     summaryRow: /^\s{2,}(\S+)\s+(SUCCESS|FAILED)\s+disp=(\S+)\s+ok=(\d+)\s+fail=(\d+)\s+rows=(\d+)/,
-    exit: /\[runner\] exited with code (-?\d+)/,
   };
-
-  let dash, lineBuf;
-
+  let dash;
   function fresh() {
     return {
       stage: "", elapsed: "", rows: 0,
       unitsDone: 0, unitsTotal: 0, unitsFailed: 0, tablesDone: 0, tablesTotal: 0,
       rss: "", rssPeak: "", arrow: "", branchesTotal: 0,
-      tables: new Map(),   // name -> {ok,fail,branches:Set,load,disp,rows,err,final}
-      branches: new Map(),  // key -> {ok,fail}
-      issues: [], started: false, exitCode: null, firstTs: null, lastTs: null,
+      tables: new Map(), branches: new Map(),
+      issues: [], started: false, firstTs: null, lastTs: null,
     };
   }
   function tdef(name) {
@@ -57,7 +135,6 @@ function createLogDash(opts = {}) {
     dash.issues.push({ level, text: text.slice(0, 240), ts: (dash.lastTs || "").slice(11) });
     if (dash.issues.length > 200) dash.issues.shift();
   }
-
   function feedLine(line) {
     if (!line) return;
     const tm = RE.ts.exec(line);
@@ -81,18 +158,8 @@ function createLogDash(opts = {}) {
     if ((m = RE.loadFail.exec(line))) { const t = tdef(m[1]); t.load = "failed"; t.err = m[2].slice(0, 160); pushIssue(line, "error"); return; }
     if ((m = RE.skipped.exec(line))) { const t = tdef(m[1]); t.load = "skipped"; t.err = m[2].slice(0, 160); return; }
     if ((m = RE.summaryRow.exec(line))) { const t = tdef(m[1]); t.final = m[2]; t.disp = m[3]; if (t.load === "pending" || t.load === "loading") t.load = m[2] === "SUCCESS" ? "loaded" : "failed"; return; }
-    if ((m = RE.exit.exec(line))) { dash.exitCode = +m[1]; return; }
     if (/\|\s*(WARNING|ERROR)\s*\||\|\[(WARNING|ERROR)\]\||UserWarning|Traceback/.test(line)) pushIssue(line, /ERROR|Traceback/.test(line) ? "error" : "warn");
   }
-
-  function feed(chunk) {
-    lineBuf += chunk;
-    const parts = lineBuf.split("\n");
-    lineBuf = parts.pop();
-    for (const ln of parts) feedLine(ln);
-  }
-  function flush() { if (lineBuf) { feedLine(lineBuf); lineBuf = ""; } }
-
   function branchTotal() { return dash.branchesTotal || dash.branches.size || branchHint() || 0; }
   function elapsedFromTs() {
     if (!dash.firstTs || !dash.lastTs) return "0:00:00";
@@ -111,27 +178,24 @@ function createLogDash(opts = {}) {
     const cls = { pending: "gray", loading: "running", loaded: "ok", failed: "failed", skipped: "skipped" }[s] || "gray";
     return `<span class="pill ${cls}">${esc(s)}</span>`;
   }
-
-  function render() {
-    const box = el("run-dash");
-    if (!box) return;
-    if (!dash || (!dash.started && dash.tables.size === 0 && dash.issues.length === 0)) { box.hidden = true; return; }
-    box.hidden = false;
-
+  function hasContent() { return !!dash && (dash.started || dash.tables.size > 0 || dash.issues.length > 0); }
+  function render(meta) {
+    el("rd-pipeline").hidden = false;
     const bt = branchTotal();
     const done = dash.unitsDone || [...dash.tables.values()].reduce((a, t) => a + t.branches.size, 0);
     const total = dash.unitsTotal || (bt * (dash.tablesTotal || dash.tables.size)) || 0;
-    const pct = total ? Math.min(100, Math.round(done / total * 100)) : (dash.exitCode != null ? 100 : 0);
+    const exited = meta && meta.exit != null;
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
     const failTotal = dash.unitsFailed || [...dash.tables.values()].reduce((a, t) => a + t.fail, 0);
 
-    el("rd-stage").textContent = dash.stage || (dash.exitCode != null ? "done" : "starting");
-    el("rd-stage").className = "rd-stage " + stageClass(dash.stage || (dash.exitCode != null ? "done" : ""));
+    el("rd-stage").textContent = dash.stage || (exited ? "done" : "starting");
+    el("rd-stage").className = "rd-stage " + stageClass(dash.stage || (exited ? "done" : ""));
     el("rd-elapsed").textContent = dash.elapsed || elapsedFromTs();
     el("rd-rows").textContent = fmtNum(dash.rows) + " rows";
     el("rd-mem").textContent = dash.rss ? `rss ${dash.rss} (peak ${dash.rssPeak})` : "rss —";
     const fEl = el("rd-fail"); fEl.hidden = !failTotal; fEl.textContent = `${failTotal} failed`;
     el("rd-bar-fill").style.width = pct + "%";
-    el("rd-bar-fill").className = "rd-bar-fill" + (dash.exitCode ? " err" : (failTotal ? " has-fail" : ""));
+    el("rd-bar-fill").className = "rd-bar-fill" + (exited && meta.exit ? " err" : (failTotal ? " has-fail" : ""));
     el("rd-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%` + (dash.tablesTotal ? ` · tables ${dash.tablesDone}/${dash.tablesTotal}` : "");
 
     el("rd-branch-strip").innerHTML = [...dash.branches.entries()].sort().map(([k, b]) => {
@@ -159,10 +223,89 @@ function createLogDash(opts = {}) {
     el("rd-issues").innerHTML = dash.issues.slice(-60).reverse().map(i =>
       `<div class="rd-issue ${i.level}"><span class="rd-itime">${esc(i.ts)}</span> ${esc(i.text)}</div>`).join("");
   }
-
-  function reset() { dash = fresh(); lineBuf = ""; render(); }
-  function load(text) { reset(); feed(text || ""); flush(); render(); }
-
+  function reset() { dash = fresh(); }
   reset();
-  return { reset, feed, flush, render, load, get dash() { return dash; } };
+  return { reset, feedLine, render, hasContent, model: () => dash };
+}
+
+/* ------------------------------------------------------------------------ dq */
+/* Filled in Task 7. */
+function makeDqView() {
+  let m;
+  function reset() { m = { started: false }; }
+  function feedLine() {}
+  function hasContent() { return false; }
+  function render() {}
+  reset();
+  return { reset, feedLine, render, hasContent, model: () => m };
+}
+
+/* ------------------------------------------------------------------- generic */
+/* snapshot_diff / fresh_run / custom / unknown: a meta strip + key lines +
+ * (snapshot mode) the Updated/Inserted/Deleted counts + an issues feed. */
+function makeGenericView(mode) {
+  let m;
+  function reset() {
+    m = { keyLines: [], issues: [], snap: {}, hasSnap: false };
+  }
+  function feedLine(line, meta) {
+    if (!line) return;
+    let g;
+    if ((g = /(?:->|→)\s*wrote\s+(.+)$/.exec(line))) { m.keyLines.push("wrote " + g[1].trim()); return; }
+    if (mode === "snapshot") {
+      if ((g = /^Table\s*:\s*(.+)$/.exec(line))) { m.snap.table = g[1].trim(); m.hasSnap = true; return; }
+      if ((g = /^Baseline \(as-of ([^)]+)\)\s*:\s*snapshot (\d+) @ (.+)$/.exec(line))) { m.snap.baseline = { asOf: g[1], id: g[2], ts: g[3].trim() }; m.hasSnap = true; return; }
+      if ((g = /^Latest\s*:\s*snapshot (\d+) @ (.+)$/.exec(line))) { m.snap.latest = { id: g[1], ts: g[2].trim() }; m.hasSnap = true; return; }
+      if ((g = /^Identity\s*:\s*(.+)$/.exec(line))) { m.snap.identity = g[1].trim(); m.hasSnap = true; return; }
+      if ((g = /^Updated\s*:\s*([\d,]+)\s+Inserted\s*:\s*([\d,]+)\s+Deleted\s*:\s*([\d,]+)/.exec(line))) {
+        m.snap.updated = +g[1].replace(/,/g, ""); m.snap.inserted = +g[2].replace(/,/g, ""); m.snap.deleted = +g[3].replace(/,/g, ""); m.hasSnap = true; return;
+      }
+      if (/^No updated records/.test(line)) { m.snap.updated = 0; m.snap.inserted = 0; m.snap.deleted = 0; m.hasSnap = true; return; }
+    }
+    if (/\|\s*(WARNING|ERROR)\s*\||WARNING:|Traceback|Error/.test(line)) {
+      const text = line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}\s*\|?\s*/, "").trim();
+      m.issues.push({ level: /ERROR|Traceback|Error/.test(line) ? "error" : "warn", text: text.slice(0, 240) });
+      if (m.issues.length > 200) m.issues.shift();
+    }
+  }
+  function hasContent() {
+    return !!m && (m.hasSnap || m.keyLines.length > 0 || m.issues.length > 0);
+  }
+  function render(meta, helpers) {
+    el("rd-generic").hidden = false;
+    el("gen-title").textContent = meta.command
+      ? meta.command.replace(/^.*?([\w.]+\.py|fresh_run\S*)/, "$1").split(" ")[0] || "Log summary"
+      : "Log summary";
+    const elapsed = helpers.elapsedFromTs(meta);
+    el("gen-elapsed").textContent = elapsed || "—";
+    el("gen-status").innerHTML = meta.exit == null ? `<span class="pill running">running</span>`
+      : pill(meta.exit === 0 ? "finished" : "failed") + ` <small>rc=${meta.exit}</small>`;
+
+    let body = "";
+    if (m.hasSnap && (m.snap.table || m.snap.updated != null)) {
+      const s = m.snap;
+      const chip = (label, v, cls) => `<span class="rd-tally ${cls || ""}">${fmtNum(v)} ${label}</span>`;
+      body += `<div class="rd-kv">`;
+      if (s.table) body += `<div><span class="k">table</span><span class="v mono">${esc(s.table)}</span></div>`;
+      if (s.baseline) body += `<div><span class="k">baseline</span><span class="v mono">snap ${esc(s.baseline.id)} · ${esc(s.baseline.asOf)} @ ${esc(s.baseline.ts)}</span></div>`;
+      if (s.latest) body += `<div><span class="k">latest</span><span class="v mono">snap ${esc(s.latest.id)} @ ${esc(s.latest.ts)}</span></div>`;
+      if (s.identity) body += `<div><span class="k">identity</span><span class="v mono">${esc(s.identity)}</span></div>`;
+      body += `</div>`;
+      if (s.updated != null) body += `<div class="rd-tallies">${chip("updated", s.updated, "warn")}${chip("inserted", s.inserted, "ok")}${chip("deleted", s.deleted, "err")}</div>`;
+    }
+    if (m.keyLines.length) {
+      body += `<div class="rd-keylines">` + m.keyLines.slice(-12).map(k =>
+        `<div class="mono">${esc(k)}</div>`).join("") + `</div>`;
+    }
+    if (!body) body = `<div class="muted">No structured summary for this log — see the raw log.</div>`;
+    el("gen-body").innerHTML = body;
+
+    const ibox = el("gen-issues-box");
+    ibox.hidden = m.issues.length === 0;
+    el("gen-issue-count").textContent = m.issues.length;
+    el("gen-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
+      `<div class="rd-issue ${i.level}">${esc(i.text)}</div>`).join("");
+  }
+  reset();
+  return { reset, feedLine, render, hasContent, model: () => m };
 }

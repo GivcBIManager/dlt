@@ -405,6 +405,17 @@ legend { color: var(--primary); font-size: 11px; font-weight: 700; text-transfor
 .rd-bar-fill { height: 100%; width: 0; background: var(--gradient-primary); border-radius: var(--radius-full); transition: width .4s ease; }
 .rd-bar-fill.has-fail { background: linear-gradient(135deg, #0c5a91 0%, #f59e0b 100%); }
 .rd-bar-fill.err { background: var(--gradient-accent); }
+.rd-scope { font-size: 12px; margin-top: 6px; }
+.rd-genbody { display: flex; flex-direction: column; gap: 12px; }
+.rd-kv { display: grid; gap: 4px; }
+.rd-kv > div { display: flex; gap: 8px; font-size: 13px; }
+.rd-kv .k { min-width: 84px; color: var(--text-muted); }
+.rd-tallies { display: flex; flex-wrap: wrap; gap: 8px; }
+.rd-tally { display: inline-block; padding: 4px 10px; border-radius: var(--radius-full); font-size: 12px; font-weight: 700; background: var(--surface-container-highest); }
+.rd-tally.ok { background: var(--success-light); color: #047857; }
+.rd-tally.warn { background: var(--warning-light); color: #b45309; }
+.rd-tally.err { background: var(--error-light); color: #b91c1c; }
+.rd-keylines { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .rd-bar-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--text-primary); }
 
 .rd-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
