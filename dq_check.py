@@ -73,6 +73,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="row-count comparison only; skip the (heavier) hash pull")
     p.add_argument("--self-test", action="store_true",
                    help="reconcile the lake against _staging parquet instead of Oracle")
+    p.add_argument("--no-progress", action="store_true",
+                   help="suppress DQ progress heartbeat lines")
 
     p.add_argument("--no-write", action="store_true",
                    help="don't write the etl_dq_results Iceberg table (print only)")
@@ -96,7 +98,9 @@ def main(argv: list[str]) -> int:
 
     overrides = {"dsn_mode": args.dsn_mode,
                  "oracle_client_lib_dir": args.oracle_client_lib_dir}
-    settings = config.load_settings({k: v for k, v in overrides.items() if v})
+    if args.no_progress:
+        overrides["progress_enabled"] = False
+    settings = config.load_settings({k: v for k, v in overrides.items() if v is not None})
     all_branches = config.load_branches()
     all_tables = config.load_table_defs(args.tables_file)
 

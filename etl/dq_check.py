@@ -38,6 +38,7 @@ import datetime as dt
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from hashlib import blake2b
@@ -765,6 +766,84 @@ def _lake_window_count(static_table, branch: int, win: _Window) -> int:
     return total
 
 
+def _fmt_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
+class _DqProgress:
+    """Cheap per-unit + heartbeat progress for a DQ run.
+
+    ``DQ-UNIT`` lines are logged as each (table, branch) completes; a background
+    daemon thread logs a ``DQ-PROGRESS`` heartbeat every ``interval_s``. Both go
+    to the ``etl.dq`` logger so they land in the run log with timestamps; the GUI
+    parses them into a live dashboard. All updates are integer counters under a
+    short lock -- no per-unit measurement cost.
+    """
+
+    def __init__(self, total: int, *, interval_s: float = 5.0,
+                 enabled: bool = True, logger: Optional[logging.Logger] = None):
+        self.total = total
+        self.interval_s = max(1.0, float(interval_s))
+        self.enabled = enabled
+        self.log = logger or log
+        self._lock = threading.Lock()
+        self._done = self._ok = self._tol = self._mismatch = self._err = 0
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._start_t = 0.0
+
+    def start(self) -> "_DqProgress":
+        self._start_t = time.perf_counter()
+        if self.enabled:
+            self._thread = threading.Thread(
+                target=self._run, name="dq-progress", daemon=True)
+            self._thread.start()
+        return self
+
+    def record(self, res: "DqResult") -> None:
+        with self._lock:
+            self._done += 1
+            if res.status == STATUS_OK:
+                self._ok += 1
+            elif res.status == STATUS_WITHIN_TOLERANCE:
+                self._tol += 1
+            elif res.status == "ERROR":
+                self._err += 1
+            elif res.status == STATUS_MISMATCH:
+                self._mismatch += 1
+        self.log.info(self._unit_line(res))
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.interval_s + 2.0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            self.log.info(self._heartbeat_line(time.perf_counter() - self._start_t))
+
+    @staticmethod
+    def _n(v) -> str:
+        return "-" if v is None else str(v)
+
+    def _unit_line(self, res: "DqResult") -> str:
+        h = res.hash
+        pct = "-" if res.hash_delta_pct is None else f"{res.hash_delta_pct:.2f}"
+        return (f"DQ-UNIT {res.table}/{res.branch} | "
+                f"ora={self._n(res.oracle_row_count)} ice={self._n(res.iceberg_row_count)} "
+                f"cnt={self._n(res.row_count_delta)} | "
+                f"match={self._n(h.matched if h else None)} "
+                f"delta={self._n(h.total_delta if h else None)} pct={pct} | {res.status}")
+
+    def _heartbeat_line(self, elapsed: float) -> str:
+        with self._lock:
+            done, ok, tol, mm, err = (
+                self._done, self._ok, self._tol, self._mismatch, self._err)
+        return (f"DQ-PROGRESS {_fmt_elapsed(elapsed)} | units {done}/{self.total} | "
+                f"ok {ok} tol {tol} mismatch {mm} err {err}")
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -799,6 +878,12 @@ def run_dq(
     results: list[DqResult] = []
     lock = threading.Lock()
 
+    progress = _DqProgress(
+        total=len(tables) * len(branches),
+        interval_s=settings.progress_interval_s,
+        enabled=settings.progress_enabled,
+    ).start()
+
     def run_branch(branch: BranchConfig) -> list[DqResult]:
         conn = None
         try:
@@ -812,15 +897,20 @@ def run_dq(
             out = []
             for tdef in tables:
                 entry = (control.get(tdef.dataset_table_name, {}) or {}).get(branch.key, {})
-                out.append(check_unit(
+                res_u = check_unit(
                     tdef, branch, settings, lake[tdef.dataset_table_name], entry,
-                    since, until, do_hash, conn=conn, self_test=self_test))
+                    since, until, do_hash, conn=conn, self_test=self_test)
+                progress.record(res_u)
+                out.append(res_u)
             return out
         except Exception as exc:  # noqa: BLE001 - a dead branch fails only its own rows
             log.error("[%s] branch failed: %s", branch.key, exc)
-            return [DqResult(table=t.dataset_table_name, source_table=t.table,
+            errs = [DqResult(table=t.dataset_table_name, source_table=t.table,
                              branch=branch.key, status="ERROR",
                              error=f"{type(exc).__name__}: {exc}") for t in tables]
+            for r in errs:
+                progress.record(r)
+            return errs
         finally:
             if conn is not None:
                 try:
@@ -834,6 +924,7 @@ def run_dq(
         for fut in as_completed(futs):
             with lock:
                 results.extend(fut.result())
+    progress.stop()
     return results
 
 
