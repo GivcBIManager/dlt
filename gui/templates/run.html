@@ -50,6 +50,7 @@
       <label>CSV export dir (optional)</label><input id="csv" placeholder="e.g. exports">
       <div class="checkbox"><input type="checkbox" id="no_hash"><label for="no_hash">--no-hash (counts only)</label></div>
       <div class="checkbox"><input type="checkbox" id="no_write"><label for="no_write">--no-write (don't write Iceberg results)</label></div>
+      <div class="checkbox"><input type="checkbox" id="no_progress_d"><label for="no_progress_d">--no-progress (suppress DQ heartbeat)</label></div>
       <div class="checkbox"><input type="checkbox" id="self_test_d"><label for="self_test_d">--self-test</label></div>
     </div>
 
@@ -199,6 +200,7 @@ function buildSpec() {
     spec.csv = el("csv").value;
     spec.no_hash = el("no_hash").checked;
     spec.no_write = el("no_write").checked;
+    spec.no_progress = el("no_progress_d").checked;
     spec.self_test = el("self_test_d").checked;
   } else if (script === "snapshot_diff") {
     spec.table = el("sd_table").value;
@@ -470,6 +472,7 @@ function loadSpec(spec) {
     el("csv").value = spec.csv || "";
     el("no_hash").checked = !!spec.no_hash;
     el("no_write").checked = !!spec.no_write;
+    el("no_progress_d").checked = !!spec.no_progress;
     el("self_test_d").checked = !!spec.self_test;
   } else if (spec.script === "snapshot_diff") {
     el("sd_table").value = spec.table || "";

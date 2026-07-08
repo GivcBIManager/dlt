@@ -242,6 +242,9 @@ async function openFile(name) {
   el("file-title").textContent = name;
   $$("#files-table tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.f === name));
   await refreshFile();
+  // Summary-first: when a parsed summary is available, collapse the raw log by
+  // default (the "Raw log" button reveals it). Fall back to raw when there's none.
+  el("file-panel").classList.toggle("raw-hidden", !el("run-dash").hidden);
 }
 async function refreshFile() {
   if (!curFile) return;

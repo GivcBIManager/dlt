@@ -79,6 +79,8 @@ def build_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
             argv.append("--no-hash")
         if spec.get("no_write"):
             argv.append("--no-write")
+        if spec.get("no_progress"):
+            argv.append("--no-progress")
         if spec.get("csv"):
             argv += ["--csv", str(spec["csv"]).strip()]
         if spec.get("self_test"):
