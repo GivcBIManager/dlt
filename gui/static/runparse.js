@@ -229,13 +229,110 @@ function makePipelineView(opts = {}) {
 }
 
 /* ------------------------------------------------------------------------ dq */
-/* Filled in Task 7. */
+/* dq_check: DQ run (scope), DQ-PROGRESS (overall), DQ-UNIT (per table×branch),
+ * WARNING/ERROR (issues). Renders into the #rd-dq section. */
 function makeDqView() {
+  const RE = {
+    scope: /DQ run\s+(\S+).*?branches=(\[[^\]]*\]).*?tables=(\d+).*?window=(.+?)\s+\|\s+hash=(\w+)/,
+    prog: /DQ-PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+units\s+(\d+)\/(\d+)\s+\|\s+ok\s+(\d+)\s+tol\s+(\d+)\s+mismatch\s+(\d+)\s+err\s+(\d+)/,
+    unit: /DQ-UNIT\s+([^/\s]+)\/([^\s|]+)\s+\|\s+ora=(\S+)\s+ice=(\S+)\s+cnt=(\S+)\s+\|\s+match=(\S+)\s+delta=(\S+)\s+pct=(\S+)\s+\|\s+(\S+)/,
+    ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
+  };
+  const SEV = { ERROR: 0, MISMATCH: 1, WITHIN_TOLERANCE: 2, OK: 3, SKIPPED: 4 };
   let m;
-  function reset() { m = { started: false }; }
-  function feedLine() {}
-  function hasContent() { return false; }
-  function render() {}
+  function reset() {
+    m = {
+      started: false, elapsed: "", window: "", branches: [], tablesTotal: 0, hash: "",
+      done: 0, total: 0, ok: 0, tol: 0, mismatch: 0, err: 0,
+      units: new Map(), issues: [], firstTs: null, lastTs: null,
+    };
+  }
+  function num(v) { return v === "-" || v === undefined ? null : Number(String(v).replace(/,/g, "")); }
+  function feedLine(line) {
+    if (!line) return;
+    const tm = RE.ts.exec(line);
+    if (tm) { if (!m.firstTs) m.firstTs = tm[1]; m.lastTs = tm[1]; }
+    let g;
+    if ((g = RE.scope.exec(line))) {
+      m.started = true;
+      try { m.branches = JSON.parse(g[2].replace(/'/g, '"')); } catch (e) { m.branches = []; }
+      m.tablesTotal = +g[3]; m.window = g[4].trim(); m.hash = g[5];
+      return;
+    }
+    if ((g = RE.prog.exec(line))) {
+      m.started = true; m.elapsed = g[1];
+      m.done = +g[2]; m.total = +g[3];
+      m.ok = +g[4]; m.tol = +g[5]; m.mismatch = +g[6]; m.err = +g[7];
+      return;
+    }
+    if ((g = RE.unit.exec(line))) {
+      m.started = true;
+      const key = g[1] + "/" + g[2];
+      m.units.set(key, {
+        table: g[1], branch: g[2],
+        ora: num(g[3]), ice: num(g[4]), cnt: num(g[5]),
+        match: num(g[6]), delta: num(g[7]),
+        pct: g[8] === "-" ? null : Number(g[8]), status: g[9],
+      });
+      return;
+    }
+    if (/\|\s*(WARNING|ERROR)\s*\||Traceback/.test(line)) {
+      const text = line.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}\s*\|?\s*/, "").trim();
+      m.issues.push({ level: /ERROR|Traceback/.test(line) ? "error" : "warn", text: text.slice(0, 240) });
+      if (m.issues.length > 200) m.issues.shift();
+    }
+  }
+  function elapsedFromTs() {
+    if (!m.firstTs || !m.lastTs) return "0:00:00";
+    const a = Date.parse(m.firstTs.replace(" ", "T")), b = Date.parse(m.lastTs.replace(" ", "T"));
+    if (isNaN(a) || isNaN(b) || b < a) return "0:00:00";
+    const s = Math.floor((b - a) / 1000);
+    return `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function hasContent() { return !!m && (m.started || m.units.size > 0 || m.issues.length > 0); }
+  function render(meta) {
+    el("rd-dq").hidden = false;
+    const units = [...m.units.values()];
+    const done = m.done || units.length;
+    const total = m.total || (m.tablesTotal * (m.branches.length || 1)) || units.length;
+    const exited = meta && meta.exit != null;
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
+
+    el("dq-elapsed").textContent = m.elapsed || elapsedFromTs();
+    const chip = (n, label, cls) => n ? `<span class="rd-tally ${cls}">${n} ${label}</span>` : "";
+    el("dq-tallies").innerHTML =
+      chip(m.ok || units.filter(u => u.status === "OK").length, "ok", "ok") +
+      chip(m.tol || units.filter(u => u.status === "WITHIN_TOLERANCE").length, "tol", "warn") +
+      chip(m.mismatch || units.filter(u => u.status === "MISMATCH").length, "mismatch", "err") +
+      chip(m.err || units.filter(u => u.status === "ERROR").length, "err", "err");
+    el("dq-bar-fill").style.width = pct + "%";
+    const anyBad = (m.mismatch || units.some(u => u.status === "MISMATCH")) || (m.err || units.some(u => u.status === "ERROR"));
+    el("dq-bar-fill").className = "rd-bar-fill" + (anyBad ? " has-fail" : "");
+    el("dq-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%`;
+    el("dq-scope").textContent = m.started
+      ? `branches: ${m.branches.join(", ") || "all"} · tables: ${m.tablesTotal || "?"} · hash: ${m.hash || "?"} · window: ${m.window || "?"}`
+      : "";
+
+    units.sort((a, b) => (SEV[a.status] ?? 9) - (SEV[b.status] ?? 9) ||
+      (b.delta || 0) - (a.delta || 0) || a.table.localeCompare(b.table));
+    const cell = (v) => v == null ? "—" : fmtNum(v);
+    el("dq-tbody").innerHTML = units.map(u => `<tr>
+      <td class="mono">${esc(u.table)}</td>
+      <td class="mono">${esc(u.branch)}</td>
+      <td class="num">${cell(u.ora)}</td>
+      <td class="num">${cell(u.ice)}</td>
+      <td class="num">${cell(u.cnt)}</td>
+      <td class="num">${cell(u.delta)}</td>
+      <td class="num">${u.pct == null ? "—" : u.pct.toFixed(2) + "%"}</td>
+      <td>${pill(u.status)}</td></tr>`).join("") ||
+      `<tr><td colspan="8" class="muted">Waiting for DQ units…</td></tr>`;
+
+    const ibox = el("dq-issues-box");
+    ibox.hidden = m.issues.length === 0;
+    el("dq-issue-count").textContent = m.issues.length;
+    el("dq-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
+      `<div class="rd-issue ${i.level}">${esc(i.text)}</div>`).join("");
+  }
   reset();
   return { reset, feedLine, render, hasContent, model: () => m };
 }
