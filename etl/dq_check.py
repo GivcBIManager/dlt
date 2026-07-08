@@ -77,6 +77,10 @@ _NOW_EXPR_RE = re.compile(r"SYSDATE|SYSTIMESTAMP|CURRENT_DATE|CURRENT_TIMESTAMP"
 _WM_DT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 _TABLE_NAME = "etl_dq_results"
 
+STATUS_OK = "OK"
+STATUS_WITHIN_TOLERANCE = "WITHIN_TOLERANCE"
+STATUS_MISMATCH = "MISMATCH"
+
 
 def _norm(name: str) -> str:
     """Lower-snake a column name the same way dlt normalizes lake identifiers."""
@@ -218,6 +222,42 @@ class HashDelta:
     @property
     def total_delta(self) -> int:
         return self.only_in_oracle + self.only_in_iceberg + self.mismatch
+
+
+def _hash_delta_pct(hash: Optional[HashDelta]) -> Optional[float]:
+    """Percent of Oracle hashed rows that diverged (None when undefined).
+
+    ``0.0`` for a clean hash, ``None`` when no hash ran or when Oracle hashed 0
+    rows yet a delta exists (an undefined ratio -- treated as a mismatch upstream).
+    """
+    if hash is None:
+        return None
+    if hash.total_delta == 0:
+        return 0.0
+    if hash.oracle_rows <= 0:
+        return None
+    return 100.0 * hash.total_delta / hash.oracle_rows
+
+
+def classify_status(
+    row_count_delta: Optional[int],
+    hash: Optional[HashDelta],
+    tolerance_pct: float,
+) -> tuple[str, Optional[float]]:
+    """Return ``(status, hash_delta_pct)`` for a completed unit.
+
+    ERROR is decided by the caller (a check that could not complete). Row-count
+    drift is a hard MISMATCH (zero tolerance). Hash drift is tolerated up to
+    ``tolerance_pct`` percent of the Oracle hashed rows -> WITHIN_TOLERANCE.
+    """
+    pct = _hash_delta_pct(hash)
+    if row_count_delta not in (None, 0):
+        return STATUS_MISMATCH, pct
+    if hash is None or hash.total_delta == 0:
+        return STATUS_OK, pct
+    if pct is None:  # oracle_rows == 0 with delta > 0 -> undefined ratio
+        return STATUS_MISMATCH, None
+    return (STATUS_WITHIN_TOLERANCE if pct <= tolerance_pct else STATUS_MISMATCH), pct
 
 
 def _dedupe_by_key(kh: pa.Table) -> pa.Table:
@@ -582,6 +622,7 @@ class DqResult:
     oracle_row_count: Optional[int] = None
     iceberg_row_count: Optional[int] = None
     hash: Optional[HashDelta] = None
+    hash_delta_pct: Optional[float] = None
     cols_only_oracle: list[str] = field(default_factory=list)
     cols_only_iceberg: list[str] = field(default_factory=list)
     status: str = "OK"
@@ -704,9 +745,8 @@ def check_unit(
                 res.iceberg_row_count = _lake_window_count(static_table, branch.id, win)
 
         # ---- status -----------------------------------------------------------
-        bad_count = res.row_count_delta not in (None, 0)
-        bad_hash = res.hash is not None and res.hash.total_delta > 0
-        res.status = "MISMATCH" if (bad_count or bad_hash) else "OK"
+        res.status, res.hash_delta_pct = classify_status(
+            res.row_count_delta, res.hash, settings.dq_hash_delta_tolerance_pct)
     except Exception as exc:  # noqa: BLE001 - isolate per-unit failures
         res.status = "ERROR"
         res.error = f"{type(exc).__name__}: {exc}"
