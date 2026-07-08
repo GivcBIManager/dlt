@@ -50,6 +50,7 @@
       <label>CSV export dir (optional)</label><input id="csv" placeholder="e.g. exports">
       <div class="checkbox"><input type="checkbox" id="no_hash"><label for="no_hash">--no-hash (counts only)</label></div>
       <div class="checkbox"><input type="checkbox" id="no_write"><label for="no_write">--no-write (don't write Iceberg results)</label></div>
+      <div class="checkbox"><input type="checkbox" id="no_progress_d"><label for="no_progress_d">--no-progress (suppress DQ heartbeat)</label></div>
       <div class="checkbox"><input type="checkbox" id="self_test_d"><label for="self_test_d">--self-test</label></div>
     </div>
 
@@ -161,12 +162,13 @@ let editingSettings = false;
 // Keys editable in .dlt/config.toml [etl] (mirrors workspace.EDITABLE_ETL_KEYS).
 const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
   "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
-  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode"]);
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode",
+  "dq_hash_delta_tolerance_pct"]);
 const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
   "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
-  "snapshot_expire_days","snapshot_min_to_keep"]);
+  "snapshot_expire_days","snapshot_min_to_keep","dq_hash_delta_tolerance_pct"]);
 const SET_SHOWN = ["dataset_name","max_branch_workers","max_table_workers","pool_max",
-  "max_retries","retry_interval_s","snapshot_expire_days"];
+  "max_retries","retry_interval_s","snapshot_expire_days","dq_hash_delta_tolerance_pct"];
 
 // Extra args: each is a flag, optionally taking a value. The value field's
 // tooltip shows example values (so the user knows the expected shape) and ticking
@@ -198,6 +200,7 @@ function buildSpec() {
     spec.csv = el("csv").value;
     spec.no_hash = el("no_hash").checked;
     spec.no_write = el("no_write").checked;
+    spec.no_progress = el("no_progress_d").checked;
     spec.self_test = el("self_test_d").checked;
   } else if (script === "snapshot_diff") {
     spec.table = el("sd_table").value;
@@ -469,6 +472,7 @@ function loadSpec(spec) {
     el("csv").value = spec.csv || "";
     el("no_hash").checked = !!spec.no_hash;
     el("no_write").checked = !!spec.no_write;
+    el("no_progress_d").checked = !!spec.no_progress;
     el("self_test_d").checked = !!spec.self_test;
   } else if (spec.script === "snapshot_diff") {
     el("sd_table").value = spec.table || "";

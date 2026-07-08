@@ -68,6 +68,11 @@ retry_interval_s    = 300
 # the DEFAULT_FETCH_BATCH_SIZE built into etl/config.py.
 dsn_mode            = "service_name"   # or "sid"
 
+# DQ hash-delta tolerance: a (table, branch) whose row-hash drift is within this
+# percent of its Oracle hashed rows is reported WITHIN_TOLERANCE instead of
+# MISMATCH. Row-count drift is always a hard MISMATCH. (0 = strict / no tolerance.)
+dq_hash_delta_tolerance_pct = 10.0
+
 # Iceberg snapshot retention: keep only this many days of snapshots; older ones
 # are expired after each load (min_to_keep guarantees the current snapshot).
 snapshot_maintenance = true

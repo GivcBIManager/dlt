@@ -285,6 +285,11 @@ class Settings:
     # Iceberg load. Caps load-time memory vs reading a whole branch file at once.
     load_batch_rows: int = 100_000
 
+    # DQ: tolerate row-hash drift up to this percent of a (table, branch)'s
+    # Oracle hashed rows before flagging MISMATCH; at or below it the status is
+    # WITHIN_TOLERANCE. Row-count drift is always a hard MISMATCH.
+    dq_hash_delta_tolerance_pct: float = 10.0
+
     # local working state
     staging_dir: Path = field(default_factory=lambda: Path("_staging"))
     control_state_path: Path = field(default_factory=lambda: Path("control_state.json"))
@@ -481,6 +486,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         progress_enabled=bool(_cfg("etl.progress_enabled", True)),
         progress_interval_s=float(_cfg("etl.progress_interval_s", 5.0)),
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),
+        dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
     )
 
     for key, value in (overrides or {}).items():
