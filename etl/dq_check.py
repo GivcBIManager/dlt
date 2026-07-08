@@ -866,6 +866,7 @@ def _result_rows(results: list[DqResult], settings: Settings, run_id: str) -> li
             "hash_only_in_iceberg": h.only_in_iceberg if h else None,
             "hash_mismatch": h.mismatch if h else None,
             "hash_total_delta": h.total_delta if h else None,
+            "hash_delta_pct": r.hash_delta_pct,
             "columns_only_in_oracle": ",".join(r.cols_only_oracle) or None,
             "columns_only_in_iceberg": ",".join(r.cols_only_iceberg) or None,
             "status": r.status,
@@ -901,6 +902,7 @@ _DQ_HINTS = {
     "hash_only_in_iceberg": {"data_type": "bigint"},
     "hash_mismatch": {"data_type": "bigint"},
     "hash_total_delta": {"data_type": "bigint"},
+    "hash_delta_pct": {"data_type": "double"},
     "columns_only_in_oracle": {"data_type": "text"},
     "columns_only_in_iceberg": {"data_type": "text"},
     "status": {"data_type": "text"},
@@ -933,7 +935,7 @@ def render_summary(results: list[DqResult], do_hash: bool) -> str:
     results = sorted(results, key=lambda r: (r.table, r.branch))
     headers = ["TABLE", "BRANCH", "ORA_ROWS", "ICE_ROWS", "CNT_DELTA"]
     if do_hash:
-        headers += ["MATCH", "ONLY_ORA", "ONLY_ICE", "MISMATCH", "HASH_DELTA"]
+        headers += ["MATCH", "ONLY_ORA", "ONLY_ICE", "MISMATCH", "HASH_DELTA", "TOL%"]
     headers += ["STATUS"]
 
     def cell(v) -> str:
@@ -943,6 +945,9 @@ def render_summary(results: list[DqResult], do_hash: bool) -> str:
             return f"{v:,}"
         return str(v)
 
+    def pct_cell(v) -> str:
+        return "-" if v is None else f"{v:.2f}%"
+
     table = [headers]
     for r in results:
         row = [r.table, r.branch, cell(r.oracle_row_count), cell(r.iceberg_row_count),
@@ -951,7 +956,7 @@ def render_summary(results: list[DqResult], do_hash: bool) -> str:
             h = r.hash
             row += [cell(h.matched if h else None), cell(h.only_in_oracle if h else None),
                     cell(h.only_in_iceberg if h else None), cell(h.mismatch if h else None),
-                    cell(h.total_delta if h else None)]
+                    cell(h.total_delta if h else None), pct_cell(r.hash_delta_pct)]
         row += [r.status]
         table.append(row)
 
@@ -964,12 +969,13 @@ def render_summary(results: list[DqResult], do_hash: bool) -> str:
             lines.append("  ".join("-" * widths[i] for i in range(len(headers))))
 
     ok = sum(1 for r in results if r.status == "OK")
+    tol = sum(1 for r in results if r.status == STATUS_WITHIN_TOLERANCE)
     mism = sum(1 for r in results if r.status == "MISMATCH")
     err = sum(1 for r in results if r.status == "ERROR")
     skip = sum(1 for r in results if r.status == "SKIPPED")
     lines.append("")
-    lines.append(f"{len(results)} unit(s): {ok} OK, {mism} MISMATCH, "
-                 f"{err} ERROR, {skip} SKIPPED")
+    lines.append(f"{len(results)} unit(s): {ok} OK, {tol} WITHIN_TOLERANCE, "
+                 f"{mism} MISMATCH, {err} ERROR, {skip} SKIPPED")
     notes = {(r.table): r.window_note for r in results if r.window_note}
     for tbl, note in sorted(notes.items()):
         lines.append(f"  note [{tbl}]: {note}")

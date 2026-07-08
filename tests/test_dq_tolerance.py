@@ -49,3 +49,35 @@ def test_zero_oracle_rows_with_delta_is_mismatch():
 def test_no_hash_is_ok_when_count_clean():
     assert classify_status(0, None, 10.0) == ("OK", None)
     assert classify_status(None, None, 10.0) == ("OK", None)
+
+
+def _res(status, pct, table="t", branch="b"):
+    return DqResult(
+        table=table, source_table="OASIS.T", branch=branch,
+        oracle_row_count=1000, iceberg_row_count=1000,
+        hash=_hash(matched=992, oo=8, ora=1000, ice=1000),
+        hash_delta_pct=pct, status=status)
+
+
+def test_render_summary_has_tol_column_and_tally():
+    out = dq_check.render_summary(
+        [_res("WITHIN_TOLERANCE", 0.8), _res("OK", 0.0, table="u")], do_hash=True)
+    assert "TOL%" in out
+    assert "0.80%" in out
+    assert "1 WITHIN_TOLERANCE" in out
+
+
+def test_render_summary_tol_dash_without_hash():
+    out = dq_check.render_summary([_res("OK", None)], do_hash=False)
+    assert "TOL%" not in out  # TOL% only shown with the hash columns
+
+
+def test_result_rows_includes_hash_delta_pct():
+    from etl.config import Settings
+    rows = dq_check._result_rows([_res("WITHIN_TOLERANCE", 0.8)], Settings(), "run1")
+    assert rows[0]["hash_delta_pct"] == 0.8
+    assert rows[0]["status"] == "WITHIN_TOLERANCE"
+
+
+def test_dq_hints_has_hash_delta_pct_double():
+    assert dq_check._DQ_HINTS["hash_delta_pct"] == {"data_type": "double"}
