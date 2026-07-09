@@ -58,17 +58,30 @@
 
 {% block scripts %}
 <script>
-let PIPELINES = [], FLOWS = [], editingId = null, nodeSeq = 0;
+let PIPELINES = [], FLOWS = [], editingId = null, nodeSeq = 0, DBT_MODELS = [], DBT_TESTS = [];
 
 function cron() {
   return [el("cf-min"),el("cf-hour"),el("cf-dom"),el("cf-mon"),el("cf-dow")]
     .map(e => e.value.trim() || "*").join(" ");
 }
 function nodeRow(n) {
-  const opts = PIPELINES.map(p => `<option value="${p.id}" ${n.pipeline_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("");
-  return `<div class="node-row row-flex" data-node="${n.node_id}" data-deps="${(n.deps || []).join(',')}" style="gap:8px;margin:6px 0">
+  const kind = n.kind || "pipeline";
+  const pipeOpts = PIPELINES.map(p => `<option value="${p.id}" ${n.pipeline_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("");
+  const dbt = n.dbt || {};
+  const selOpts = [
+    ...DBT_MODELS.map(m => `<option value="${esc(m.name)}" ${dbt.select===m.name?"selected":""}>model: ${esc(m.name)}</option>`),
+    ...DBT_TESTS.map(t => `<option value="${esc(t.name)}" ${dbt.select===t.name?"selected":""}>test: ${esc(t.name)}</option>`),
+  ].join("");
+  const cmdOpts = ["run","test","build"].map(c => `<option ${dbt.dbt_command===c?"selected":""}>${c}</option>`).join("");
+  return `<div class="node-row row-flex" data-node="${n.node_id}" data-deps="${(n.deps || []).join(',')}" style="gap:8px;margin:6px 0;flex-wrap:wrap">
     <span class="mono">${n.node_id}</span>
-    <select class="n-pipe">${opts}</select>
+    <select class="n-kind">
+      <option value="pipeline" ${kind==="pipeline"?"selected":""}>pipeline</option>
+      <option value="dbt" ${kind==="dbt"?"selected":""}>dbt</option>
+    </select>
+    <select class="n-pipe" ${kind==="dbt"?"hidden":""}>${pipeOpts}</select>
+    <select class="n-dbt-cmd" ${kind==="pipeline"?"hidden":""}>${cmdOpts}</select>
+    <select class="n-dbt-sel" ${kind==="pipeline"?"hidden":""}>${selOpts}</select>
     <span class="muted">depends on:</span>
     <select class="n-deps" multiple size="2"></select>
     <button class="btn sm bad" onclick="rmNode('${n.node_id}')">✕</button></div>`;
@@ -86,24 +99,41 @@ function depOptions() {
 }
 function addNode(pre) {
   nodeSeq++; const id = pre?.node_id || ("n" + nodeSeq);
-  el("f-nodes").insertAdjacentHTML("beforeend", nodeRow(pre || {node_id:id, pipeline_id:(PIPELINES[0]||{}).id, deps:[]}));
+  el("f-nodes").insertAdjacentHTML("beforeend", nodeRow(pre || {node_id:id, kind:"pipeline", pipeline_id:(PIPELINES[0]||{}).id, deps:[]}));
   depOptions(); renderPreview();
-  el("f-nodes").lastElementChild.querySelectorAll("select").forEach(s => s.addEventListener("change", () => { depOptions(); renderPreview(); }));
+  const row = el("f-nodes").lastElementChild;
+  row.querySelectorAll("select").forEach(s => s.addEventListener("change", () => { depOptions(); renderPreview(); }));
+  const kindSel = row.querySelector(".n-kind");
+  kindSel.addEventListener("change", () => {
+    const isDbt = kindSel.value === "dbt";
+    row.querySelector(".n-pipe").hidden = isDbt;
+    row.querySelector(".n-dbt-cmd").hidden = !isDbt;
+    row.querySelector(".n-dbt-sel").hidden = !isDbt;
+    renderPreview();
+  });
 }
 function rmNode(id) { const r = [...$$("#f-nodes .node-row")].find(x => x.dataset.node===id); if (r) r.remove(); depOptions(); renderPreview(); }
 function collectNodes() {
-  return [...$$("#f-nodes .node-row")].map(r => ({
-    node_id: r.dataset.node,
-    pipeline_id: r.querySelector(".n-pipe").value,
-    deps: [...r.querySelector(".n-deps").selectedOptions].map(o => o.value),
-  }));
+  return [...$$("#f-nodes .node-row")].map(r => {
+    const kind = r.querySelector(".n-kind").value;
+    const base = { node_id: r.dataset.node, kind,
+      deps: [...r.querySelector(".n-deps").selectedOptions].map(o => o.value) };
+    if (kind === "dbt") {
+      base.dbt = { dbt_command: r.querySelector(".n-dbt-cmd").value,
+                   select: r.querySelector(".n-dbt-sel").value };
+    } else {
+      base.pipeline_id = r.querySelector(".n-pipe").value;
+    }
+    return base;
+  });
 }
 function renderPreview() {
   const nodes = collectNodes();
   const byId = Object.fromEntries(PIPELINES.map(p => [p.id, p.name]));
-  el("f-preview").textContent = nodes.map(n =>
-    `${n.node_id} (${byId[n.pipeline_id]||"?"})` + (n.deps.length ? `  ⟵ ${n.deps.join(", ")}` : "  [root]")
-  ).join("\n") || "—";
+  el("f-preview").textContent = nodes.map(n => {
+    const what = n.kind === "dbt" ? `dbt ${n.dbt.dbt_command} ${n.dbt.select||"?"}` : (byId[n.pipeline_id]||"?");
+    return `${n.node_id} (${what})` + (n.deps.length ? `  ⟵ ${n.deps.join(", ")}` : "  [root]");
+  }).join("\n") || "—";
 }
 async function save() {
   const body = { name: el("f-name").value.trim(), nodes: collectNodes(), cron: cron(),
@@ -120,6 +150,10 @@ function resetForm() { editingId=null; nodeSeq=0; el("f-name").value=""; el("f-n
 async function load() {
   const d = await apiGet("/api/flows");
   PIPELINES = d.pipelines; FLOWS = d.flows;
+  try {
+    const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
+    DBT_MODELS = m.models || []; DBT_TESTS = t.tests || [];
+  } catch (e) { DBT_MODELS = []; DBT_TESTS = []; }
   el("flow-count").textContent = FLOWS.length;
   el("dagster-banner").innerHTML = d.dagster.running
     ? `<div class="banner info">Dagster running — <a href="${d.dagster.url}" target="_blank">open UI</a></div>`
