@@ -102,10 +102,10 @@ async function loadLists() {
   MODELS = m.models || []; TESTS = t.tests || [];
   el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
   $("#models-table tbody").innerHTML = MODELS.map(x =>
-    `<tr><td><button class="btn sm ghost" onclick="openFile('${esc(x.path)}','${esc(x.name)}')">${esc(x.name)}</button></td></tr>`
+    `<tr><td><button class="btn sm ghost dbt-open" data-path="${esc(x.path)}" data-name="${esc(x.name)}">${esc(x.name)}</button></td></tr>`
   ).join("") || `<tr><td class="muted">No models yet.</td></tr>`;
   $("#tests-table tbody").innerHTML = TESTS.map(x =>
-    `<tr><td><button class="btn sm ghost" onclick="openFile('${esc(x.path)}','${esc(x.name)}')">${esc(x.name)}</button></td></tr>`
+    `<tr><td><button class="btn sm ghost dbt-open" data-path="${esc(x.path)}" data-name="${esc(x.name)}">${esc(x.name)}</button></td></tr>`
   ).join("") || `<tr><td class="muted">No tests yet.</td></tr>`;
 }
 async function openFile(path, name) {
@@ -162,6 +162,11 @@ el("btn-run").onclick = () => runDbt("run");
 el("btn-test").onclick = () => runDbt("test");
 el("btn-compile").onclick = () => runDbt("compile");
 el("btn-debug").onclick = () => runDbt("debug");
+["models-table", "tests-table"].forEach(id =>
+  el(id).addEventListener("click", (e) => {
+    const b = e.target.closest("button.dbt-open");
+    if (b) openFile(b.dataset.path, b.dataset.name);
+  }));
 loadConfig(); loadLists();
 </script>
 {% endblock %}
