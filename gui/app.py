@@ -474,7 +474,7 @@ def api_ib_aggregate(table):
 @api
 def api_ib_system(table):
     limit = request.args.get("limit", 200, type=int)
-    return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 2000)))
+    return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 1000)))
 
 
 @app.get("/api/iceberg/runs")

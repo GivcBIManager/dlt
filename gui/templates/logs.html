@@ -160,7 +160,7 @@ function SysTable(cfg) {
   }
   function render() {
     const rows = filtered();
-    el(cfg.outId).innerHTML = renderTable(DATA.columns, rows, { pillCols: cfg.pillCols, numCols: cfg.numCols });
+    mountTable(el(cfg.outId), DATA.columns, rows, { pillCols: cfg.pillCols, numCols: cfg.numCols });
     const cnt = el(cfg.barId).querySelector('[data-f="count"]');
     if (cnt) cnt.textContent = `${rows.length} of ${DATA.rows.length} rows`;
     if (cfg.summaryOutId) renderSummary(rows);
@@ -203,16 +203,16 @@ function SysTable(cfg) {
 }
 
 const dqView = SysTable({
-  endpoint: "/api/iceberg/system/etl_dq_results?limit=2000", barId: "dq-bar", outId: "dq",
+  endpoint: "/api/iceberg/system/etl_dq_results?limit=1000", barId: "dq-bar", outId: "dq",
   summaryOutId: "dq-summary", pillCols: ["status"],
   numCols: ["oracle_row_count","iceberg_row_count","row_count_delta","hash_matched","hash_mismatch","hash_total_delta","hash_delta_pct"],
 });
 const runlogView = SysTable({
-  endpoint: "/api/iceberg/system/etl_run_log?limit=2000", barId: "runlog-bar", outId: "runlog",
+  endpoint: "/api/iceberg/system/etl_run_log?limit=1000", barId: "runlog-bar", outId: "runlog",
   pillCols: ["status"], numCols: ["row_count","duration_ms","attempts"],
 });
 const controlView = SysTable({
-  endpoint: "/api/iceberg/system/etl_control?limit=2000", barId: "control-bar", outId: "control",
+  endpoint: "/api/iceberg/system/etl_control?limit=1000", barId: "control-bar", outId: "control",
   pillCols: ["status"], numCols: ["row_count","duration_ms"],
 });
 
