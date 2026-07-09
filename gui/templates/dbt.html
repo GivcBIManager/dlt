@@ -1,2 +1,167 @@
 {% extends "base.html" %}
-{% block content %}<div id="dbt-root"></div>{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-cubes"></i> Models &amp; Tests</h1>
+  <p>Author dbt models that materialize the Iceberg lake into ClickHouse via <span class="mono">icebergLocal()</span>, then run &amp; test them. <b>Paths in icebergLocal() must be valid on the ClickHouse host.</b></p>
+</div>
+
+<!-- ClickHouse + dbt settings -->
+<div class="panel" style="margin-bottom:18px">
+  <div class="panel-head"><h2><i class="fa-solid fa-database"></i> ClickHouse &amp; dbt settings</h2>
+    <div class="row-flex">
+      <button class="btn sm" id="ch-test"><i class="fa-solid fa-plug"></i> Test connection</button>
+      <button class="btn sm primary" id="cfg-save"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+    </div>
+  </div>
+  <div class="form-row">
+    <div><label>Host</label><input id="ch-host"></div>
+    <div><label>Port</label><input id="ch-port" type="number" value="8123"></div>
+  </div>
+  <div class="form-row">
+    <div><label>User</label><input id="ch-user" value="default"></div>
+    <div><label>Password <small>(blank = keep)</small></label><input id="ch-pass" type="password" placeholder="•••••"></div>
+  </div>
+  <div class="form-row">
+    <div><label>Database</label><input id="ch-db" value="default"></div>
+    <div><label>dbt target</label><input id="dbt-target" value="dev"></div>
+  </div>
+  <div class="checkbox"><input type="checkbox" id="ch-secure"><label for="ch-secure">secure (TLS)</label></div>
+  <div id="ch-teststatus" class="hint"></div>
+</div>
+
+<div class="grid-side">
+  <!-- left: model / test lists -->
+  <div class="panel">
+    <div class="panel-head"><h2>Models <span id="m-count" class="tag"></span></h2>
+      <button class="btn sm" id="new-model"><i class="fa-solid fa-plus"></i> New model</button></div>
+    <div class="table-wrap" style="max-height:240px"><table id="models-table"><tbody></tbody></table></div>
+
+    <div class="panel-head" style="margin-top:14px"><h2>Tests <span id="t-count" class="tag"></span></h2>
+      <button class="btn sm" id="new-test"><i class="fa-solid fa-plus"></i> New test</button></div>
+    <div class="table-wrap" style="max-height:200px"><table id="tests-table"><tbody></tbody></table></div>
+  </div>
+
+  <!-- right: editor + actions + output -->
+  <div>
+    <div class="panel">
+      <div class="panel-head"><h2>Editor <span id="cur-file" class="mono muted">— no file —</span></h2>
+        <button class="btn sm primary" id="file-save"><i class="fa-solid fa-floppy-disk"></i> Save file</button></div>
+      <textarea id="editor" class="mono" style="width:100%;min-height:320px" spellcheck="false"
+        placeholder="Select a model or test on the left, or create a new one."></textarea>
+      <div class="btn-row">
+        <button class="btn primary" id="btn-run"><i class="fa-solid fa-play"></i> Run</button>
+        <button class="btn" id="btn-test"><i class="fa-solid fa-vial"></i> Test</button>
+        <button class="btn ghost" id="btn-compile">Compile</button>
+        <button class="btn ghost" id="btn-debug">Debug</button>
+        <button class="btn bad sm" id="btn-del"><i class="fa-solid fa-trash"></i> Delete</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Output <span id="run-status"></span></h2></div>
+      <div id="dbt-console" class="console">Run a model or test to see output…</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let MODELS = [], TESTS = [], curFile = null, curSel = null, tailTimer = null, tailOffset = 0;
+
+async function loadConfig() {
+  const c = await apiGet("/api/dbt/config");
+  el("ch-host").value = c.clickhouse.host || "";
+  el("ch-port").value = c.clickhouse.port || 8123;
+  el("ch-user").value = c.clickhouse.user || "default";
+  el("ch-db").value   = c.clickhouse.database || "default";
+  el("ch-secure").checked = !!c.clickhouse.secure;
+  el("dbt-target").value = (c.dbt && c.dbt.target) || "dev";
+  el("ch-pass").placeholder = c.clickhouse.has_password ? "•••••• (stored)" : "password";
+}
+async function saveConfig() {
+  const body = { clickhouse: {
+      host: el("ch-host").value.trim(), port: Number(el("ch-port").value) || 8123,
+      user: el("ch-user").value.trim(), database: el("ch-db").value.trim(),
+      secure: el("ch-secure").checked, password: el("ch-pass").value },
+    dbt: {} };
+  const tgt = el("dbt-target").value.trim(); if (tgt) body.dbt.target = tgt;
+  if (!Object.keys(body.dbt).length) delete body.dbt;
+  try { await apiPut("/api/dbt/config", body); el("ch-pass").value = ""; ok("Saved"); loadConfig(); }
+  catch (e) { err(e.message); }
+}
+async function testConn() {
+  el("ch-teststatus").textContent = "Testing…";
+  try { const r = await apiPost("/api/dbt/test-connection", {});
+    el("ch-teststatus").innerHTML = (r.ok ? "✅ connected" : "❌ failed") +
+      `<pre class="mono" style="white-space:pre-wrap;max-height:160px;overflow:auto">${esc(r.output||"")}</pre>`;
+  } catch (e) { err(e.message); }
+}
+
+async function loadLists() {
+  const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
+  MODELS = m.models || []; TESTS = t.tests || [];
+  el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
+  $("#models-table tbody").innerHTML = MODELS.map(x =>
+    `<tr><td><button class="btn sm ghost" onclick="openFile('${esc(x.path)}','${esc(x.name)}')">${esc(x.name)}</button></td></tr>`
+  ).join("") || `<tr><td class="muted">No models yet.</td></tr>`;
+  $("#tests-table tbody").innerHTML = TESTS.map(x =>
+    `<tr><td><button class="btn sm ghost" onclick="openFile('${esc(x.path)}','${esc(x.name)}')">${esc(x.name)}</button></td></tr>`
+  ).join("") || `<tr><td class="muted">No tests yet.</td></tr>`;
+}
+async function openFile(path, name) {
+  try { const r = await apiGet("/api/dbt/file?path=" + encodeURIComponent(path));
+    curFile = path; curSel = name; el("cur-file").textContent = path;
+    el("editor").value = r.content;
+  } catch (e) { err(e.message); }
+}
+async function saveFile() {
+  if (!curFile) return err("No file open");
+  try { await apiPut("/api/dbt/file", { path: curFile, content: el("editor").value }); ok("Saved " + curFile); }
+  catch (e) { err(e.message); }
+}
+async function newFile(kind) {
+  const name = prompt(`New ${kind} name (letters/digits/underscore):`); if (!name) return;
+  try { const r = await apiPost("/api/dbt/file", { name, kind, materialization: "table" });
+    ok("Created " + r.path); await loadLists(); openFile(r.path, name);
+  } catch (e) { err(e.message); }
+}
+async function delFile() {
+  if (!curFile || !confirm("Delete " + curFile + "?")) return;
+  try { await apiDel("/api/dbt/file?path=" + encodeURIComponent(curFile)); ok("Deleted");
+    curFile = null; curSel = null; el("editor").value = ""; el("cur-file").textContent = "— no file —"; loadLists();
+  } catch (e) { err(e.message); }
+}
+
+async function runDbt(cmd) {
+  const body = { dbt_command: cmd };
+  if (cmd !== "debug" && cmd !== "compile" && curSel) body.select = curSel;
+  el("dbt-console").textContent = ""; tailOffset = 0;
+  try { const run = await apiPost("/api/dbt/run", body); tailRun(run.id); }
+  catch (e) { err(e.message); }
+}
+function tailRun(id) {
+  clearInterval(tailTimer);
+  const poll = async () => {
+    try { const r = await apiGet(`/api/runs/${id}/tail?offset=${tailOffset}`);
+      if (r.chunk) { const c = el("dbt-console"); c.textContent += r.chunk; c.scrollTop = c.scrollHeight; }
+      tailOffset = r.offset;
+      el("run-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
+      if (r.status !== "running" && r.status !== "detached") clearInterval(tailTimer);
+    } catch (e) { clearInterval(tailTimer); }
+  };
+  poll(); tailTimer = setInterval(poll, 1300);
+}
+
+el("cfg-save").onclick = saveConfig;
+el("ch-test").onclick = testConn;
+el("new-model").onclick = () => newFile("model");
+el("new-test").onclick = () => newFile("test");
+el("file-save").onclick = saveFile;
+el("btn-del").onclick = delFile;
+el("btn-run").onclick = () => runDbt("run");
+el("btn-test").onclick = () => runDbt("test");
+el("btn-compile").onclick = () => runDbt("compile");
+el("btn-debug").onclick = () => runDbt("debug");
+loadConfig(); loadLists();
+</script>
+{% endblock %}
