@@ -12,7 +12,8 @@ from typing import Any
 
 from config import REPO_ROOT, SCRIPTS, python_executable
 
-SCRIPT_CHOICES = ["oracle_to_iceberg", "dq_check", "snapshot_diff", "fresh_run", "custom"]
+SCRIPT_CHOICES = ["oracle_to_iceberg", "dq_check", "snapshot_diff", "fresh_run", "dbt", "custom"]
+DBT_COMMANDS = {"run", "test", "build", "compile", "debug"}
 
 
 def _split(value: str | None) -> list[str]:
@@ -29,6 +30,26 @@ def _csv(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return ",".join(str(v).strip() for v in value if str(v).strip())
     return str(value or "").strip()
+
+
+def _dbt_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
+    import dbt_config
+
+    cmd = (spec.get("dbt_command") or "run").strip().lower()
+    if cmd not in DBT_COMMANDS:
+        raise ValueError(f"Unknown dbt command: {cmd!r} (allowed: {', '.join(sorted(DBT_COMMANDS))})")
+    d = str(dbt_config.dbt_dir())
+    argv = [dbt_config.dbt_executable(), cmd,
+            "--project-dir", d, "--profiles-dir", d,
+            "--target", dbt_config.dbt_target()]
+    sel = str(spec.get("select") or "").strip()
+    if sel and cmd != "debug":
+        argv += ["--select", sel]
+    if spec.get("full_refresh") and cmd in ("run", "build"):
+        argv.append("--full-refresh")
+    argv += _split(spec.get("extra"))
+    label = " ".join(["dbt", cmd] + ([sel] if sel and cmd != "debug" else []))
+    return argv, label
 
 
 def build_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
@@ -50,6 +71,9 @@ def build_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
         if os.name == "nt":
             return ["cmd", "/c", str(REPO_ROOT / "fresh_run.cmd")], "fresh_run"
         return ["bash", str(REPO_ROOT / "fresh_run.sh")], "fresh_run"
+
+    if script == "dbt":
+        return _dbt_argv(spec)
 
     if script not in SCRIPTS:
         raise ValueError(f"Unknown script: {script}")
