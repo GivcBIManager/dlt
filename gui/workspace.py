@@ -111,28 +111,28 @@ def _looks_numeric(s: str) -> bool:
         return False
 
 
-def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
-    """Edit scalar keys inside the ``[etl]`` block of ``config.toml`` in place.
+def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any]) -> dict[str, Any]:
+    """Edit scalar keys inside ``[section]`` of config.toml in place.
 
-    Only keys already present in the block and on the allowlist are touched;
-    every other line (comments, other sections) is preserved verbatim. Keeps a
-    timestamped backup and validates the result by re-parsing.
+    Only keys already present in the block and on ``allowlist`` are touched;
+    every other line is preserved verbatim. Keeps a timestamped backup and
+    validates by re-parsing.
     """
-    bad = [k for k in updates if k not in EDITABLE_ETL_KEYS]
+    bad = [k for k in updates if k not in allowlist]
     if bad:
         raise ValueError(f"Not editable: {', '.join(sorted(bad))}")
     if not CONFIG_TOML.exists():
         raise FileNotFoundError("config.toml")
 
     lines = CONFIG_TOML.read_text(encoding="utf-8").splitlines()
-    in_etl = False
+    in_block = False
     applied: dict[str, Any] = {}
     for i, line in enumerate(lines):
         header = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
         if header:
-            in_etl = header.group(1).strip() == "etl"
+            in_block = header.group(1).strip() == section
             continue
-        if not in_etl:
+        if not in_block:
             continue
         m = _ETL_KV_RE.match(line)
         if not m:
@@ -145,7 +145,7 @@ def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
 
     missing = [k for k in updates if k not in applied]
     if missing:
-        raise ValueError(f"Key(s) not found in [etl]: {', '.join(missing)}")
+        raise ValueError(f"Key(s) not found in [{section}]: {', '.join(missing)}")
 
     text = "\n".join(lines)
     if not text.endswith("\n"):
@@ -164,6 +164,33 @@ def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"refused to write corrupt config.toml: {exc}") from exc
     tmp.replace(CONFIG_TOML)
     return {"applied": applied, "backup": str(backup)}
+
+
+def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
+    """Edit scalar keys inside the ``[etl]`` block of ``config.toml`` in place.
+
+    Only keys already present in the block and on the allowlist are touched;
+    every other line (comments, other sections) is preserved verbatim. Keeps a
+    timestamped backup and validates the result by re-parsing.
+    """
+    return _update_toml_block("etl", EDITABLE_ETL_KEYS, updates)
+
+
+# --------------------------------------------------------------------------- #
+# dbt-core materialization settings
+# --------------------------------------------------------------------------- #
+EDITABLE_DBT_KEYS = {
+    "project_dir", "target", "threads", "default_materialization", "dbt_executable",
+}
+
+
+def dbt_settings() -> dict[str, Any]:
+    """The ``[dbt]`` block of config.toml (defaults applied by callers)."""
+    return dict(_read_toml(CONFIG_TOML).get("dbt", {}))
+
+
+def update_dbt_settings(updates: dict[str, Any]) -> dict[str, Any]:
+    return _update_toml_block("dbt", EDITABLE_DBT_KEYS, updates)
 
 
 # --------------------------------------------------------------------------- #
