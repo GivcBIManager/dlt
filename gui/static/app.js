@@ -79,8 +79,8 @@ function renderTable(columns, rows, opts = {}) {
 // row count exceeds pageSize, so small tables look exactly as before.
 // opts: { pillCols, numCols, pageSize = 50, cap = 1000 }
 function mountTable(container, columns, rows, opts = {}) {
-  const pageSize = opts.pageSize || 50;
-  const cap = opts.cap || 1000;
+  const pageSize = opts.pageSize ?? 50;
+  const cap = opts.cap ?? 1000;
   const all = rows || [];
   const truncated = all.length > cap;
   const capped = truncated ? all.slice(0, cap) : all;
@@ -90,14 +90,16 @@ function mountTable(container, columns, rows, opts = {}) {
   function pagerBar(start, shown) {
     const from = capped.length ? start + 1 : 0;
     const to = start + shown;
+    // `(capped)` marks the mountTable-level 1000-row backstop; upstream fetches
+    // already cap at 1000, so this normally only shows String(capped.length).
     const total = truncated ? `${cap} (capped)` : String(capped.length);
     const dis = (c) => (c ? "disabled" : "");
     return `<div class="pager">
-      <button class="btn sm ghost" data-pg="first" ${dis(page === 0)} title="First">⏮</button>
-      <button class="btn sm ghost" data-pg="prev" ${dis(page === 0)} title="Previous">◀</button>
+      <button class="btn sm ghost" data-pg="first" ${dis(page === 0)} title="First" aria-label="First page">⏮</button>
+      <button class="btn sm ghost" data-pg="prev" ${dis(page === 0)} title="Previous" aria-label="Previous page">◀</button>
       <span class="pager-count">${from}–${to} of ${total}</span>
-      <button class="btn sm ghost" data-pg="next" ${dis(page >= pages - 1)} title="Next">▶</button>
-      <button class="btn sm ghost" data-pg="last" ${dis(page >= pages - 1)} title="Last">⏭</button>
+      <button class="btn sm ghost" data-pg="next" ${dis(page >= pages - 1)} title="Next" aria-label="Next page">▶</button>
+      <button class="btn sm ghost" data-pg="last" ${dis(page >= pages - 1)} title="Last" aria-label="Last page">⏭</button>
     </div>`;
   }
 
