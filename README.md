@@ -227,6 +227,34 @@ Each table becomes one Iceberg dataset under the destination
 (`<bucket_url>/<dataset_name>/<table>`) holding all 7 branches, alongside the
 `etl_control` and `etl_run_log` Iceberg tables in the same dataset.
 
+## dbt → ClickHouse materialization
+
+A [dbt-core](https://docs.getdbt.com) project under `dbt/` (dbt-clickhouse
+adapter) turns the Iceberg lake into native ClickHouse tables for downstream
+querying/BI.
+
+- **ClickHouse is an external prerequisite** — a running ClickHouse server
+  (24.x+, for `icebergLocal` table function support) that this app does not
+  install or manage. See the setup script reminders.
+- **`icebergLocal(...)` reads from the ClickHouse *server's* filesystem, not
+  from the machine running this control panel.** The path baked into a model
+  (e.g. `dbt/models/example_iceberg_clickhouse.sql`) must be valid on the
+  ClickHouse host — typically that host needs its own view of the
+  `iceberg_output/` tree (a mount, a copy, or ClickHouse running on the same
+  box). This app does not validate the path.
+- **Configuration** lives alongside the rest of the app's connection config:
+  ClickHouse connection details go in `.dlt/secrets.toml` under
+  `[clickhouse]`, and dbt-run tuning goes in `.dlt/config.toml` under
+  `[dbt]`. The app generates `dbt/profiles.yml` from these at run time — it is
+  gitignored and never hand-edited.
+- **Authoring & running models** — the **Models & Tests** page (`/models`)
+  lists, creates, and edits dbt models/tests, and can run/test/debug them
+  directly.
+- **Scheduling** — on the **Flows** page (`/flows`), a DAG node's kind can be
+  either **Pipeline** or **dbt**; a dbt node picks a specific model or test
+  and a command (`run`/`test`/`build`), so dbt materialization steps can be
+  chained into the same Dagster job as pipeline runs.
+
 ## Data-quality checks (`dq_check.py`)
 
 A standalone reconciliation app that compares the **Oracle source** against the

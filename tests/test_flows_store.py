@@ -52,3 +52,37 @@ def test_add_flow_rejects_bad_cron(state_dir):
     nodes = [{"node_id": "n1", "pipeline_id": pa, "deps": []}]
     with pytest.raises(ValueError):
         fs.add_flow("bad", nodes, "not a cron", "UTC", {})
+
+
+DBT_NODE = {"node_id": "d1", "kind": "dbt",
+            "dbt": {"dbt_command": "run", "select": "stg_products"}, "deps": []}
+
+
+def test_validate_accepts_dbt_node():
+    import flows_store as fs
+    fs.validate_flow([DBT_NODE], known_pipeline_ids=set())  # must not raise
+
+
+def test_validate_rejects_dbt_without_select():
+    import flows_store as fs
+    bad = {"node_id": "d1", "kind": "dbt", "dbt": {"dbt_command": "run", "select": ""}, "deps": []}
+    with pytest.raises(ValueError, match="select"):
+        fs.validate_flow([bad], known_pipeline_ids=set())
+
+
+def test_validate_rejects_dbt_bad_command():
+    import flows_store as fs
+    bad = {"node_id": "d1", "kind": "dbt", "dbt": {"dbt_command": "debug", "select": "m"}, "deps": []}
+    with pytest.raises(ValueError, match="dbt command"):
+        fs.validate_flow([bad], known_pipeline_ids=set())
+
+
+def test_mixed_flow_and_referencing(state_dir):
+    import flows_store as fs
+    import pipelines_store as ps
+    pa = ps.add_pipeline("a", {"script": "dq_check"})["id"]
+    nodes = [{"node_id": "p1", "pipeline_id": pa, "deps": []},
+             {"node_id": "d1", "kind": "dbt", "dbt": {"dbt_command": "run", "select": "m"}, "deps": ["p1"]}]
+    f = fs.add_flow("mixed", nodes, "0 2 * * *", "UTC", {})
+    # dbt node must not blow up referencing_flows (no pipeline_id key)
+    assert [r["id"] for r in fs.referencing_flows(pa)] == [f["id"]]

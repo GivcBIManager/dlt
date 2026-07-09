@@ -89,3 +89,15 @@ thick_mode          = true
 #   Linux example:   "/opt/oracle/instantclient_19_24"
 #   Windows example: "C:\\oracle\\instantclient_19_24"
 oracle_client_lib_dir = "D:\\Readmission\\instantclient\\instantclient_19_24"
+
+# --------------------------------------------------------------------------- #
+# dbt-core materialization layer (Iceberg -> ClickHouse). ClickHouse connection
+# creds live in .dlt/secrets.toml [clickhouse]; the app GENERATES dbt/profiles.yml
+# from these two blocks. ClickHouse is an external prerequisite (24.x+).
+# --------------------------------------------------------------------------- #
+[dbt]
+project_dir             = "dbt"     # dbt project dir, relative to repo root
+target                  = "dev"     # dbt target (matches the generated profile)
+threads                 = 4         # dbt threads
+default_materialization = "table"   # materialize Iceberg into native CH tables
+dbt_executable          = "dbt"     # dbt entry point (usually on the venv PATH)

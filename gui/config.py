@@ -46,6 +46,17 @@ FLOWS_JSON = STATE_DIR / "flows.json"
 ORCHESTRATOR_DIR = REPO_ROOT / "orchestrator"
 DAGSTER_HOME = REPO_ROOT / ".dagster_home"
 
+# --- dbt materialization layer --------------------------------------------- #
+# The dbt project lives at <repo root>/dbt. profiles.yml is GENERATED from app
+# config ([clickhouse] in secrets.toml + [dbt] in config.toml); never hand-edited.
+DBT_DIR = REPO_ROOT / "dbt"
+DBT_PROFILES = DBT_DIR / "profiles.yml"
+
+
+def dbt_executable() -> str:
+    """The dbt entry point. Defaults to ``dbt`` on PATH (the active venv's)."""
+    return os.environ.get("OASIS_DBT") or "dbt"
+
 
 def dagster_host() -> str:
     return os.environ.get("OASIS_DAGSTER_HOST", "127.0.0.1")

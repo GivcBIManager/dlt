@@ -31,3 +31,9 @@ gui-server.err.log
 
 # dg CLI cache/telemetry
 .dg/
+
+# dbt generated artifacts (profiles.yml is generated from app config)
+dbt/profiles.yml
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/

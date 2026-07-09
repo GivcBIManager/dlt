@@ -1,0 +1,8 @@
+version: 2
+models:
+  - name: example_iceberg_clickhouse
+    description: "Example Iceberg->ClickHouse materialization (edit the path)."
+    columns:
+      - name: product_base_id
+        tests:
+          - not_null

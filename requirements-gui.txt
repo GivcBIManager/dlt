@@ -10,3 +10,8 @@ tomli>=2.0 ; python_version < "3.11"
 dagster==1.13.11
 dagster-webserver==1.13.11
 dagster-graphql==1.13.11
+
+# dbt-core materialization layer (Iceberg -> ClickHouse). Keep the pair on the
+# same minor. ClickHouse itself is an EXTERNAL prerequisite (24.x+ for icebergLocal).
+dbt-core>=1.9,<1.10
+dbt-clickhouse>=1.9,<1.10

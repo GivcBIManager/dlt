@@ -18,6 +18,7 @@ import pipelines_store
 
 _CRON_FIELD = re.compile(r"^[\d*/,\-]+$")
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_DBT_NODE_COMMANDS = {"run", "test", "build"}
 
 
 def validate_cron(expr: str) -> None:
@@ -37,8 +38,19 @@ def validate_flow(nodes: list[dict[str, Any]], *, known_pipeline_ids: set[str]) 
     for n in nodes:
         if not _NODE_ID_RE.match(n["node_id"]):
             raise ValueError(f"node_id {n['node_id']!r} must be letters, digits or underscore")
-        if n["pipeline_id"] not in known_pipeline_ids:
-            raise ValueError(f"Node {n['node_id']} references unknown pipeline {n['pipeline_id']}")
+        kind = n.get("kind", "pipeline")
+        if kind == "pipeline":
+            if n.get("pipeline_id") not in known_pipeline_ids:
+                raise ValueError(f"Node {n['node_id']} references unknown pipeline {n.get('pipeline_id')}")
+        elif kind == "dbt":
+            dbt = n.get("dbt") or {}
+            if (dbt.get("dbt_command") or "").strip() not in _DBT_NODE_COMMANDS:
+                raise ValueError(
+                    f"Node {n['node_id']}: dbt command must be one of {sorted(_DBT_NODE_COMMANDS)}")
+            if not str(dbt.get("select") or "").strip():
+                raise ValueError(f"Node {n['node_id']}: dbt node needs a non-empty 'select'")
+        else:
+            raise ValueError(f"Node {n['node_id']}: unknown kind {kind!r}")
         for d in n.get("deps", []):
             if d not in idset:
                 raise ValueError(f"Node {n['node_id']} depends on unknown node {d}")
@@ -155,4 +167,4 @@ def delete_flow(fid: str) -> bool:
 
 def referencing_flows(pipeline_id: str) -> list[dict[str, Any]]:
     return [f for f in _load()
-            if any(n["pipeline_id"] == pipeline_id for n in f["nodes"])]
+            if any(n.get("pipeline_id") == pipeline_id for n in f["nodes"])]

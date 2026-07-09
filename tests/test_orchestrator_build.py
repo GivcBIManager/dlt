@@ -36,3 +36,23 @@ def test_build_all_defs_creates_assets_job_schedule(state_dir, monkeypatch):
                    if a.key == dg.AssetKey(["flow_f1", "n2"]))
     assert dg.AssetKey(["flow_f1", "n1"]) in {d.asset_key for d in spec_n2.deps}
     assert defs.get_schedule_def("flow_f1_schedule").cron_schedule == "0 2 * * *"
+
+
+def test_build_all_defs_handles_dbt_node(state_dir, monkeypatch):
+    import json
+    import config
+    import dagster as dg
+    from orchestrator import build, state
+    monkeypatch.setattr(state._gui_config, "PIPELINES_JSON", config.PIPELINES_JSON)
+    monkeypatch.setattr(state._gui_config, "FLOWS_JSON", config.FLOWS_JSON)
+    (state_dir / "pipelines.json").write_text("[]")
+    (state_dir / "flows.json").write_text(json.dumps([{
+        "id": "f9", "name": "materialize",
+        "nodes": [{"node_id": "m1", "kind": "dbt",
+                   "dbt": {"dbt_command": "run", "select": "stg_products"}, "deps": []}],
+        "cron": "0 3 * * *", "timezone": "UTC",
+        "email": {"on_success": [], "on_failure": []}, "enabled": True,
+    }]))
+    defs = build.build_all_defs()
+    keys = {a.key for a in defs.resolve_all_asset_specs()}
+    assert dg.AssetKey(["flow_f9", "m1"]) in keys

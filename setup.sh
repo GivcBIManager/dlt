@@ -42,6 +42,8 @@ echo "Setup complete. Virtualenv: $VENV"
 echo "Reminder: Oracle 11g needs the Instant Client (thick mode) on this host —"
 echo "          see README.md 'Oracle Instant Client'. The GUI itself runs without it,"
 echo "          but launching real (non --self-test) extractions does not."
+echo "Reminder: ClickHouse (24.x+) is an EXTERNAL prerequisite for the dbt layer and"
+echo "          must be able to read the iceberg_output/ path used in icebergLocal()."
 echo
 
 if [[ "$START" == "1" ]]; then

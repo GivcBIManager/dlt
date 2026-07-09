@@ -22,16 +22,24 @@ def _build_flow(flow: dict, pipelines: dict[str, dict]):
     node_ids = {n["node_id"] for n in flow["nodes"]}
     flow_assets = []
     for node in flow["nodes"]:
-        pid = node["pipeline_id"]
-        if pid not in pipelines:
-            raise ValueError(f"flow {flow_id}: unknown pipeline {pid}")
+        dep_keys = [asset_mod.asset_key(flow_id, d) for d in node.get("deps", [])]
         for d in node.get("deps", []):
             if d not in node_ids:
                 raise ValueError(f"flow {flow_id}: unknown dep {d}")
-        dep_keys = [asset_mod.asset_key(flow_id, d) for d in node.get("deps", [])]
+        kind = node.get("kind", "pipeline")
+        if kind == "dbt":
+            dbt = node.get("dbt") or {}
+            spec = {"script": "dbt", "dbt_command": dbt.get("dbt_command", "run"),
+                    "select": dbt.get("select", "")}
+            name = f"dbt {spec['dbt_command']} {spec['select']}".strip()
+        else:
+            pid = node["pipeline_id"]
+            if pid not in pipelines:
+                raise ValueError(f"flow {flow_id}: unknown pipeline {pid}")
+            spec = pipelines[pid]["spec"]
+            name = pipelines[pid].get("name", node["node_id"])
         flow_assets.append(asset_mod.build_asset(
-            flow_id, node["node_id"], pipelines[pid].get("name", node["node_id"]),
-            pipelines[pid]["spec"], dep_keys))
+            flow_id, node["node_id"], name, spec, dep_keys))
 
     job = dg.define_asset_job(
         f"flow_{flow_id}", selection=dg.AssetSelection.groups(f"flow_{flow_id}"))
