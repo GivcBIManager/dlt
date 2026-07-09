@@ -54,8 +54,24 @@ DBT_PROFILES = DBT_DIR / "profiles.yml"
 
 
 def dbt_executable() -> str:
-    """The dbt entry point. Defaults to ``dbt`` on PATH (the active venv's)."""
-    return os.environ.get("OASIS_DBT") or "dbt"
+    """Absolute path to the ``dbt`` entry point (or a bare name for PATH lookup).
+
+    Resolution order: an explicit ``OASIS_DBT`` override; then the ``dbt``
+    launcher installed next to the running interpreter (the venv's Scripts/bin
+    dir, where ``pip install dbt-clickhouse`` puts it); else the bare name
+    ``dbt`` to resolve on PATH. Resolving next to ``sys.executable`` means the
+    GUI finds dbt even when launched via the venv python *without* the venv
+    being activated (so its Scripts dir is not on PATH) -- mirroring
+    ``python_executable()``.
+    """
+    import sys
+
+    override = os.environ.get("OASIS_DBT")
+    if override:
+        return override
+    launcher = "dbt.exe" if os.name == "nt" else "dbt"
+    candidate = Path(sys.executable).parent / launcher
+    return str(candidate) if candidate.is_file() else "dbt"
 
 
 def dagster_host() -> str:
