@@ -39,6 +39,8 @@ Write-Host ""
 Write-Host "Setup complete. Virtualenv: $venv"
 Write-Host "Reminder: Oracle 11g needs the Instant Client (thick mode) on this host —"
 Write-Host "          see README.md. The GUI runs without it, but real extractions need it."
+Write-Host "Reminder: ClickHouse (24.x+) is an EXTERNAL prerequisite for the dbt layer and"
+Write-Host "          must be able to read the iceberg_output/ path used in icebergLocal()."
 Write-Host ""
 
 if (-not $NoStart) {
