@@ -11,10 +11,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import config
 import dbt_config
 
 _ALLOWED_SUFFIX = {".sql", ".yml", ".yaml"}
+_ALLOWED_SUBDIRS = {"models", "tests", "macros"}
 
 MODEL_TEMPLATE = """\
 -- {name}: materialize a local Iceberg table into a native ClickHouse table.
@@ -50,6 +50,10 @@ def _resolve(rel: str) -> Path:
         raise ValueError(f"path escapes the dbt project: {rel!r}")
     if p.suffix.lower() not in _ALLOWED_SUFFIX:
         raise ValueError(f"only {sorted(_ALLOWED_SUFFIX)} files are allowed")
+    parts = p.relative_to(root).parts
+    if not parts or parts[0] not in _ALLOWED_SUBDIRS:
+        raise ValueError(
+            f"dbt files must live under {sorted(_ALLOWED_SUBDIRS)} (got {rel!r})")
     return p
 
 
@@ -70,7 +74,7 @@ def _dbt_ls(resource_type: str) -> list[dict[str, Any]]:
     d = str(dbt_config.dbt_dir())
     try:
         proc = subprocess.run(
-            [config.dbt_executable(), "ls", "--resource-type", resource_type,
+            [dbt_config.dbt_executable(), "ls", "--resource-type", resource_type,
              "--output", "json", "--project-dir", d, "--profiles-dir", d],
             capture_output=True, text=True, timeout=60,
         )

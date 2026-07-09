@@ -51,3 +51,16 @@ def test_path_traversal_rejected(proj):
         ps.write_file("models/x.py", "print(1)")   # disallowed extension
     with pytest.raises(ValueError):
         ps.write_file("/abs/models/x.sql", "select 1")
+
+
+def test_profiles_and_root_files_rejected(proj):
+    import dbt_project_store as ps
+    for op in (lambda: ps.read_file("profiles.yml"),
+               lambda: ps.write_file("profiles.yml", "x"),
+               lambda: ps.delete_file("profiles.yml")):
+        with pytest.raises(ValueError):
+            op()
+    with pytest.raises(ValueError):
+        ps.write_file("dbt_project.yml", "x")
+    with pytest.raises(ValueError):
+        ps.read_file("foo.yml")

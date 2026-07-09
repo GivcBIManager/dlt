@@ -137,7 +137,6 @@ def save_clickhouse(payload: dict[str, Any]) -> dict[str, Any]:
 
 def test_connection() -> dict[str, Any]:
     """Run ``dbt debug`` against the generated profile. Never raises."""
-    import config
     import dbt_config
     try:
         dbt_config.write_profiles()
@@ -145,7 +144,7 @@ def test_connection() -> dict[str, Any]:
         return {"ok": False, "output": str(exc)}
     try:
         proc = subprocess.run(
-            [config.dbt_executable(), "debug",
+            [dbt_config.dbt_executable(), "debug",
              "--project-dir", str(dbt_config.dbt_dir()),
              "--profiles-dir", str(dbt_config.dbt_dir())],
             capture_output=True, text=True, timeout=60,
