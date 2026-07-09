@@ -278,9 +278,11 @@ async function loadAgg() {
   el("branch-counts").innerHTML = `<div class="muted">Scanning…</div>`;
   try {
     const d = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/aggregate?` + p.toString());
-    el("branch-counts").innerHTML = d.rows.length
-      ? renderTable(d.columns, d.rows, { numCols: ["branch_id", "rows"] })
-      : `<div class="muted">No rows (the table may not have a branch_id column).</div>`;
+    if (d.rows.length) {
+      mountTable(el("branch-counts"), d.columns, d.rows, { numCols: ["branch_id", "rows"] });
+    } else {
+      el("branch-counts").innerHTML = `<div class="muted">No rows (the table may not have a branch_id column).</div>`;
+    }
   } catch (e) { el("branch-counts").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
 
