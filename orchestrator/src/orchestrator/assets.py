@@ -26,6 +26,7 @@ def build_asset(flow_id: str, node_id: str, name: str, spec: dict[str, Any],
     @dg.asset(key=key, deps=dep_keys, group_name=f"flow_{flow_id}",
               description=name, compute_kind="subprocess")
     def _asset(context: dg.AssetExecutionContext) -> MaterializeResult:
+        state.ensure_dbt_profiles(spec)
         argv, label = state.build_argv(spec)
         context.log.info("Running: %s", " ".join(argv))
         start = time.time()

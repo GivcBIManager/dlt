@@ -48,3 +48,10 @@ def read_flows() -> list[dict[str, Any]]:
 
 def secrets_path() -> Path:
     return _gui_config.SECRETS_TOML
+
+
+def ensure_dbt_profiles(spec: dict[str, Any] | None) -> None:
+    """Generate dbt/profiles.yml before a dbt asset runs (no-op otherwise)."""
+    if (spec or {}).get("script") == "dbt":
+        import dbt_config  # gui/ is already on sys.path (see above)
+        dbt_config.write_profiles()
