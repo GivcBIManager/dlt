@@ -604,3 +604,8 @@ select.multi option { padding: 4px 8px; border-radius: 4px; }
   .topbar-page { display: none; }
   .form-row, .form-row-3 { grid-template-columns: 1fr; }
 }
+
+/* Pagination bar for data tables (mountTable). */
+.pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.pager .pager-count { color: var(--text-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.pager .btn.sm { padding: .2rem .55rem; line-height: 1; }
