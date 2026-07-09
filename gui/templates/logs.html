@@ -184,7 +184,7 @@ function SysTable(cfg) {
       status_breakdown: Object.entries(e.statuses).map(([k, v]) => `${k}: ${v}`).join("   ") || "—",
     })).sort((a, b) => String(a.branch).localeCompare(String(b.branch)) ||
                        String(a.table_name).localeCompare(String(b.table_name)));
-    box.innerHTML = renderTable(["branch", "table_name", "checks", "status_breakdown"], sumRows, { numCols: ["checks"] });
+    mountTable(box, ["branch", "table_name", "checks", "status_breakdown"], sumRows, { numCols: ["checks"] });
   }
   async function load() {
     try {
@@ -340,7 +340,7 @@ const runsView = (function () {
     const box = d.querySelector(".run-detail");
     try {
       const r = await apiGet(`/api/iceberg/runs/${encodeURIComponent(d.dataset.run)}`);
-      box.innerHTML = renderTable(r.columns, r.rows, { pillCols: RUN_DETAIL_PILLS, numCols: RUN_DETAIL_NUMS });
+      mountTable(box, r.columns, r.rows, { pillCols: RUN_DETAIL_PILLS, numCols: RUN_DETAIL_NUMS });
     } catch (e) {
       d.dataset.loaded = "";
       box.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
