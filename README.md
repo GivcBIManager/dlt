@@ -247,6 +247,13 @@ querying/BI.
   `[clickhouse]`, and dbt-run tuning goes in `.dlt/config.toml` under
   `[dbt]`. The app generates `dbt/profiles.yml` from these at run time — it is
   gitignored and never hand-edited.
+- **Authoring & running models** — the **Models & Tests** page (`/models`)
+  lists, creates, and edits dbt models/tests, and can run/test/debug them
+  directly.
+- **Scheduling** — on the **Flows** page (`/flows`), a DAG node's kind can be
+  either **Pipeline** or **dbt**; a dbt node picks a specific model or test
+  and a command (`run`/`test`/`build`), so dbt materialization steps can be
+  chained into the same Dagster job as pipeline runs.
 
 ## Data-quality checks (`dq_check.py`)
 
