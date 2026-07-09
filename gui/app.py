@@ -18,10 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
 
+import clickhouse_config  # noqa: E402
 import commands  # noqa: E402
 import config  # noqa: E402
 import connections  # noqa: E402
 import dagster_client  # noqa: E402
+import dbt_config  # noqa: E402
+import dbt_project_store  # noqa: E402
 import flows_store  # noqa: E402
 import iceberg_browser  # noqa: E402
 import pipelines_store  # noqa: E402
@@ -98,6 +101,11 @@ def page_connections():
 @app.route("/flows")
 def page_flows():
     return render_template("flows.html", active="flows")
+
+
+@app.route("/models")
+def page_models():
+    return render_template("dbt.html", active="models")
 
 
 # --------------------------------------------------------------------------- #
@@ -480,6 +488,91 @@ def api_ib_runs():
 @api
 def api_ib_run_detail(run_id):
     return jsonify(iceberg_browser.read_run_detail(run_id))
+
+
+# --------------------------------------------------------------------------- #
+# dbt API
+# --------------------------------------------------------------------------- #
+@app.get("/api/dbt/models")
+@api
+def api_dbt_models():
+    return jsonify({"models": dbt_project_store.list_models()})
+
+
+@app.get("/api/dbt/tests")
+@api
+def api_dbt_tests():
+    return jsonify({"tests": dbt_project_store.list_tests()})
+
+
+@app.get("/api/dbt/file")
+@api
+def api_dbt_file_get():
+    path = request.args.get("path", "")
+    return jsonify({"path": path, "content": dbt_project_store.read_file(path)})
+
+
+@app.put("/api/dbt/file")
+@api
+def api_dbt_file_put():
+    b = _body()
+    return jsonify(dbt_project_store.write_file(b.get("path", ""), b.get("content", "")))
+
+
+@app.post("/api/dbt/file")
+@api
+def api_dbt_file_create():
+    b = _body()
+    return jsonify(dbt_project_store.create_from_template(
+        b.get("name", ""), b.get("kind", "model"), b.get("materialization", "table")))
+
+
+@app.delete("/api/dbt/file")
+@api
+def api_dbt_file_delete():
+    return jsonify({"deleted": dbt_project_store.delete_file(request.args.get("path", ""))})
+
+
+@app.get("/api/dbt/config")
+@api
+def api_dbt_config_get():
+    return jsonify({"clickhouse": clickhouse_config.get_clickhouse(),
+                    "dbt": workspace.dbt_settings()})
+
+
+@app.put("/api/dbt/config")
+@api
+def api_dbt_config_put():
+    b = _body()
+    out = {}
+    if b.get("clickhouse") is not None:
+        out["clickhouse"] = clickhouse_config.save_clickhouse(b["clickhouse"])
+    if b.get("dbt") is not None:
+        out["dbt"] = workspace.update_dbt_settings(b["dbt"])
+    # Regenerate profiles.yml from the new config (best effort).
+    try:
+        dbt_config.write_profiles()
+    except ValueError:
+        pass
+    return jsonify(out)
+
+
+@app.post("/api/dbt/test-connection")
+@api
+def api_dbt_test_connection():
+    return jsonify(clickhouse_config.test_connection())
+
+
+@app.post("/api/dbt/run")
+@api
+def api_dbt_run():
+    b = _body()
+    spec = {"script": "dbt", "dbt_command": b.get("dbt_command", "run"),
+            "select": b.get("select", ""), "full_refresh": bool(b.get("full_refresh")),
+            "extra": b.get("extra", "")}
+    argv, label = commands.build_argv(spec)
+    dbt_config.write_profiles()  # ensure the profile is current before running
+    return jsonify(runner.start(argv, label=label))
 
 
 @app.get("/healthz")
