@@ -25,8 +25,14 @@ _gui_dir = REPO_ROOT / "gui"
 if str(_gui_dir) not in sys.path:
     sys.path.insert(0, str(_gui_dir))
 
+# Import every gui module we need HERE, at load time, while gui/ is on sys.path.
+# This binding is what survives: Dagster's multiprocess step worker resets
+# sys.path (dropping this runtime-inserted gui/ entry) *before* an asset runs, so
+# any gui import deferred to asset-runtime would raise ModuleNotFoundError. The
+# already-imported modules keep working through sys.modules, so bind them now.
 import commands as _commands  # noqa: E402  (after sys.path insert)
 import config as _gui_config  # noqa: E402
+import dbt_config as _dbt_config  # noqa: E402  (profiles.yml generator, used by dbt assets)
 import flow_naming  # noqa: E402  (re-exported so orchestrator modules share GUI naming)
 
 build_argv = _commands.build_argv
@@ -54,5 +60,4 @@ def secrets_path() -> Path:
 def ensure_dbt_profiles(spec: dict[str, Any] | None) -> None:
     """Generate dbt/profiles.yml before a dbt asset runs (no-op otherwise)."""
     if (spec or {}).get("script") == "dbt":
-        import dbt_config  # gui/ is already on sys.path (see above)
-        dbt_config.write_profiles()
+        _dbt_config.write_profiles()  # bound at load time; see the import note above
