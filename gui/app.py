@@ -26,6 +26,7 @@ import dagster_client  # noqa: E402
 import dbt_config  # noqa: E402
 import dbt_project_store  # noqa: E402
 import flows_store  # noqa: E402
+import flow_naming  # noqa: E402
 import iceberg_browser  # noqa: E402
 import pipelines_store  # noqa: E402
 import smtp_config  # noqa: E402
@@ -277,7 +278,8 @@ def api_flows_add():
     b = _body()
     f = flows_store.add_flow(b.get("name", ""), b.get("nodes", []),
                              b.get("cron", ""), b.get("timezone", "UTC"),
-                             b.get("email", {}), b.get("enabled", True))
+                             b.get("email", {}), b.get("enabled", True),
+                             b.get("graph"))
     dagster_client.reload_location()
     return jsonify(f)
 
@@ -301,17 +303,20 @@ def api_flows_delete(fid):
 @app.post("/api/flows/<fid>/run")
 @api
 def api_flows_run(fid):
-    return jsonify(dagster_client.launch_job(f"flow_{fid}"))
+    flow = flows_store.get_flow(fid)
+    if flow is None:
+        raise KeyError(fid)
+    return jsonify(dagster_client.launch_job(flow_naming.job_name(flow)))
 
 
 @app.post("/api/flows/<fid>/toggle")
 @api
 def api_flows_toggle(fid):
     enabled = bool(_body().get("enabled", True))
-    flows_store.update_flow(fid, enabled=enabled)
+    flow = flows_store.update_flow(fid, enabled=enabled)
     dagster_client.reload_location()
-    fn = f"flow_{fid}_schedule"
-    res = dagster_client.start_schedule(fn) if enabled else dagster_client.stop_schedule(fn)
+    sched = flow_naming.schedule_name(flow)
+    res = dagster_client.start_schedule(sched) if enabled else dagster_client.stop_schedule(sched)
     return jsonify({"enabled": enabled, **res})
 
 

@@ -12,6 +12,7 @@ import urllib.request
 from typing import Any
 
 import config
+import flow_naming
 
 _TIMEOUT = 6
 
@@ -145,6 +146,29 @@ def launch_job(job_name: str) -> dict[str, Any]:
     return {"ok": False, "error": node.get("message", "launch failed")}
 
 
+def _rows_from_repos(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for repo in nodes:
+        sched_by_job = {s["name"]: s for s in repo.get("schedules", [])}
+        for job in repo.get("jobs", []):
+            if not job["name"].startswith("flow_"):
+                continue
+            runs = job.get("runs") or []
+            last = runs[0] if runs else {}
+            sched = sched_by_job.get(f"{job['name']}_schedule", {})
+            out.append({
+                "job": job["name"],
+                "flow_id": flow_naming.flow_id_from_job(job["name"]),
+                "schedule_state": (sched.get("scheduleState") or {}).get("status"),
+                "last_run_status": last.get("status"),
+                "last_run_id": last.get("runId"),
+                "last_run_at": last.get("startTime"),
+                "link": job_link(job["name"]),
+                "run_link": run_link(last["runId"]) if last.get("runId") else None,
+            })
+    return out
+
+
 def flow_status() -> list[dict[str, Any]]:
     """Per-job latest-run + schedule state. Empty list if Dagster unreachable."""
     q = """
@@ -162,22 +186,4 @@ def flow_status() -> list[dict[str, Any]]:
     nodes = (res.get("data", {}).get("repositoriesOrError", {}) or {}).get("nodes")
     if not nodes:
         return []
-    out: list[dict[str, Any]] = []
-    for repo in nodes:
-        sched_by_job = {s["name"]: s for s in repo.get("schedules", [])}
-        for job in repo.get("jobs", []):
-            if not job["name"].startswith("flow_"):
-                continue
-            runs = job.get("runs") or []
-            last = runs[0] if runs else {}
-            sched = sched_by_job.get(f"{job['name']}_schedule", {})
-            out.append({
-                "job": job["name"],
-                "schedule_state": (sched.get("scheduleState") or {}).get("status"),
-                "last_run_status": last.get("status"),
-                "last_run_id": last.get("runId"),
-                "last_run_at": last.get("startTime"),
-                "link": job_link(job["name"]),
-                "run_link": run_link(last["runId"]) if last.get("runId") else None,
-            })
-    return out
+    return _rows_from_repos(nodes)

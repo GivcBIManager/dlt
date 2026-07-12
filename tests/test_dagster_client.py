@@ -13,3 +13,20 @@ def test_flow_status_returns_empty_when_unreachable(monkeypatch):
     # Point at a closed port so the request fails fast.
     monkeypatch.setenv("OASIS_DAGSTER_PORT", "59999")
     assert dc.flow_status() == []
+
+
+def test_rows_from_repos_parses_flow_id():
+    import dagster_client as dc
+    nodes = [{
+        "jobs": [{"name": "flow_nightly__a1b2c3d4",
+                  "runs": [{"runId": "r1", "status": "SUCCESS", "startTime": 1.0}]}],
+        "schedules": [{"name": "flow_nightly__a1b2c3d4_schedule",
+                       "scheduleState": {"status": "RUNNING"}}],
+    }]
+    rows = dc._rows_from_repos(nodes)
+    assert len(rows) == 1
+    assert rows[0]["flow_id"] == "a1b2c3d4"
+    assert rows[0]["job"] == "flow_nightly__a1b2c3d4"
+    assert rows[0]["schedule_state"] == "RUNNING"
+    assert rows[0]["last_run_status"] == "SUCCESS"
+    assert rows[0]["run_link"].endswith("/runs/r1")
