@@ -1,8 +1,6 @@
 """Test the Flows API endpoint."""
 from __future__ import annotations
 
-import pytest
-
 
 def test_flows_list_includes_valid_server_timezone(monkeypatch):
     import app as gui_app

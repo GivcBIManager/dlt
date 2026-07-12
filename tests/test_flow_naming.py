@@ -1,6 +1,3 @@
-import pytest
-
-
 def test_slugify_basic():
     from flow_naming import slugify
     assert slugify("Nightly Masters") == "nightly_masters"

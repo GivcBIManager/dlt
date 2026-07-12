@@ -75,3 +75,35 @@ def test_build_all_defs_handles_command_node(state_dir, monkeypatch):
     keys = {a.key for a in defs.resolve_all_asset_specs()}
     assert dg.AssetKey(["notify__f7", "c1"]) in keys
     assert defs.get_job_def("flow_notify__f7") is not None
+
+
+def test_same_slug_flows_do_not_cross_select(state_dir, monkeypatch):
+    from orchestrator import build
+    _wire(monkeypatch)
+    (state_dir / "pipelines.json").write_text("[]")
+    (state_dir / "flows.json").write_text(json.dumps([
+        {"id": "s1", "name": "My Flow",
+         "nodes": [{"node_id": "n1", "kind": "command", "command": "echo a", "deps": []}],
+         "cron": "0 2 * * *", "timezone": "UTC",
+         "email": {"on_success": [], "on_failure": []}, "enabled": True},
+        {"id": "s2", "name": "my-flow",
+         "nodes": [{"node_id": "n1", "kind": "command", "command": "echo b", "deps": []}],
+         "cron": "0 3 * * *", "timezone": "UTC",
+         "email": {"on_success": [], "on_failure": []}, "enabled": True},
+    ]))
+    defs = build.build_all_defs()
+    keys = {a.key for a in defs.resolve_all_asset_specs()}
+    # Same group slug, distinct id-carrying asset prefixes -> no collision.
+    assert dg.AssetKey(["my_flow__s1", "n1"]) in keys
+    assert dg.AssetKey(["my_flow__s2", "n1"]) in keys
+    # Two distinct jobs exist.
+    job1 = defs.get_job_def("flow_my_flow__s1")
+    job2 = defs.get_job_def("flow_my_flow__s2")
+    assert job1 is not None
+    assert job2 is not None
+    # Each job selects only its own asset -- AssetSelection.assets(*explicit_keys)
+    # keeps a shared group_name from cross-selecting the other flow's node.
+    assert dg.AssetKey(["my_flow__s1", "n1"]) in job1.asset_layer.selected_asset_keys
+    assert dg.AssetKey(["my_flow__s2", "n1"]) not in job1.asset_layer.selected_asset_keys
+    assert dg.AssetKey(["my_flow__s2", "n1"]) in job2.asset_layer.selected_asset_keys
+    assert dg.AssetKey(["my_flow__s1", "n1"]) not in job2.asset_layer.selected_asset_keys
