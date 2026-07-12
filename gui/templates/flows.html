@@ -253,7 +253,7 @@ function collectNodes() {
     for (const inName in (n.inputs||{})) (n.inputs[inName].connections||[]).forEach(c => deps.push(idToNode[c.node]));
     const base = { node_id: idToNode[id], kind, deps };
     if (kind === "pipeline") base.pipeline_id = data.pipeline_id || (PIPELINES[0]||{}).id;
-    else if (kind === "dbt") base.dbt = { dbt_command: data.dbt_command||"run", select: data.select||"" };
+    else if (kind === "dbt") base.dbt = { dbt_command: data.dbt_command||"run", select: data.select || (DBT_MODELS[0]||DBT_TESTS[0]||{}).name || "" };
     else if (kind === "command") base.command = data.command||"";
     out.push(base);
   }
