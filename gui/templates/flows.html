@@ -215,7 +215,7 @@ function addFlowNode(kind, data, x, y) {
 /* ---------- editor load / collect ---------- */
 function autoLayoutPositions(nodes) {
   const byId = Object.fromEntries(nodes.map(n=>[n.node_id,n])), depth = {};
-  function d(id, seen){ if (depth[id]!=null) return depth[id]; if (seen.has(id)) return 0; seen.add(id);
+  function d(id, seen){ if (!byId[id]) return 0; if (depth[id]!=null) return depth[id]; if (seen.has(id)) return 0; seen.add(id);
     const deps=(byId[id].deps||[]); depth[id]=deps.length?1+Math.max(...deps.map(x=>d(x,seen))):0; return depth[id]; }
   nodes.forEach(n=>d(n.node_id,new Set()));
   const col = {}, pos = {};
