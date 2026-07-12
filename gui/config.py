@@ -93,3 +93,12 @@ def python_executable() -> str:
     import sys
 
     return os.environ.get("OASIS_PYTHON") or sys.executable
+
+
+def server_timezone() -> str:
+    """The server's IANA timezone name (e.g. 'Asia/Riyadh'); 'UTC' on failure."""
+    try:
+        import tzlocal
+        return tzlocal.get_localzone_name() or "UTC"
+    except Exception:  # noqa: BLE001 - never let tz detection break the API
+        return "UTC"

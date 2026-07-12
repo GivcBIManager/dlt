@@ -269,6 +269,7 @@ def api_flows_list():
         "flows": flows_store.load_flows(),
         "pipelines": pipelines_store.load_pipelines(),
         "dagster": dagster_service.status(),
+        "server_timezone": config.server_timezone(),
     })
 
 
