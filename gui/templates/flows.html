@@ -1,8 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='drawflow.min.css') }}">
+<style>
+  .flow-build { display:grid; grid-template-columns: 190px 1fr; gap:12px; }
+  .palette { display:flex; flex-direction:column; gap:8px; }
+  .palette .chip { display:flex; align-items:center; gap:8px; padding:8px 10px;
+    border:1px solid var(--border,#2a3346); border-radius:8px; background:var(--panel-2,#1b1f2a);
+    cursor:grab; user-select:none; font-size:.85rem; }
+  .palette .chip:hover { border-color: var(--primary,#5b8cff); }
+  #dfcanvas { position:relative; height:470px; border:1px solid var(--border,#2a3346);
+    border-radius:10px; background:var(--panel,#12151d); overflow:hidden; }
+  .drawflow .drawflow-node { background:#1b2130; border:1px solid #2a3346; border-radius:10px;
+    color:#e6e9ef; min-width:190px; padding:0; box-shadow:0 2px 10px rgba(0,0,0,.25); }
+  .drawflow .drawflow-node.selected { border-color: var(--primary,#5b8cff); }
+  .dfnode-title { font-weight:600; padding:8px 10px; border-bottom:1px solid #2a3346;
+    display:flex; gap:8px; align-items:center; }
+  .dfnode-body { padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+  .dfnode-field { width:100%; }
+  .drawflow .drawflow-node .input, .drawflow .drawflow-node .output { background:var(--primary,#5b8cff); }
+  .sched-grid { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+  .sched-hint { margin-top:6px; }
+</style>
+
 <div class="page-head">
   <h1><i class="fa-solid fa-diagram-project"></i> Flows</h1>
-  <p>Compose pipelines into a DAG, wire dependencies, and schedule it. Downstream steps run only after upstream steps succeed.</p>
+  <p>Drag components onto the canvas, connect them to set run order, then schedule. Downstream steps run only after upstream steps succeed.</p>
 </div>
 <div id="dagster-banner"></div>
 
@@ -17,29 +39,49 @@
       <button class="btn ghost sm" id="f-reset" hidden>Cancel edit</button></div>
     <div class="form-row">
       <div><label>Name</label><input id="f-name" placeholder="nightly-masters-then-dq"></div>
-      <div><label>Timezone</label><input id="f-tz" value="Asia/Riyadh"></div>
+      <div><label>Timezone</label><select id="f-tz"></select></div>
     </div>
 
-    <label style="margin-top:12px">Nodes</label>
-    <div id="f-nodes"></div>
-    <button class="btn sm" id="f-add-node"><i class="fa-solid fa-plus"></i> Add node</button>
+    <label style="margin-top:12px">DAG</label>
+    <div class="flow-build">
+      <div class="palette" id="palette">
+        <div class="chip" draggable="true" data-kind="pipeline"><i class="fa-solid fa-database"></i> Pipeline</div>
+        <div class="chip" draggable="true" data-kind="dbt" data-cmd="run"><i class="fa-solid fa-cube"></i> dbt run</div>
+        <div class="chip" draggable="true" data-kind="dbt" data-cmd="test"><i class="fa-solid fa-vial"></i> dbt test</div>
+        <div class="chip" draggable="true" data-kind="dbt" data-cmd="build"><i class="fa-solid fa-hammer"></i> dbt build</div>
+        <div class="chip" draggable="true" data-kind="command"><i class="fa-solid fa-terminal"></i> Custom command</div>
+        <p class="muted" style="font-size:.75rem;margin-top:8px">Drag onto canvas. Drag a node's right port to another node's left port to link (source runs first). Click a node and press Delete to remove.</p>
+      </div>
+      <div id="dfcanvas"></div>
+    </div>
 
-    <label style="margin-top:16px">Schedule (cron)</label>
-    <div class="cron-grid">
+    <label style="margin-top:16px">Schedule</label>
+    <div class="sched-grid">
+      <div><label>Frequency</label>
+        <select id="sched-freq">
+          <option value="minutes">Every N minutes</option>
+          <option value="hourly">Hourly</option>
+          <option value="daily" selected>Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="advanced">Advanced (cron)</option>
+        </select>
+      </div>
+      <div id="sched-inputs" class="row-flex" style="gap:10px;align-items:flex-end"></div>
+    </div>
+    <div class="cron-grid" id="sched-adv" hidden style="margin-top:10px">
       <div><label>Min</label><input id="cf-min" class="mono" value="0"></div>
       <div><label>Hour</label><input id="cf-hour" class="mono" value="2"></div>
       <div><label>DoM</label><input id="cf-dom" class="mono" value="*"></div>
       <div><label>Mon</label><input id="cf-mon" class="mono" value="*"></div>
       <div><label>DoW</label><input id="cf-dow" class="mono" value="*"></div>
     </div>
+    <div class="muted sched-hint" id="sched-summary">—</div>
 
     <div class="form-row" style="margin-top:12px">
       <div><label>Email on success</label><input id="f-succ" placeholder="ops@x.com, lead@x.com"></div>
       <div><label>Email on failure</label><input id="f-fail" placeholder="ops@x.com"></div>
     </div>
-
-    <label style="margin-top:12px">DAG preview</label>
-    <div id="f-preview" class="console" style="max-height:220px">—</div>
 
     <div class="btn-row"><button class="btn primary" id="f-save"><i class="fa-solid fa-floppy-disk"></i> Save flow</button></div>
   </div>
@@ -57,103 +99,194 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='drawflow.min.js') }}"></script>
 <script>
-let PIPELINES = [], FLOWS = [], editingId = null, nodeSeq = 0, DBT_MODELS = [], DBT_TESTS = [];
+let PIPELINES = [], FLOWS = [], editingId = null, nodeSeq = 0,
+    DBT_MODELS = [], DBT_TESTS = [], SERVER_TZ = "UTC", editor = null;
 
-function cron() {
-  return [el("cf-min"),el("cf-hour"),el("cf-dom"),el("cf-mon"),el("cf-dow")]
-    .map(e => e.value.trim() || "*").join(" ");
+/* ---------- timezone ---------- */
+function tzList() {
+  try { return Intl.supportedValuesOf("timeZone"); }
+  catch (e) { return ["UTC","Asia/Riyadh","Europe/London","America/New_York","Asia/Dubai"]; }
 }
-function nodeRow(n) {
-  const kind = n.kind || "pipeline";
-  const pipeOpts = PIPELINES.map(p => `<option value="${p.id}" ${n.pipeline_id===p.id?"selected":""}>${esc(p.name)}</option>`).join("");
-  const dbt = n.dbt || {};
-  const selOpts = [
-    ...DBT_MODELS.map(m => `<option value="${esc(m.name)}" ${dbt.select===m.name?"selected":""}>model: ${esc(m.name)}</option>`),
-    ...DBT_TESTS.map(t => `<option value="${esc(t.name)}" ${dbt.select===t.name?"selected":""}>test: ${esc(t.name)}</option>`),
-  ].join("");
-  const cmdOpts = ["run","test","build"].map(c => `<option ${dbt.dbt_command===c?"selected":""}>${c}</option>`).join("");
-  return `<div class="node-row row-flex" data-node="${n.node_id}" data-deps="${(n.deps || []).join(',')}" style="gap:8px;margin:6px 0;flex-wrap:wrap">
-    <span class="mono">${n.node_id}</span>
-    <select class="n-kind">
-      <option value="pipeline" ${kind==="pipeline"?"selected":""}>pipeline</option>
-      <option value="dbt" ${kind==="dbt"?"selected":""}>dbt</option>
-    </select>
-    <select class="n-pipe" ${kind==="dbt"?"hidden":""}>${pipeOpts}</select>
-    <select class="n-dbt-cmd" ${kind==="pipeline"?"hidden":""}>${cmdOpts}</select>
-    <select class="n-dbt-sel" ${kind==="pipeline"?"hidden":""}>${selOpts}</select>
-    <span class="muted">depends on:</span>
-    <select class="n-deps" multiple size="2"></select>
-    <button class="btn sm bad" onclick="rmNode('${n.node_id}')">✕</button></div>`;
+function fillTz(selected) {
+  const zones = tzList().slice();
+  const sel = selected || SERVER_TZ;
+  if (sel && !zones.includes(sel)) zones.unshift(sel);
+  el("f-tz").innerHTML = zones.map(z => `<option ${z===sel?"selected":""}>${esc(z)}</option>`).join("");
 }
-function depOptions() {
-  const ids = [...$$("#f-nodes .node-row")].map(r => r.dataset.node);
-  $$("#f-nodes .node-row").forEach(row => {
-    const self = row.dataset.node, sel = row.querySelector(".n-deps");
-    const chosen = sel.options.length
-      ? [...sel.selectedOptions].map(o => o.value)
-      : (row.dataset.deps || "").split(",").filter(Boolean);
-    sel.innerHTML = ids.filter(i => i !== self)
-      .map(i => `<option value="${i}" ${chosen.includes(i) ? "selected" : ""}>${i}</option>`).join("");
+
+/* ---------- scheduler ---------- */
+function pad(n){ return String(n).padStart(2,"0"); }
+function timeVals(){ const [H,M]=(el("sf-time")?.value||"02:00").split(":").map(Number); return {H:H||0,M:M||0}; }
+function presetFromCron(cron) {
+  const p = (cron||"").trim().split(/\s+/);
+  if (p.length !== 5) return {freq:"advanced"};
+  const [mi,ho,dom,mon,dow] = p, num = s => /^\d+$/.test(s);
+  let m;
+  if ((m = mi.match(/^\*\/(\d+)$/)) && ho==="*"&&dom==="*"&&mon==="*"&&dow==="*") return {freq:"minutes", n:+m[1]};
+  if (num(mi)&&ho==="*"&&dom==="*"&&mon==="*"&&dow==="*") return {freq:"hourly", min:+mi};
+  if (num(mi)&&num(ho)&&dom==="*"&&mon==="*"&&dow==="*") return {freq:"daily", H:+ho, M:+mi};
+  if (num(mi)&&num(ho)&&dom==="*"&&mon==="*"&&num(dow)) return {freq:"weekly", H:+ho, M:+mi, dow:+dow};
+  if (num(mi)&&num(ho)&&num(dom)&&mon==="*"&&dow==="*") return {freq:"monthly", H:+ho, M:+mi, dom:+dom};
+  return {freq:"advanced"};
+}
+function schedInputs(preset) {
+  const f = el("sched-freq").value, p = preset || {};
+  let html = "";
+  if (f === "minutes") html = `<div><label>Every N min</label><input id="sf-n" class="mono" style="width:90px" value="${p.n||15}"></div>`;
+  else if (f === "hourly") html = `<div><label>At minute</label><input id="sf-min" class="mono" style="width:90px" value="${p.min??0}"></div>`;
+  else if (f === "daily") html = `<div><label>At</label><input id="sf-time" type="time" value="${pad(p.H??2)}:${pad(p.M??0)}"></div>`;
+  else if (f === "weekly") html =
+    `<div><label>Day</label><select id="sf-dow">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d,i)=>`<option value="${i}" ${(p.dow??1)===i?"selected":""}>${d}</option>`).join("")}</select></div>
+     <div><label>At</label><input id="sf-time" type="time" value="${pad(p.H??2)}:${pad(p.M??0)}"></div>`;
+  else if (f === "monthly") html =
+    `<div><label>Day of month</label><input id="sf-dom" class="mono" style="width:90px" value="${p.dom??1}"></div>
+     <div><label>At</label><input id="sf-time" type="time" value="${pad(p.H??2)}:${pad(p.M??0)}"></div>`;
+  el("sched-inputs").innerHTML = html;
+  el("sched-adv").hidden = f !== "advanced";
+  el("sched-inputs").querySelectorAll("input,select").forEach(x => x.addEventListener("input", updateSched));
+  updateSched();
+}
+function cronFromForm() {
+  const f = el("sched-freq").value;
+  if (f === "advanced")
+    return [el("cf-min"),el("cf-hour"),el("cf-dom"),el("cf-mon"),el("cf-dow")].map(e=>e.value.trim()||"*").join(" ");
+  if (f === "minutes") { const n = Math.max(1, +el("sf-n").value||15); return `*/${n} * * * *`; }
+  if (f === "hourly") { const m = Math.min(59, Math.max(0, +el("sf-min").value||0)); return `${m} * * * *`; }
+  const {H,M} = timeVals();
+  if (f === "daily") return `${M} ${H} * * *`;
+  if (f === "weekly") return `${M} ${H} * * ${el("sf-dow").value}`;
+  if (f === "monthly") { const dom = Math.max(1, +el("sf-dom").value||1); return `${M} ${H} ${dom} * *`; }
+  return "0 2 * * *";
+}
+function cronText(cron) {
+  const p = presetFromCron(cron);
+  const days=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  if (p.freq==="minutes") return `Every ${p.n} minutes`;
+  if (p.freq==="hourly") return `Hourly at :${pad(p.min)}`;
+  if (p.freq==="daily") return `Daily at ${pad(p.H)}:${pad(p.M)}`;
+  if (p.freq==="weekly") return `Weekly on ${days[p.dow]} at ${pad(p.H)}:${pad(p.M)}`;
+  if (p.freq==="monthly") return `Monthly on day ${p.dom} at ${pad(p.H)}:${pad(p.M)}`;
+  return `cron: ${cron}`;
+}
+function updateSched() {
+  const cron = cronFromForm();
+  el("sched-summary").textContent = `${cronText(cron)}  ·  ${cron}`;
+}
+function applyCron(cron) {
+  const p = presetFromCron(cron);
+  el("sched-freq").value = p.freq;
+  if (p.freq === "advanced") {
+    const parts = (cron||"0 2 * * *").split(/\s+/);
+    ["cf-min","cf-hour","cf-dom","cf-mon","cf-dow"].forEach((cid,i)=>el(cid).value=parts[i]||"*");
+  }
+  schedInputs(p);
+}
+
+/* ---------- drawflow node building ---------- */
+function pipeOptions(sel){ return PIPELINES.map(p=>`<option value="${p.id}" ${sel===p.id?"selected":""}>${esc(p.name)}</option>`).join(""); }
+function selOptions(sel){
+  return [...DBT_MODELS.map(m=>`<option value="${esc(m.name)}" ${sel===m.name?"selected":""}>model: ${esc(m.name)}</option>`),
+          ...DBT_TESTS.map(t=>`<option value="${esc(t.name)}" ${sel===t.name?"selected":""}>test: ${esc(t.name)}</option>`)].join("");
+}
+function cmdOptions(sel){ return ["run","test","build"].map(c=>`<option ${sel===c?"selected":""}>${c}</option>`).join(""); }
+function nodeHtml(kind, d) {
+  d = d || {};
+  if (kind === "pipeline")
+    return `<div><div class="dfnode-title"><i class="fa-solid fa-database"></i> Pipeline</div>
+      <div class="dfnode-body"><select df-pipeline_id class="dfnode-field">${pipeOptions(d.pipeline_id)}</select></div></div>`;
+  if (kind === "dbt")
+    return `<div><div class="dfnode-title"><i class="fa-solid fa-cube"></i> dbt</div>
+      <div class="dfnode-body">
+        <select df-dbt_command class="dfnode-field">${cmdOptions(d.dbt_command||"run")}</select>
+        <select df-select class="dfnode-field">${selOptions(d.select)}</select></div></div>`;
+  return `<div><div class="dfnode-title"><i class="fa-solid fa-terminal"></i> Command</div>
+    <div class="dfnode-body"><input df-command class="dfnode-field" placeholder="python tools/x.py" value="${esc(d.command||"")}"></div></div>`;
+}
+function addFlowNode(kind, data, x, y) {
+  const nid = (data && data.node_id) || ("n" + (++nodeSeq));
+  const m = /^n(\d+)$/.exec(nid); if (m) nodeSeq = Math.max(nodeSeq, +m[1]);
+  const nodeData = Object.assign({node_id: nid}, data || {});
+  if (kind === "dbt" && !nodeData.dbt_command) nodeData.dbt_command = "run";
+  return editor.addNode(kind, 1, 1, x, y, kind, nodeData, nodeHtml(kind, nodeData), false);
+}
+
+/* ---------- editor load / collect ---------- */
+function autoLayoutPositions(nodes) {
+  const byId = Object.fromEntries(nodes.map(n=>[n.node_id,n])), depth = {};
+  function d(id, seen){ if (depth[id]!=null) return depth[id]; if (seen.has(id)) return 0; seen.add(id);
+    const deps=(byId[id].deps||[]); depth[id]=deps.length?1+Math.max(...deps.map(x=>d(x,seen))):0; return depth[id]; }
+  nodes.forEach(n=>d(n.node_id,new Set()));
+  const col = {}, pos = {};
+  nodes.forEach(n=>{ const c=depth[n.node_id]; col[c]=(col[c]||0); pos[n.node_id]={x:40+c*240, y:40+col[c]*150}; col[c]++; });
+  return pos;
+}
+function loadEditor(f) {
+  editor.clear(); nodeSeq = 0;
+  const nodes = (f && f.nodes) || [];
+  if (!nodes.length) return;
+  let positions = null;
+  const g = f && f.graph && f.graph.drawflow && f.graph.drawflow.Home && f.graph.drawflow.Home.data;
+  if (g) { positions = {}; for (const id in g) { const nd=g[id].data||{}; positions[nd.node_id||("n"+id)]={x:g[id].pos_x,y:g[id].pos_y}; } }
+  if (!positions) positions = autoLayoutPositions(nodes);
+  const idMap = {};
+  nodes.forEach(n => {
+    const p = positions[n.node_id] || {x:40,y:40};
+    const data = n.kind==="dbt" ? {node_id:n.node_id, dbt_command:(n.dbt||{}).dbt_command, select:(n.dbt||{}).select}
+               : n.kind==="command" ? {node_id:n.node_id, command:n.command}
+               : {node_id:n.node_id, pipeline_id:n.pipeline_id};
+    idMap[n.node_id] = addFlowNode(n.kind, data, p.x, p.y);
   });
+  nodes.forEach(n => (n.deps||[]).forEach(dep => {
+    if (idMap[dep] != null && idMap[n.node_id] != null)
+      editor.addConnection(idMap[dep], idMap[n.node_id], "output_1", "input_1");
+  }));
 }
-function addNode(pre) {
-  nodeSeq++; const id = pre?.node_id || ("n" + nodeSeq);
-  el("f-nodes").insertAdjacentHTML("beforeend", nodeRow(pre || {node_id:id, kind:"pipeline", pipeline_id:(PIPELINES[0]||{}).id, deps:[]}));
-  depOptions(); renderPreview();
-  const row = el("f-nodes").lastElementChild;
-  row.querySelectorAll("select").forEach(s => s.addEventListener("change", () => { depOptions(); renderPreview(); }));
-  const kindSel = row.querySelector(".n-kind");
-  kindSel.addEventListener("change", () => {
-    const isDbt = kindSel.value === "dbt";
-    row.querySelector(".n-pipe").hidden = isDbt;
-    row.querySelector(".n-dbt-cmd").hidden = !isDbt;
-    row.querySelector(".n-dbt-sel").hidden = !isDbt;
-    renderPreview();
-  });
-}
-function rmNode(id) { const r = [...$$("#f-nodes .node-row")].find(x => x.dataset.node===id); if (r) r.remove(); depOptions(); renderPreview(); }
 function collectNodes() {
-  return [...$$("#f-nodes .node-row")].map(r => {
-    const kind = r.querySelector(".n-kind").value;
-    const base = { node_id: r.dataset.node, kind,
-      deps: [...r.querySelector(".n-deps").selectedOptions].map(o => o.value) };
-    if (kind === "dbt") {
-      base.dbt = { dbt_command: r.querySelector(".n-dbt-cmd").value,
-                   select: r.querySelector(".n-dbt-sel").value };
-    } else {
-      base.pipeline_id = r.querySelector(".n-pipe").value;
-    }
-    return base;
-  });
+  const home = editor.export().drawflow.Home.data;
+  const idToNode = {};
+  for (const id in home) idToNode[id] = (home[id].data && home[id].data.node_id) || ("n"+id);
+  const out = [];
+  for (const id in home) {
+    const n = home[id], kind = n.name, data = n.data||{}, deps = [];
+    for (const inName in (n.inputs||{})) (n.inputs[inName].connections||[]).forEach(c => deps.push(idToNode[c.node]));
+    const base = { node_id: idToNode[id], kind, deps };
+    if (kind === "pipeline") base.pipeline_id = data.pipeline_id || (PIPELINES[0]||{}).id;
+    else if (kind === "dbt") base.dbt = { dbt_command: data.dbt_command||"run", select: data.select||"" };
+    else if (kind === "command") base.command = data.command||"";
+    out.push(base);
+  }
+  return out;
 }
-function renderPreview() {
-  const nodes = collectNodes();
-  const byId = Object.fromEntries(PIPELINES.map(p => [p.id, p.name]));
-  el("f-preview").textContent = nodes.map(n => {
-    const what = n.kind === "dbt" ? `dbt ${n.dbt.dbt_command} ${n.dbt.select||"?"}` : (byId[n.pipeline_id]||"?");
-    return `${n.node_id} (${what})` + (n.deps.length ? `  ⟵ ${n.deps.join(", ")}` : "  [root]");
-  }).join("\n") || "—";
-}
+
+/* ---------- save / crud ---------- */
 async function save() {
-  const body = { name: el("f-name").value.trim(), nodes: collectNodes(), cron: cron(),
-    timezone: el("f-tz").value.trim() || "UTC",
+  const nodes = collectNodes();
+  if (!nodes.length) { err("Add at least one node"); return; }
+  const body = { name: el("f-name").value.trim(), nodes, cron: cronFromForm(),
+    timezone: el("f-tz").value, graph: editor.export(),
     email: { on_success: el("f-succ").value, on_failure: el("f-fail").value } };
   try {
     if (editingId) await apiPut(`/api/flows/${editingId}`, body);
     else await apiPost("/api/flows", body);
-    ok("Saved"); resetForm(); load(); showTab("list");
+    ok("Saved"); resetForm(); await load(); showTab("list");
   } catch (e) { err(e.message); }
 }
-function resetForm() { editingId=null; nodeSeq=0; el("f-name").value=""; el("f-nodes").innerHTML=""; el("f-reset").hidden=true; el("f-title").textContent="New flow"; renderPreview(); }
+function resetForm() {
+  editingId=null; nodeSeq=0; el("f-name").value=""; if (editor) editor.clear();
+  el("f-reset").hidden=true; el("f-title").textContent="New flow";
+  el("f-succ").value=""; el("f-fail").value=""; fillTz(SERVER_TZ);
+  el("sched-freq").value="daily"; applyCron("0 2 * * *");
+}
 
 async function load() {
   const d = await apiGet("/api/flows");
-  PIPELINES = d.pipelines; FLOWS = d.flows;
-  try {
-    const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
-    DBT_MODELS = m.models || []; DBT_TESTS = t.tests || [];
-  } catch (e) { DBT_MODELS = []; DBT_TESTS = []; }
+  PIPELINES = d.pipelines; FLOWS = d.flows; SERVER_TZ = d.server_timezone || "UTC";
+  try { const [m,t]=[await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
+        DBT_MODELS=m.models||[]; DBT_TESTS=t.tests||[]; }
+  catch (e) { DBT_MODELS=[]; DBT_TESTS=[]; }
+  if (!editingId) fillTz(SERVER_TZ);
   el("flow-count").textContent = FLOWS.length;
   el("dagster-banner").innerHTML = d.dagster.running
     ? `<div class="banner info">Dagster running — <a href="${d.dagster.url}" target="_blank">open UI</a></div>`
@@ -161,15 +294,14 @@ async function load() {
   renderFlows();
 }
 async function renderFlows() {
-  let status = [];
-  try { status = await apiGet("/api/dagster/flow-status"); } catch (e) {}
-  const byJob = Object.fromEntries(status.map(s => [s.job, s]));
+  let status=[]; try { status=await apiGet("/api/dagster/flow-status"); } catch(e){}
+  const byFlow = Object.fromEntries(status.map(s=>[s.flow_id, s]));
   $("#flows-table tbody").innerHTML = FLOWS.map(f => {
-    const st = byJob[`flow_${f.id}`] || {};
+    const st = byFlow[f.id] || {};
     const link = st.run_link ? `<a href="${st.run_link}" target="_blank">${esc(st.last_run_status||"—")}</a>` : (st.last_run_status||"—");
     return `<tr>
       <td><b>${esc(f.name)}</b></td>
-      <td class="mono">${esc(f.cron)} <span class="muted">${esc(f.timezone)}</span></td>
+      <td>${esc(cronText(f.cron))} <span class="muted mono">${esc(f.timezone)}</span></td>
       <td>${pill(f.enabled ? "ok" : "stopped")}</td>
       <td>${link}</td>
       <td>${f.nodes.length}</td>
@@ -182,12 +314,12 @@ async function renderFlows() {
   }).join("") || `<tr><td colspan="6" class="muted">No flows yet.</td></tr>`;
 }
 function editFlow(id) {
-  const f = FLOWS.find(x => x.id===id); if (!f) return;
+  const f = FLOWS.find(x=>x.id===id); if (!f) return;
   editingId=id; el("f-title").textContent="Edit: "+f.name; el("f-reset").hidden=false;
-  el("f-name").value=f.name; el("f-tz").value=f.timezone;
-  const parts=f.cron.split(/\s+/); ["cf-min","cf-hour","cf-dom","cf-mon","cf-dow"].forEach((cid,i)=>el(cid).value=parts[i]||"*");
+  el("f-name").value=f.name; fillTz(f.timezone);
   el("f-succ").value=(f.email.on_success||[]).join(", "); el("f-fail").value=(f.email.on_failure||[]).join(", ");
-  el("f-nodes").innerHTML=""; f.nodes.forEach(n => addNode(n)); renderPreview();
+  applyCron(f.cron);
+  loadEditor(f);
   showTab("build"); window.scrollTo({top:0,behavior:"smooth"});
 }
 async function runFlow(id){ try{ const r=await apiPost(`/api/flows/${id}/run`,{}); r.ok?ok("Launched run "+r.run_id.slice(0,8)):err(r.error); setTimeout(load,1500);}catch(e){err(e.message);} }
@@ -196,9 +328,35 @@ async function delFlow(id){ if(!confirm("Delete this flow?"))return; try{ await 
 async function startDagster(){ try{ await apiPost("/api/dagster/start",{}); ok("Starting Dagster…"); setTimeout(load,4000);}catch(e){err(e.message);} }
 
 function showTab(t){ $$(".tab").forEach(b=>b.classList.toggle("primary",b.dataset.tab===t)); $$("[data-panel]").forEach(p=>p.hidden=p.dataset.panel!==t); if(t==="list") renderFlows(); }
+
+/* ---------- init ---------- */
+function initEditor() {
+  editor = new Drawflow(el("dfcanvas"));
+  editor.reroute = true;
+  editor.start();
+  const canvas = el("dfcanvas");
+  canvas.addEventListener("dragover", e => e.preventDefault());
+  canvas.addEventListener("drop", e => {
+    e.preventDefault();
+    const kind = e.dataTransfer.getData("kind"); if (!kind) return;
+    const cmd = e.dataTransfer.getData("cmd");
+    const pc = editor.precanvas, z = editor.zoom;
+    const x = e.clientX * (pc.clientWidth / (pc.clientWidth * z)) - (pc.getBoundingClientRect().x * (pc.clientWidth / (pc.clientWidth * z)));
+    const y = e.clientY * (pc.clientHeight / (pc.clientHeight * z)) - (pc.getBoundingClientRect().y * (pc.clientHeight / (pc.clientHeight * z)));
+    addFlowNode(kind, kind==="dbt" ? {dbt_command: cmd||"run"} : {}, x, y);
+  });
+  $$("#palette .chip").forEach(chip => chip.addEventListener("dragstart", e => {
+    e.dataTransfer.setData("kind", chip.dataset.kind);
+    e.dataTransfer.setData("cmd", chip.dataset.cmd || "");
+  }));
+}
+
 $$(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
-el("f-add-node").onclick=()=>addNode();
+el("sched-freq").addEventListener("change", () => schedInputs());
 el("f-save").onclick=save; el("f-reset").onclick=resetForm; el("f-refresh").onclick=load;
+initEditor();
+fillTz(SERVER_TZ);
+applyCron("0 2 * * *");
 load();
 </script>
 {% endblock %}
