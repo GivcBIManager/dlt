@@ -5,19 +5,25 @@
   .flow-build { display:grid; grid-template-columns: 190px 1fr; gap:12px; }
   .palette { display:flex; flex-direction:column; gap:8px; }
   .palette .chip { display:flex; align-items:center; gap:8px; padding:8px 10px;
-    border:1px solid var(--border,#2a3346); border-radius:8px; background:var(--panel-2,#1b1f2a);
+    border:1px solid var(--border, #c4c6d0); border-radius:8px;
+    background:var(--surface-container, #f0f3ff); color:var(--text-primary, #191c20);
     cursor:grab; user-select:none; font-size:.85rem; }
-  .palette .chip:hover { border-color: var(--primary,#5b8cff); }
-  #dfcanvas { position:relative; height:470px; border:1px solid var(--border,#2a3346);
-    border-radius:10px; background:var(--panel,#12151d); overflow:hidden; }
-  .drawflow .drawflow-node { background:#1b2130; border:1px solid #2a3346; border-radius:10px;
-    color:#e6e9ef; min-width:190px; padding:0; box-shadow:0 2px 10px rgba(0,0,0,.25); }
-  .drawflow .drawflow-node.selected { border-color: var(--primary,#5b8cff); }
-  .dfnode-title { font-weight:600; padding:8px 10px; border-bottom:1px solid #2a3346;
+  .palette .chip i { color:var(--primary, #0c5a91); width:16px; text-align:center; }
+  .palette .chip:hover { border-color:var(--primary, #0c5a91); background:var(--surface-container-high, #e8edfb); }
+  #dfcanvas { position:relative; height:470px; border:1px solid var(--border, #c4c6d0);
+    border-radius:10px; background:var(--surface-low, #f9f9ff);
+    background-image:radial-gradient(var(--border-soft, #dbe1ee) 1px, transparent 1px);
+    background-size:18px 18px; overflow:hidden; }
+  .drawflow .drawflow-node { background:var(--surface, #fff); border:1px solid var(--border, #c4c6d0);
+    border-radius:10px; color:var(--text-primary, #191c20); min-width:190px; padding:0;
+    box-shadow:var(--shadow-sm, 0 1px 3px rgba(12,90,145,.10)); }
+  .drawflow .drawflow-node.selected { border-color:var(--primary, #0c5a91); box-shadow:var(--shadow, 0 4px 16px rgba(12,90,145,.12)); }
+  .dfnode-title { font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border-soft, #dbe1ee);
     display:flex; gap:8px; align-items:center; }
+  .dfnode-title i { color:var(--primary, #0c5a91); }
   .dfnode-body { padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
   .dfnode-field { width:100%; }
-  .drawflow .drawflow-node .input, .drawflow .drawflow-node .output { background:var(--primary,#5b8cff); }
+  .drawflow .drawflow-node .input, .drawflow .drawflow-node .output { background:var(--primary, #0c5a91); border-color:var(--primary-dark, #084670); }
   .sched-grid { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
   .sched-hint { margin-top:6px; }
 </style>
