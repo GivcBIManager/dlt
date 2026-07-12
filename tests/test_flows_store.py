@@ -86,3 +86,45 @@ def test_mixed_flow_and_referencing(state_dir):
     f = fs.add_flow("mixed", nodes, "0 2 * * *", "UTC", {})
     # dbt node must not blow up referencing_flows (no pipeline_id key)
     assert [r["id"] for r in fs.referencing_flows(pa)] == [f["id"]]
+
+
+def test_validate_accepts_command_node():
+    import flows_store as fs
+    node = {"node_id": "c1", "kind": "command", "command": "python tools/x.py", "deps": []}
+    fs.validate_flow([node], known_pipeline_ids=set())  # must not raise
+
+
+def test_validate_rejects_command_without_command():
+    import flows_store as fs
+    bad = {"node_id": "c1", "kind": "command", "command": "   ", "deps": []}
+    with pytest.raises(ValueError, match="command"):
+        fs.validate_flow([bad], known_pipeline_ids=set())
+
+
+def test_add_flow_rejects_bad_timezone(state_dir):
+    import flows_store as fs
+    pa, _ = _seed_pipelines(state_dir)
+    nodes = [{"node_id": "n1", "pipeline_id": pa, "deps": []}]
+    with pytest.raises(ValueError, match="[Tt]imezone"):
+        fs.add_flow("tzbad", nodes, "0 2 * * *", "Not/AZone", {})
+
+
+def test_add_flow_accepts_valid_tz_and_stores_graph(state_dir):
+    import flows_store as fs
+    pa, _ = _seed_pipelines(state_dir)
+    nodes = [{"node_id": "n1", "pipeline_id": pa, "deps": []}]
+    graph = {"drawflow": {"Home": {"data": {"1": {"id": 1, "name": "pipeline"}}}}}
+    f = fs.add_flow("tzok", nodes, "0 2 * * *", "Asia/Riyadh", {}, graph=graph)
+    got = fs.get_flow(f["id"])
+    assert got["timezone"] == "Asia/Riyadh"
+    assert got["graph"] == graph
+
+
+def test_update_flow_persists_graph(state_dir):
+    import flows_store as fs
+    pa, _ = _seed_pipelines(state_dir)
+    nodes = [{"node_id": "n1", "pipeline_id": pa, "deps": []}]
+    f = fs.add_flow("upd", nodes, "0 2 * * *", "UTC", {})
+    g = {"drawflow": {"Home": {"data": {}}}}
+    fs.update_flow(f["id"], graph=g)
+    assert fs.get_flow(f["id"])["graph"] == g

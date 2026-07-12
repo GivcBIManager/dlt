@@ -28,6 +28,14 @@ def validate_cron(expr: str) -> None:
         raise ValueError("Cron expression must have 5 valid fields (min hour dom mon dow)")
 
 
+def validate_timezone(tz: str) -> None:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        ZoneInfo((tz or "").strip())
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise ValueError(f"Unknown timezone: {tz!r}") from exc
+
+
 def validate_flow(nodes: list[dict[str, Any]], *, known_pipeline_ids: set[str]) -> None:
     if not nodes:
         raise ValueError("A flow needs at least one node")
@@ -49,6 +57,9 @@ def validate_flow(nodes: list[dict[str, Any]], *, known_pipeline_ids: set[str]) 
                     f"Node {n['node_id']}: dbt command must be one of {sorted(_DBT_NODE_COMMANDS)}")
             if not str(dbt.get("select") or "").strip():
                 raise ValueError(f"Node {n['node_id']}: dbt node needs a non-empty 'select'")
+        elif kind == "command":
+            if not str(n.get("command") or "").strip():
+                raise ValueError(f"Node {n['node_id']}: command node needs a non-empty 'command'")
         else:
             raise ValueError(f"Node {n['node_id']}: unknown kind {kind!r}")
         for d in n.get("deps", []):
@@ -118,19 +129,24 @@ def _normalize_email(email: dict[str, Any] | None) -> dict[str, list[str]]:
 
 
 def add_flow(name: str, nodes: list[dict[str, Any]], cron: str, timezone: str,
-             email: dict[str, Any] | None, enabled: bool = True) -> dict[str, Any]:
+             email: dict[str, Any] | None, enabled: bool = True,
+             graph: dict[str, Any] | None = None) -> dict[str, Any]:
     name = (name or "").strip()
     if not name:
         raise ValueError("Flow name is required")
     validate_cron(cron)
+    tz = (timezone or "UTC").strip()
+    validate_timezone(tz)
     validate_flow(nodes, known_pipeline_ids=_known_pipeline_ids())
     items = _load()
     if any(f["name"] == name for f in items):
         raise ValueError(f"Flow '{name}' already exists")
     f = {"id": uuid.uuid4().hex[:8], "name": name, "nodes": nodes,
-         "cron": cron.strip(), "timezone": (timezone or "UTC").strip(),
+         "cron": cron.strip(), "timezone": tz,
          "email": _normalize_email(email), "enabled": bool(enabled),
          "created_at": datetime.now().isoformat(timespec="seconds")}
+    if graph is not None:
+        f["graph"] = graph
     items.append(f)
     _save(items)
     return f
@@ -144,9 +160,11 @@ def update_flow(fid: str, **fields: Any) -> dict[str, Any]:
                 raise ValueError("Flow name cannot be empty")
             if fields.get("cron") is not None:
                 validate_cron(fields["cron"])
+            if fields.get("timezone") is not None:
+                validate_timezone(fields["timezone"])
             if fields.get("nodes") is not None:
                 validate_flow(fields["nodes"], known_pipeline_ids=_known_pipeline_ids())
-            for k in ("name", "nodes", "cron", "timezone", "enabled"):
+            for k in ("name", "nodes", "cron", "timezone", "enabled", "graph"):
                 if fields.get(k) is not None:
                     f[k] = fields[k]
             if fields.get("email") is not None:
