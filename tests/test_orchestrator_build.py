@@ -20,31 +20,33 @@ def _seed(state_dir):
     }]))
 
 
-def test_build_all_defs_creates_assets_job_schedule(state_dir, monkeypatch):
+def _wire(monkeypatch):
     import config
-    from orchestrator import build, state
+    from orchestrator import state
     monkeypatch.setattr(state._gui_config, "PIPELINES_JSON", config.PIPELINES_JSON)
     monkeypatch.setattr(state._gui_config, "FLOWS_JSON", config.FLOWS_JSON)
+
+
+def test_build_all_defs_uses_readable_names(state_dir, monkeypatch):
+    from orchestrator import build
+    _wire(monkeypatch)
     _seed(state_dir)
 
     defs = build.build_all_defs()
     keys = {a.key for a in defs.resolve_all_asset_specs()}
-    assert dg.AssetKey(["flow_f1", "n1"]) in keys
-    assert dg.AssetKey(["flow_f1", "n2"]) in keys
-    # n2 depends on n1
+    assert dg.AssetKey(["nightly__f1", "n1"]) in keys
+    assert dg.AssetKey(["nightly__f1", "n2"]) in keys
     spec_n2 = next(a for a in defs.resolve_all_asset_specs()
-                   if a.key == dg.AssetKey(["flow_f1", "n2"]))
-    assert dg.AssetKey(["flow_f1", "n1"]) in {d.asset_key for d in spec_n2.deps}
-    assert defs.get_schedule_def("flow_f1_schedule").cron_schedule == "0 2 * * *"
+                   if a.key == dg.AssetKey(["nightly__f1", "n2"]))
+    assert dg.AssetKey(["nightly__f1", "n1"]) in {d.asset_key for d in spec_n2.deps}
+    assert spec_n2.group_name == "nightly"
+    assert defs.get_schedule_def("flow_nightly__f1_schedule").cron_schedule == "0 2 * * *"
+    assert defs.get_job_def("flow_nightly__f1") is not None
 
 
 def test_build_all_defs_handles_dbt_node(state_dir, monkeypatch):
-    import json
-    import config
-    import dagster as dg
-    from orchestrator import build, state
-    monkeypatch.setattr(state._gui_config, "PIPELINES_JSON", config.PIPELINES_JSON)
-    monkeypatch.setattr(state._gui_config, "FLOWS_JSON", config.FLOWS_JSON)
+    from orchestrator import build
+    _wire(monkeypatch)
     (state_dir / "pipelines.json").write_text("[]")
     (state_dir / "flows.json").write_text(json.dumps([{
         "id": "f9", "name": "materialize",
@@ -55,4 +57,21 @@ def test_build_all_defs_handles_dbt_node(state_dir, monkeypatch):
     }]))
     defs = build.build_all_defs()
     keys = {a.key for a in defs.resolve_all_asset_specs()}
-    assert dg.AssetKey(["flow_f9", "m1"]) in keys
+    assert dg.AssetKey(["materialize__f9", "m1"]) in keys
+
+
+def test_build_all_defs_handles_command_node(state_dir, monkeypatch):
+    from orchestrator import build
+    _wire(monkeypatch)
+    (state_dir / "pipelines.json").write_text("[]")
+    (state_dir / "flows.json").write_text(json.dumps([{
+        "id": "f7", "name": "notify",
+        "nodes": [{"node_id": "c1", "kind": "command",
+                   "command": "python tools/notify.py", "deps": []}],
+        "cron": "0 4 * * *", "timezone": "UTC",
+        "email": {"on_success": [], "on_failure": []}, "enabled": True,
+    }]))
+    defs = build.build_all_defs()
+    keys = {a.key for a in defs.resolve_all_asset_specs()}
+    assert dg.AssetKey(["notify__f7", "c1"]) in keys
+    assert defs.get_job_def("flow_notify__f7") is not None

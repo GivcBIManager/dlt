@@ -15,15 +15,15 @@ from dagster import MaterializeResult, MetadataValue, Failure, AssetKey
 from orchestrator import state
 
 
-def asset_key(flow_id: str, node_id: str) -> AssetKey:
-    return AssetKey([f"flow_{flow_id}", node_id])
+def asset_key(prefix: str, node_id: str) -> AssetKey:
+    return AssetKey([prefix, node_id])
 
 
-def build_asset(flow_id: str, node_id: str, name: str, spec: dict[str, Any],
-                dep_keys: list[AssetKey]) -> dg.AssetsDefinition:
-    key = asset_key(flow_id, node_id)
+def build_asset(prefix: str, group: str, node_id: str, name: str,
+                spec: dict[str, Any], dep_keys: list[AssetKey]) -> dg.AssetsDefinition:
+    key = asset_key(prefix, node_id)
 
-    @dg.asset(key=key, deps=dep_keys, group_name=f"flow_{flow_id}",
+    @dg.asset(key=key, deps=dep_keys, group_name=group,
               description=name, compute_kind="subprocess")
     def _asset(context: dg.AssetExecutionContext) -> MaterializeResult:
         state.ensure_dbt_profiles(spec)

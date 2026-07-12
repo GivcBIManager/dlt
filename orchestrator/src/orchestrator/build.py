@@ -18,35 +18,44 @@ _log = logging.getLogger("orchestrator.build")
 
 
 def _build_flow(flow: dict, pipelines: dict[str, dict]):
-    flow_id = flow["id"]
+    prefix = state.flow_naming.asset_key_prefix(flow)
+    group = state.flow_naming.group_name(flow)
     node_ids = {n["node_id"] for n in flow["nodes"]}
     flow_assets = []
     for node in flow["nodes"]:
-        dep_keys = [asset_mod.asset_key(flow_id, d) for d in node.get("deps", [])]
+        dep_keys = [asset_mod.asset_key(prefix, d) for d in node.get("deps", [])]
         for d in node.get("deps", []):
             if d not in node_ids:
-                raise ValueError(f"flow {flow_id}: unknown dep {d}")
+                raise ValueError(f"flow {flow['id']}: unknown dep {d}")
         kind = node.get("kind", "pipeline")
         if kind == "dbt":
             dbt = node.get("dbt") or {}
             spec = {"script": "dbt", "dbt_command": dbt.get("dbt_command", "run"),
                     "select": dbt.get("select", "")}
             name = f"dbt {spec['dbt_command']} {spec['select']}".strip()
+        elif kind == "command":
+            cmd = (node.get("command") or "").strip()
+            if not cmd:
+                raise ValueError(f"flow {flow['id']}: command node {node['node_id']} is empty")
+            spec = {"script": "custom", "custom": cmd}
+            name = f"custom: {cmd[:40]}"
         else:
             pid = node["pipeline_id"]
             if pid not in pipelines:
-                raise ValueError(f"flow {flow_id}: unknown pipeline {pid}")
+                raise ValueError(f"flow {flow['id']}: unknown pipeline {pid}")
             spec = pipelines[pid]["spec"]
             name = pipelines[pid].get("name", node["node_id"])
         flow_assets.append(asset_mod.build_asset(
-            flow_id, node["node_id"], name, spec, dep_keys))
+            prefix, group, node["node_id"], name, spec, dep_keys))
 
+    node_keys = [asset_mod.asset_key(prefix, n["node_id"]) for n in flow["nodes"]]
     job = dg.define_asset_job(
-        f"flow_{flow_id}", selection=dg.AssetSelection.groups(f"flow_{flow_id}"))
+        state.flow_naming.job_name(flow),
+        selection=dg.AssetSelection.assets(*node_keys))
 
     enabled = flow.get("enabled", True)
     schedule = dg.ScheduleDefinition(
-        name=f"flow_{flow_id}_schedule",
+        name=state.flow_naming.schedule_name(flow),
         job=job,
         cron_schedule=flow["cron"],
         execution_timezone=flow.get("timezone", "UTC"),
@@ -56,7 +65,7 @@ def _build_flow(flow: dict, pipelines: dict[str, dict]):
 
     email = flow.get("email", {})
     sensors = email_mod.build_email_sensors(
-        flow_id, flow["name"], job,
+        state.flow_naming.base_name(flow), flow["name"], job,
         email.get("on_success", []), email.get("on_failure", []))
 
     return flow_assets, job, schedule, sensors

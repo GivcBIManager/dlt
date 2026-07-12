@@ -27,6 +27,7 @@ if str(_gui_dir) not in sys.path:
 
 import commands as _commands  # noqa: E402  (after sys.path insert)
 import config as _gui_config  # noqa: E402
+import flow_naming  # noqa: E402  (re-exported so orchestrator modules share GUI naming)
 
 build_argv = _commands.build_argv
 

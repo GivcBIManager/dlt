@@ -90,13 +90,13 @@ def _send_for_run(context, status: str, recipients: list[str], flow_name: str,
     context.log.info("Sent %s email to %s", status, recipients)
 
 
-def build_email_sensors(flow_id: str, flow_name: str, job: Any,
+def build_email_sensors(base: str, flow_name: str, job: Any,
                         success_to: list[str], failure_to: list[str]) -> list:
     sensors: list[Any] = []
 
     if success_to:
         @dg.run_status_sensor(
-            name=f"flow_{flow_id}_success_email",
+            name=f"flow_{base}_success_email",
             run_status=dg.DagsterRunStatus.SUCCESS,
             monitored_jobs=[job],
             default_status=dg.DefaultSensorStatus.RUNNING,
@@ -108,7 +108,7 @@ def build_email_sensors(flow_id: str, flow_name: str, job: Any,
 
     if failure_to:
         @dg.run_failure_sensor(
-            name=f"flow_{flow_id}_failure_email",
+            name=f"flow_{base}_failure_email",
             monitored_jobs=[job],
             default_status=dg.DefaultSensorStatus.RUNNING,
         )
