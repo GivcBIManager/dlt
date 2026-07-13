@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %} · Settings{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1><i class="fa-solid fa-sliders"></i> Settings</h1>
+  <p>ETL tuning knobs stored in <span class="mono">.dlt/config.toml [etl]</span>. Changes apply to the next run — running jobs are not affected.</p>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-sliders"></i> ETL settings</h2>
+    <div class="row-flex">
+      <small class="mono muted">.dlt/config.toml [etl]</small>
+      <button class="btn sm ghost" id="edit-settings"><i class="fa-solid fa-pen"></i> Edit</button>
+      <button class="btn sm primary" id="save-settings" hidden><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      <button class="btn sm ghost" id="cancel-settings" hidden>Cancel</button>
+    </div>
+  </div>
+  <p class="hint" style="margin:-6px 0 14px">Saving edits the file in place (comments preserved) and keeps a timestamped backup. CLI flags on a run override these values. Locked <i class="fa-solid fa-lock" style="font-size:10px"></i> entries are informational — edit them directly in the file.</p>
+  <div id="settings-groups" class="settings-groups"><div class="muted">Loading…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Presentation metadata for the [etl] block. Keys editable here mirror
+// workspace.EDITABLE_ETL_KEYS; everything else renders locked.
+const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
+  "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode",
+  "dq_hash_delta_tolerance_pct"]);
+const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
+  "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
+  "snapshot_expire_days","snapshot_min_to_keep","dq_hash_delta_tolerance_pct"]);
+
+const GROUPS = [
+  { icon: "fa-tag", title: "Pipeline identity", blurb: "What the pipeline is called and where it writes.",
+    keys: [
+      { k: "pipeline_name",  label: "Pipeline name", help: "dlt pipeline id — also names the local working directory." },
+      { k: "dataset_name",   label: "Dataset name",  help: "Target dataset (schema) in the staging layer." },
+      { k: "_bucket_url",    label: "Destination bucket", mono: true,
+        help: "Iceberg warehouse location ([destination.filesystem].bucket_url)." },
+    ]},
+  { icon: "fa-bolt", title: "Concurrency", blurb: "Peak extraction memory scales with branch × table workers.",
+    keys: [
+      { k: "max_branch_workers", label: "Branch workers", unit: "parallel", help: "Branches extracted at the same time (outer pool)." },
+      { k: "max_table_workers",  label: "Table workers",  unit: "per branch", help: "Tables extracted in parallel within each branch." },
+    ]},
+  { icon: "fa-database", title: "Oracle connection", blurb: "Driver mode and the per-branch session pool.",
+    keys: [
+      { k: "dsn_mode",   label: "DSN mode", options: ["service_name", "sid"], help: "How connect strings are built from branch config." },
+      { k: "pool_min",       label: "Pool min",       unit: "conns", help: "Connections opened up-front per branch pool." },
+      { k: "pool_max",       label: "Pool max",       unit: "conns", help: "Hard cap on connections per branch pool." },
+      { k: "pool_increment", label: "Pool increment", unit: "conns", help: "Connections added when the pool grows." },
+      { k: "pool_acquire_timeout_s", label: "Acquire timeout", unit: "s", help: "Wait for a free pooled connection before retrying." },
+      { k: "pool_acquire_attempts",  label: "Acquire attempts", unit: "tries", help: "Acquire retries before the table errors out." },
+      { k: "thick_mode", label: "Thick mode", help: "Oracle 11g requires the thick (Instant Client) driver." },
+      { k: "oracle_client_lib_dir", label: "Instant Client dir", mono: true,
+        help: "Ignored when missing on this host; $ORACLE_CLIENT_LIB_DIR overrides." },
+    ]},
+  { icon: "fa-rotate-right", title: "Resilience", blurb: "Retry policy for connection failures.",
+    keys: [
+      { k: "max_retries",      label: "Max retries",    unit: "attempts", help: "Retry attempts after a connection failure (0 = fail fast)." },
+      { k: "retry_interval_s", label: "Retry interval", unit: "s", help: "Pause between retry attempts." },
+    ]},
+  { icon: "fa-clock-rotate-left", title: "Snapshot retention", blurb: "Iceberg snapshots expired after each load.",
+    keys: [
+      { k: "snapshot_maintenance",  label: "Maintenance", help: "Expire old snapshots automatically after each load." },
+      { k: "snapshot_expire_days",  label: "Keep for", unit: "days", help: "Snapshots older than this are expired." },
+      { k: "snapshot_min_to_keep",  label: "Min to keep", unit: "snapshots", help: "Always retained, regardless of age." },
+    ]},
+  { icon: "fa-scale-balanced", title: "Data quality", blurb: "Oracle ↔ Iceberg reconciliation tolerance.",
+    keys: [
+      { k: "dq_hash_delta_tolerance_pct", label: "Hash-delta tolerance", unit: "%",
+        help: "Row-hash drift within this percent reports WITHIN_TOLERANCE instead of MISMATCH (0 = strict). Row-count drift is always a hard mismatch." },
+    ]},
+];
+
+let SETTINGS = {};
+let editingSettings = false;
+
+function fmtValue(k, v, meta) {
+  if (typeof v === "boolean" || v === "true" || v === "false") {
+    const on = v === true || v === "true";
+    return `<span class="tag ${on ? "tag-on" : "tag-off"}">${on ? "on" : "off"}</span>`;
+  }
+  const unit = meta.unit ? ` <small>${esc(meta.unit)}</small>` : "";
+  return esc(v) + unit;
+}
+
+function renderRow(meta) {
+  const k = meta.k, v = SETTINGS[k];
+  const editable = SET_EDITABLE.has(k);
+  const lock = editable ? "" : ` <i class="fa-solid fa-lock" title="Not editable here — change it in .dlt/config.toml"></i>`;
+  let valueHtml;
+  if (editingSettings && editable) {
+    if (meta.options) {
+      valueHtml = `<select class="set-input" data-k="${esc(k)}">` +
+        meta.options.map(o => `<option ${o === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("") + `</select>`;
+    } else {
+      const type = SET_NUMERIC.has(k) ? "number" : "text";
+      valueHtml = `<input class="set-input" data-k="${esc(k)}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(v)}">`;
+    }
+  } else {
+    valueHtml = `<span class="setting-value${meta.mono ? " mono" : ""}">${fmtValue(k, v, meta)}</span>`;
+  }
+  return `<div class="setting-row">
+    <div class="setting-meta">
+      <div class="setting-label">${esc(meta.label)}${lock}</div>
+      <div class="setting-help">${esc(meta.help || "")} <span class="setting-key">${esc(k.replace(/^_/, ""))}</span></div>
+    </div>
+    ${valueHtml}
+  </div>`;
+}
+
+function renderSettings() {
+  const known = new Set(GROUPS.flatMap(g => g.keys.map(m => m.k)));
+  const extras = Object.keys(SETTINGS).filter(k => !known.has(k)).sort()
+    .map(k => ({ k, label: k.replace(/^_/, "").replace(/_/g, " "), help: "" }));
+  const groups = extras.length
+    ? [...GROUPS, { icon: "fa-ellipsis", title: "Other", blurb: "Keys without a curated description.", keys: extras }]
+    : GROUPS;
+  el("settings-groups").innerHTML = groups.map(g => {
+    const rows = g.keys.filter(m => SETTINGS[m.k] !== undefined);
+    if (!rows.length) return "";
+    return `<div class="settings-group">
+      <div class="settings-group-head">
+        <i class="fa-solid ${g.icon}"></i>
+        <div><h3>${esc(g.title)}</h3><p>${esc(g.blurb)}</p></div>
+      </div>
+      ${rows.map(renderRow).join("")}
+    </div>`;
+  }).join("");
+}
+
+function toggleEditSettings(on) {
+  editingSettings = on;
+  el("edit-settings").hidden = on;
+  el("save-settings").hidden = !on;
+  el("cancel-settings").hidden = !on;
+  renderSettings();
+}
+
+async function saveSettings() {
+  const updates = {};
+  $$(".set-input").forEach(inp => {
+    const k = inp.dataset.k;
+    let v = inp.value.trim();
+    if (SET_NUMERIC.has(k)) { if (v === "") return; v = Number(v); }
+    if (String(v) !== String(SETTINGS[k])) updates[k] = v;   // only write what changed
+  });
+  if (!Object.keys(updates).length) { toggleEditSettings(false); return; }
+  try {
+    const r = await apiPut("/api/settings", updates);
+    Object.assign(SETTINGS, r.applied);
+    ok(`Saved ${Object.keys(r.applied).length} setting(s)`);
+    toggleEditSettings(false);
+  } catch (e) { err(e.message); }
+}
+
+async function loadSettings() {
+  try { SETTINGS = await apiGet("/api/settings") || {}; renderSettings(); }
+  catch (e) { err(e.message); }
+}
+
+el("edit-settings").onclick = () => toggleEditSettings(true);
+el("cancel-settings").onclick = () => toggleEditSettings(false);
+el("save-settings").onclick = saveSettings;
+loadSettings();
+</script>
+{% endblock %}

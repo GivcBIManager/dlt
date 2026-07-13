@@ -69,6 +69,9 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* The hidden attribute must win over display rules like .btn { display:inline-flex }. */
+[hidden] { display: none !important; }
+
 body {
   font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', sans-serif;
   background: var(--background);
@@ -121,12 +124,11 @@ small { color: var(--text-muted); }
   display: flex; align-items: center; justify-content: center;
   background: #fff;
   border-radius: 10px;
-  padding: 7px 9px;
+  padding: 6px 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
 }
-.sidebar-logo img { height: 26px; width: auto; display: block; }
-.sidebar-brand h1 { font-size: 1.05rem; font-weight: 800; color: #fff; line-height: 1.2; letter-spacing: -.01em; }
-.sidebar-brand p { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, .7); text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; }
+.sidebar-logo img { height: 32px; width: auto; display: block; }
+.sidebar-brand h1 { font-size: 1.15rem; font-weight: 800; color: #fff; line-height: 1.2; letter-spacing: -.01em; }
 
 .sidebar-nav { flex: 1; overflow-y: auto; padding: 14px 10px; }
 .sidebar-nav ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
@@ -537,13 +539,47 @@ select[multiple] { height: 150px; }
 .cron-grid label { margin: 0 0 4px; }
 .cron-grid input { text-align: center; }
 
-/* ===================== Editable settings cards (Dashboard) ===================== */
+/* ===================== Settings page ===================== */
 .card .v { overflow-wrap: anywhere; word-break: break-word; }
-.card .v input.set-input {
-  width: 100%; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);
-  padding: .35rem .5rem; margin-top: 2px;
+.settings-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; align-items: start; }
+@media (max-width: 860px) { .settings-groups { grid-template-columns: 1fr; } }
+.settings-group {
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm);
 }
-.card .k i.fa-lock { font-size: 10px; margin-left: 4px; }
+.settings-group-head {
+  display: flex; align-items: center; gap: 12px; padding: 13px 16px;
+  background: var(--surface-low); border-bottom: 1px solid var(--border-soft);
+}
+.settings-group-head > i {
+  color: var(--primary); font-size: 15px; width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary-container); border-radius: var(--radius-md);
+}
+.settings-group-head h3 { font-size: .92rem; font-weight: 700; line-height: 1.3; }
+.settings-group-head p { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 16px; }
+.setting-row + .setting-row { border-top: 1px solid var(--border-soft); }
+.setting-meta { min-width: 0; }
+.setting-label { font-size: .86rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.setting-label .fa-lock { font-size: 10px; color: var(--text-light); }
+.setting-help { font-size: 11px; color: var(--text-muted); line-height: 1.45; margin-top: 1px; }
+.setting-key {
+  font-family: var(--mono); font-size: 10px; color: var(--text-light);
+  background: var(--surface-container); border-radius: 4px; padding: 0 5px; white-space: nowrap;
+}
+.setting-value { font-weight: 700; font-size: .95rem; white-space: nowrap; flex-shrink: 0; }
+.setting-value small { font-weight: 500; color: var(--text-muted); font-size: 11px; margin-left: 2px; }
+.setting-value.mono {
+  font-family: var(--mono); font-weight: 500; font-size: 12px;
+  white-space: normal; overflow-wrap: anywhere; text-align: right; max-width: 55%;
+}
+.setting-row input.set-input, .setting-row select.set-input {
+  width: 150px; flex-shrink: 0; padding: .4rem .6rem; text-align: right; font-weight: 600;
+}
+.setting-row select.set-input { text-align: left; }
+.tag.tag-on { background: var(--success-light); color: #065f46; border-color: #a7f3d0; }
+.tag.tag-off { background: var(--surface-container-high); color: var(--text-muted); }
 
 /* ===================== Iceberg explorer ===================== */
 /* Let grid children shrink so wide tables scroll instead of stretching the page. */

@@ -158,6 +158,11 @@ def page_models():
     return render_template("dbt.html", active="models")
 
 
+@app.route("/settings")
+def page_settings():
+    return render_template("settings.html", active="settings")
+
+
 # --------------------------------------------------------------------------- #
 # Workspace / dashboard API
 # --------------------------------------------------------------------------- #
