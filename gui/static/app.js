@@ -2,9 +2,11 @@
 
 async function api(method, url, body) {
   const opts = { method, headers: {} };
-  if (body !== undefined) {
+  if (method !== "GET") {
+    // The server's CSRF gate requires application/json on EVERY mutating
+    // request, including body-less ones (POST .../test, .../stop, DELETE ...).
     opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
+    opts.body = JSON.stringify(body === undefined ? {} : body);
   }
   const res = await fetch(url, opts);
   let data = null;
