@@ -245,8 +245,20 @@ def test_connection(key: str) -> dict[str, Any]:
     if thick:
         try:
             oracledb.init_oracle_client(lib_dir=lib_dir or None)
-        except Exception:  # noqa: BLE001 - already initialised / lib missing
-            pass
+        except Exception as exc:  # noqa: BLE001 - already initialised OR lib missing
+            # Re-init after a successful init also raises; only report when the
+            # driver is genuinely still thin — otherwise 11g fails later with a
+            # cryptic DPY-3010 instead of the real cause (no Instant Client).
+            try:
+                still_thin = oracledb.is_thin_mode()
+            except Exception:  # noqa: BLE001
+                still_thin = True
+            if still_thin:
+                return {"ok": False, "error":
+                        f"thick_mode is on but the Oracle Instant Client could not be "
+                        f"loaded on this host: {exc} — install Instant Client and set "
+                        f"[etl].oracle_client_lib_dir in .dlt/config.toml (or add it to "
+                        f"the system loader path, e.g. ldconfig on Linux)."}
     try:
         dsn = (oracledb.makedsn(sec["host"], int(sec["port"]), sid=sec["database"])
                if dsn_mode == "sid"
