@@ -24,7 +24,7 @@
 <!-- editor + actions -->
 <div class="panel">
   <div class="panel-head">
-    <h2 style="flex:1">Editor <span id="cur-file" class="mono muted">— no file —</span>
+    <h2 style="flex:1">Editor <span id="cur-file" class="mono muted">— no file —</span><span id="dirty-dot" title="Unsaved changes" style="color:var(--warning);margin-left:6px" hidden>●</span>
       <span id="new-fields" class="row-flex" style="display:none">
         <span id="new-prefix" class="mono muted">models/</span>
         <input id="new-name" placeholder="file_name" style="width:170px" spellcheck="false">
@@ -53,6 +53,7 @@
 <!-- output -->
 <div class="panel">
   <div class="panel-head"><h2>Output <span id="run-status"></span></h2></div>
+  <div id="dbt-tail-banner" class="banner warn" role="status" hidden></div>
   <div id="dbt-console" class="console">Run a model or test to see output…</div>
 </div>
 
@@ -74,7 +75,17 @@
 {% block scripts %}
 <script>
 let MODELS = [], TESTS = [], curFile = null, curSel = null, newKind = null,
-    tailTimer = null, tailOffset = 0;
+    tailTimer = null, tailOffset = 0, tailFails = 0;
+const DBT_BTNS = ["btn-run", "btn-test", "btn-compile", "btn-debug"];
+function setDbtBusy(busy) { DBT_BTNS.forEach(id => { const b = el(id); if (b) b.disabled = busy; }); }
+function setDbtBanner(html) {
+  const b = el("dbt-tail-banner");
+  if (!b) return;
+  b.innerHTML = html;
+  b.hidden = !html;
+  b.className = "banner " + (/Connection lost/.test(html) ? "error" : "warn");
+}
+function reconnectDbtTail(id) { tailFails = 0; setDbtBanner("Reconnecting…"); setDbtBusy(true); tailRun(id); }
 
 // ---- connection health (auto dbt debug on load) ------------------------- //
 function healthPill(cls, label) { return `<span class="pill ${cls}">${esc(label)}</span>`; }
@@ -108,19 +119,39 @@ function renderFileTable(rows, emptyMsg) {
   return `<div class="table-wrap" style="max-height:260px"><table>${head}<tbody>${body}</tbody></table></div>`;
 }
 async function loadLists() {
-  const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
-  MODELS = m.models || []; TESTS = t.tests || [];
-  el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
-  el("models-list").innerHTML = renderFileTable(MODELS, "No models yet.");
-  el("tests-list").innerHTML = renderFileTable(TESTS, "No tests yet.");
+  try {
+    const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
+    MODELS = m.models || []; TESTS = t.tests || [];
+    el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
+    el("models-list").innerHTML = renderFileTable(MODELS, "No models yet.");
+    el("tests-list").innerHTML = renderFileTable(TESTS, "No tests yet.");
+  } catch (e) {
+    // Don't leave the panels silently blank on an API failure.
+    el("models-list").innerHTML =
+      `<div class="banner error">Couldn't load models: ${esc(e.message)} ` +
+      `<a href="#" onclick="loadLists();return false;">Retry</a></div>`;
+    el("tests-list").innerHTML = "";
+    err(e.message);
+  }
 }
 
 // ---- editor: open / save / new / delete --------------------------------- //
+// Dirty-state guard: never silently discard unsaved edits.
+let savedContent = "";
+function isDirty() { const e = el("editor"); return !!e && e.value !== savedContent; }
+function updateDirty() { const d = el("dirty-dot"); if (d) d.hidden = !isDirty(); }
+function setEditor(content) { el("editor").value = content; savedContent = content; updateDirty(); }
+function markClean() { savedContent = el("editor").value; updateDirty(); }
+function confirmDiscard() {
+  return !isDirty() || confirm("Discard unsaved changes to the current file?");
+}
+
 async function openFile(path, name) {
+  if (!confirmDiscard()) return;
   exitNew();
   try { const r = await apiGet("/api/dbt/file?path=" + encodeURIComponent(path));
     curFile = path; curSel = name; el("cur-file").textContent = path;
-    el("editor").value = r.content;
+    setEditor(r.content);
   } catch (e) { err(e.message); }
 }
 
@@ -132,6 +163,7 @@ function exitNew() {
 }
 
 async function startNew(kind) {
+  if (!confirmDiscard()) return;
   newKind = kind; curFile = null; curSel = null;
   el("cur-file").style.display = "none";
   el("new-fields").style.display = "";
@@ -142,7 +174,7 @@ async function startNew(kind) {
   try {
     const mat = el("new-mat").value || "table";
     const r = await apiGet(`/api/dbt/template?kind=${kind}&materialization=${encodeURIComponent(mat)}`);
-    el("editor").value = r.content;
+    setEditor(r.content);
   } catch (e) { err(e.message); }
   el("new-name").focus();
 }
@@ -155,16 +187,17 @@ async function onMatChange() {
   const cur = el("editor").value;
   if (/materialized\s*=\s*['"]\w+['"]/.test(cur)) {
     el("editor").value = cur.replace(/materialized(\s*=\s*)['"]\w+['"]/, `materialized$1'${mat}'`);
+    updateDirty();
   } else {
     try { const r = await apiGet(`/api/dbt/template?kind=model&materialization=${encodeURIComponent(mat)}`);
-      el("editor").value = r.content; } catch (e) { err(e.message); }
+      setEditor(r.content); } catch (e) { err(e.message); }
   }
 }
 
 async function saveFile() {
   if (newKind) return createNew();
   if (!curFile) return err("No file open");
-  try { await apiPut("/api/dbt/file", { path: curFile, content: el("editor").value }); ok("Saved " + curFile); }
+  try { await apiPut("/api/dbt/file", { path: curFile, content: el("editor").value }); ok("Saved " + curFile); markClean(); }
   catch (e) { err(e.message); }
 }
 
@@ -184,27 +217,44 @@ async function createNew() {
 async function delFile() {
   if (!curFile || !confirm("Delete " + curFile + "?")) return;
   try { await apiDel("/api/dbt/file?path=" + encodeURIComponent(curFile)); ok("Deleted");
-    curFile = null; curSel = null; el("editor").value = ""; el("cur-file").textContent = "— no file —"; loadLists();
+    curFile = null; curSel = null; setEditor(""); el("cur-file").textContent = "— no file —"; loadLists();
   } catch (e) { err(e.message); }
 }
 
 // ---- dbt run / test / compile / debug ----------------------------------- //
 async function runDbt(cmd) {
   const body = { dbt_command: cmd };
-  if (cmd !== "debug" && cmd !== "compile" && curSel) body.select = curSel;
-  el("dbt-console").textContent = ""; tailOffset = 0;
+  const scoped = (cmd !== "debug" && cmd !== "compile" && curSel);
+  if (scoped) body.select = curSel;
+  // Make the scope explicit (Run with no file open runs ALL models) and give
+  // immediate feedback before dbt's slow startup produces its first output.
+  const scope = scoped ? curSel : (cmd === "debug" ? "" : "all models");
+  el("dbt-console").textContent = `$ dbt ${cmd}${scope ? " --select " + scope : ""} …\n`;
+  tailOffset = 0; tailFails = 0; setDbtBanner("");
+  el("run-status").innerHTML = pill("running");
+  setDbtBusy(true);  // block double-runs into the same target
   try { const run = await apiPost("/api/dbt/run", body); tailRun(run.id); }
-  catch (e) { err(e.message); }
+  catch (e) { err(e.message); setDbtBusy(false); }
 }
 function tailRun(id) {
   clearInterval(tailTimer);
   const poll = async () => {
     try { const r = await apiGet(`/api/runs/${id}/tail?offset=${tailOffset}`);
+      if (tailFails) { tailFails = 0; setDbtBanner(""); }
       if (r.chunk) { const c = el("dbt-console"); c.textContent += r.chunk; c.scrollTop = c.scrollHeight; }
       tailOffset = r.offset;
       el("run-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
-      if (r.status !== "running" && r.status !== "detached") clearInterval(tailTimer);
-    } catch (e) { clearInterval(tailTimer); }
+      if (r.status !== "running" && r.status !== "detached") { clearInterval(tailTimer); tailTimer = null; setDbtBusy(false); }
+    } catch (e) {
+      // Survive a transient poll failure instead of freezing mid-run.
+      tailFails++;
+      if (tailFails >= 10) {
+        clearInterval(tailTimer); tailTimer = null; setDbtBusy(false);
+        setDbtBanner(`Connection lost. <a href='#' onclick='reconnectDbtTail("${id}");return false;'>Reconnect</a>`);
+      } else {
+        setDbtBanner(`Reconnecting… (${tailFails}/10)`);
+      }
+    }
   };
   poll(); tailTimer = setInterval(poll, 1300);
 }
@@ -214,6 +264,8 @@ el("health-recheck").onclick = runHealth;
 el("new-model").onclick = () => startNew("model");
 el("new-test").onclick = () => startNew("test");
 el("new-mat").onchange = onMatChange;
+el("editor").addEventListener("input", updateDirty);
+window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 el("file-save").onclick = saveFile;
 el("btn-del").onclick = delFile;
 el("btn-run").onclick = () => runDbt("run");

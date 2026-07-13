@@ -18,6 +18,7 @@
     <button class="btn ghost" id="toggle-raw"><i class="fa-solid fa-code"></i> Raw JSON</button>
     <button class="btn" id="validate"><i class="fa-solid fa-circle-check"></i> Validate</button>
     <button class="btn primary" id="save"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+    <span id="save-dirty" title="Unsaved changes — not written to disk yet" style="color:var(--warning);font-weight:600" hidden>● unsaved</span>
   </div>
   <div id="valbox"></div>
 </div>
@@ -116,6 +117,12 @@
 let DOC = { schema: "", description: "", masters: [], transactions: [], snapshots: [] };
 let editing = { category: "masters", index: -1 };
 let rawMode = false;
+// Edits are staged in-memory until Save writes tables.json; track that so the
+// user is warned before leaving with unsaved changes.
+let dirty = false;
+function updateDirtyIndicator() { const s = el("save-dirty"); if (s) s.hidden = !dirty; }
+function markDirty() { dirty = true; updateDirtyIndicator(); }
+function markSaved() { dirty = false; updateDirtyIndicator(); }
 
 // Per-category filter/count element ids.
 const CAT_UI = {
@@ -246,17 +253,24 @@ function applyEdit() {
   }
 
   const newCat = editing.category;
-  if (editing.index >= 0) DOC[editing.category].splice(editing.index, 1);
   DOC[newCat] = DOC[newCat] || [];
-  DOC[newCat].push(e);
+  if (editing.index >= 0 && newCat === editing.category) {
+    DOC[newCat].splice(editing.index, 1, e);  // edit in place: keep the row's position
+  } else {
+    if (editing.index >= 0) DOC[editing.category].splice(editing.index, 1);
+    DOC[newCat].push(e);
+  }
   el("modal").classList.remove("show");
+  markDirty();
   renderAll();
   el("valbox").innerHTML = "";
 }
 
 function removeEntry(category, index) {
-  if (!confirm("Delete this table?")) return;
+  // Local, staged removal — nothing is written until Save.
+  if (!confirm("Remove this table from the list? It is only deleted from tables.json when you click Save.")) return;
   DOC[category].splice(index, 1);
+  markDirty();
   renderAll();
 }
 
@@ -282,7 +296,9 @@ function toggleRaw() {
   else { if (!syncFromRaw()) { rawMode = true; return; } el("t-schema").value = DOC.schema||""; el("t-desc").value = DOC.description||""; renderAll(); }
   el("structured").hidden = rawMode;
   el("raw-wrap").hidden = !rawMode;
-  el("toggle-raw").textContent = rawMode ? "Form view" : "Raw JSON";
+  el("toggle-raw").innerHTML = rawMode
+    ? '<i class="fa-solid fa-table-list"></i> Form view'
+    : '<i class="fa-solid fa-code"></i> Raw JSON';
 }
 
 async function validate() {
@@ -303,6 +319,7 @@ async function save() {
   if (!doc) return err("Invalid JSON");
   try {
     const r = await apiPut("/api/tables", doc);
+    markSaved();
     ok("Saved" + (r.backup ? " (backup kept)" : ""));
     el("valbox").innerHTML = `<div class="banner info">✓ Saved tables.json${r.backup ? " — backup: <span class='mono'>" + esc(r.backup) + "</span>" : ""}</div>`;
   } catch (e) { el("valbox").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; err("Save failed"); }
@@ -313,6 +330,7 @@ async function load() {
     const doc = await apiGet("/api/tables");
     DOC = { schema: doc.schema||"", description: doc.description||"", masters: doc.masters||[], transactions: doc.transactions||[], snapshots: doc.snapshots||[] };
     el("t-schema").value = DOC.schema; el("t-desc").value = DOC.description;
+    markSaved();
     renderAll();
   } catch (e) { err(e.message); }
 }
@@ -330,6 +348,9 @@ el("f-cancel").onclick = () => el("modal").classList.remove("show");
 el("toggle-raw").onclick = toggleRaw;
 el("validate").onclick = validate;
 el("save").onclick = save;
+// Any direct edit to the top-level fields or the raw JSON marks the doc dirty.
+["t-schema", "t-desc", "raw"].forEach(id => { const n = el(id); if (n) n.addEventListener("input", markDirty); });
+window.addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 load();
 </script>
 {% endblock %}

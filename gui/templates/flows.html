@@ -21,6 +21,9 @@
   .dfnode-title { font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border-soft, #dbe1ee);
     display:flex; gap:8px; align-items:center; }
   .dfnode-title i { color:var(--primary, #0c5a91); }
+  .dfnode-del { margin-left:auto; cursor:pointer; color:var(--muted, #64748b); font-weight:700;
+    line-height:1; padding:0 4px; border-radius:4px; }
+  .dfnode-del:hover { color:#fff; background:var(--danger, #ef4444); }
   .dfnode-body { padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
   .dfnode-field { width:100%; }
   .drawflow .drawflow-node .input, .drawflow .drawflow-node .output { background:var(--primary, #0c5a91); border-color:var(--primary-dark, #084670); }
@@ -199,15 +202,16 @@ function selOptions(sel){
 function cmdOptions(sel){ return ["run","test","build"].map(c=>`<option ${sel===c?"selected":""}>${c}</option>`).join(""); }
 function nodeHtml(kind, d) {
   d = d || {};
+  const del = '<span class="dfnode-del" title="Delete node" role="button" aria-label="Delete node">✕</span>';
   if (kind === "pipeline")
-    return `<div><div class="dfnode-title"><i class="fa-solid fa-database"></i> Pipeline</div>
+    return `<div><div class="dfnode-title"><i class="fa-solid fa-database"></i> Pipeline${del}</div>
       <div class="dfnode-body"><select df-pipeline_id class="dfnode-field">${pipeOptions(d.pipeline_id)}</select></div></div>`;
   if (kind === "dbt")
-    return `<div><div class="dfnode-title"><i class="fa-solid fa-cube"></i> dbt</div>
+    return `<div><div class="dfnode-title"><i class="fa-solid fa-cube"></i> dbt${del}</div>
       <div class="dfnode-body">
         <select df-dbt_command class="dfnode-field">${cmdOptions(d.dbt_command||"run")}</select>
         <select df-select class="dfnode-field">${selOptions(d.select)}</select></div></div>`;
-  return `<div><div class="dfnode-title"><i class="fa-solid fa-terminal"></i> Command</div>
+  return `<div><div class="dfnode-title"><i class="fa-solid fa-terminal"></i> Command${del}</div>
     <div class="dfnode-body"><input df-command class="dfnode-field" placeholder="python tools/x.py" value="${esc(d.command||"")}"></div></div>`;
 }
 function addFlowNode(kind, data, x, y) {
@@ -270,6 +274,18 @@ function collectNodes() {
 async function save() {
   const nodes = collectNodes();
   if (!nodes.length) { err("Add at least one node"); return; }
+  // Reject nodes that would save "successfully" then fail (or do nothing) at
+  // schedule time -- most importantly a custom-command node with no command.
+  const problems = [];
+  nodes.forEach((n, i) => {
+    if (n.kind === "command" && !String(n.command || "").trim())
+      problems.push(`Node ${i + 1} (custom command) has no command`);
+    if (n.kind === "pipeline" && !n.pipeline_id)
+      problems.push(`Node ${i + 1} (pipeline) has no pipeline selected`);
+    if (n.kind === "dbt" && !String((n.dbt || {}).select || "").trim())
+      problems.push(`Node ${i + 1} (dbt) has no model/test selected`);
+  });
+  if (problems.length) { err(problems.join("; ")); return; }
   const body = { name: el("f-name").value.trim(), nodes, cron: cronFromForm(),
     timezone: el("f-tz").value, graph: editor.export(),
     email: { on_success: el("f-succ").value, on_failure: el("f-fail").value } };
@@ -287,7 +303,15 @@ function resetForm() {
 }
 
 async function load() {
-  const d = await apiGet("/api/flows");
+  let d;
+  try { d = await apiGet("/api/flows"); }
+  catch (e) {
+    el("dagster-banner").innerHTML =
+      `<div class="banner error">Couldn't load flows: ${esc(e.message)} ` +
+      `<a href="#" onclick="load();return false;">Retry</a></div>`;
+    err(e.message);
+    return;
+  }
   PIPELINES = d.pipelines; FLOWS = d.flows; SERVER_TZ = d.server_timezone || "UTC";
   try { const [m,t]=[await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
         DBT_MODELS=m.models||[]; DBT_TESTS=t.tests||[]; }
@@ -355,6 +379,13 @@ function initEditor() {
     e.dataTransfer.setData("kind", chip.dataset.kind);
     e.dataTransfer.setData("cmd", chip.dataset.cmd || "");
   }));
+  // Click the ✕ on a node title to delete it (was keyboard-only via Delete key).
+  canvas.addEventListener("click", (e) => {
+    const del = e.target.closest(".dfnode-del");
+    if (!del) return;
+    const nodeEl = del.closest(".drawflow-node");
+    if (nodeEl && editor) editor.removeNodeId(nodeEl.id);
+  });
 }
 
 $$(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));

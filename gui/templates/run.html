@@ -120,6 +120,7 @@
         <!-- parsed live dashboard (built from the streamed log) -->
         {% include "_dash.html" %}
 
+        <div id="tail-banner" class="banner warn" role="status" hidden></div>
         <div id="console" class="console">Select or start a run to see output…</div>
       </div>
 
@@ -154,7 +155,24 @@
 <script>
 let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [], snapshots: [] };
 const selBranches = new Set(), selTables = new Set();
-let curRun = null, tailOffset = 0, tailTimer = null;
+let curRun = null, tailOffset = 0, tailTimer = null, tailFails = 0;
+const TAIL_MAX_FAILS = 10;
+
+function setTailBanner(html) {
+  const b = el("tail-banner");
+  if (!b) return;
+  b.innerHTML = html;
+  b.hidden = !html;
+  b.className = "banner " + (/Connection lost/.test(html) ? "error" : "warn");
+}
+function reconnectTail() {
+  if (!curRun) return;
+  tailFails = 0;
+  setTailBanner("Reconnecting…");
+  clearInterval(tailTimer);
+  pollTail();
+  tailTimer = setInterval(pollTail, 1300);
+}
 
 // ETL settings (.dlt/config.toml [etl]) — shown/edited at the top of the page.
 let SETTINGS = {};
@@ -328,7 +346,8 @@ async function startRun() {
 }
 
 function viewRun(id) {
-  curRun = id; tailOffset = 0;
+  curRun = id; tailOffset = 0; tailFails = 0;
+  setTailBanner("");
   el("cur-run").textContent = id;
   el("console").textContent = "";
   liveDash.reset();
@@ -341,6 +360,7 @@ async function pollTail() {
   if (!curRun) return;
   try {
     const r = await apiGet(`/api/runs/${curRun}/tail?offset=${tailOffset}`);
+    if (tailFails) { tailFails = 0; setTailBanner(""); }  // recovered
     if (r.chunk) {
       const c = el("console");
       const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
@@ -352,9 +372,19 @@ async function pollTail() {
     el("cur-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
     const running = r.status === "running" || r.status === "detached";
     el("stop-btn").hidden = !running;
-    if (!running) { clearInterval(tailTimer); liveDash.flush(); loadRuns(); }
+    if (!running) { clearInterval(tailTimer); tailTimer = null; liveDash.flush(); loadRuns(); }
     liveDash.render();
-  } catch (e) { clearInterval(tailTimer); }
+  } catch (e) {
+    // Don't die on a single failed poll (Flask restart, laptop sleep, blip):
+    // keep retrying on the interval and surface the state instead of freezing.
+    tailFails++;
+    if (tailFails >= TAIL_MAX_FAILS) {
+      clearInterval(tailTimer); tailTimer = null;
+      setTailBanner("Connection lost. <a href='#' onclick='reconnectTail();return false;'>Reconnect</a>");
+    } else {
+      setTailBanner(`Reconnecting… (${tailFails}/${TAIL_MAX_FAILS})`);
+    }
+  }
 }
 
 async function stopRun() {
