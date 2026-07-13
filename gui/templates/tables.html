@@ -60,12 +60,36 @@
     </div>
     <div class="form-row-3">
       <div><label>Where date column</label><input id="f-wdate" title="e.g. ORDER_DATE"></div>
-      <div><label>Operator</label><input id="f-wop" title="e.g. >="></div>
-      <div><label>Initial value</label><input id="f-wval" title="e.g. 2026-06-01"></div>
+      <div><label>Operator</label>
+        <select id="f-wop" title="e.g. >=">
+          <option value="">—</option>
+          <option value=">=">&gt;=</option>
+          <option value=">">&gt;</option>
+          <option value="<=">&lt;=</option>
+          <option value="<">&lt;</option>
+          <option value="=">=</option>
+        </select>
+      </div>
+      <div><label>Initial value</label>
+        <input id="f-wval" type="date" title="e.g. 2026-06-01">
+        <a href="#" id="f-wval-toggle" class="hint" style="display:inline-block;cursor:pointer;text-decoration:underline">use expression</a>
+      </div>
     </div>
     <div class="form-row">
-      <div><label>Upper operator (optional)</label><input id="f-wopmax" title="e.g. <="></div>
-      <div><label>Upper value (window ceiling)</label><input id="f-wvalmax" title="e.g. TO_NUMBER(...SYSDATE...)"></div>
+      <div><label>Upper operator (optional)</label>
+        <select id="f-wopmax" title="e.g. <=">
+          <option value="">—</option>
+          <option value=">=">&gt;=</option>
+          <option value=">">&gt;</option>
+          <option value="<=">&lt;=</option>
+          <option value="<">&lt;</option>
+          <option value="=">=</option>
+        </select>
+      </div>
+      <div><label>Upper value (window ceiling)</label>
+        <input id="f-wvalmax" type="date" title="e.g. 2026-06-01">
+        <a href="#" id="f-wvalmax-toggle" class="hint" style="display:inline-block;cursor:pointer;text-decoration:underline">use expression</a>
+      </div>
     </div>
 
     <fieldset>
@@ -144,6 +168,41 @@ function renderList(category) {
 }
 function renderAll() { renderList("masters"); renderList("transactions"); renderList("snapshots"); }
 
+// The "Initial value" and "Upper value" fields are native date pickers by
+// default, but some entries store a SQL expression (e.g. an Oracle Julian
+// ceiling) instead of a plain date. Plain YYYY-MM-DD values use the date
+// picker; anything else falls back to a text field so the expression is
+// preserved and still editable. `id` is the input id; its toggle link is
+// `<id>-toggle`.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateFieldSetMode(id, mode) {
+  const input = el(id), toggle = el(id + "-toggle");
+  input.type = (mode === "expr") ? "text" : "date";
+  input.dataset.mode = mode;
+  toggle.textContent = (mode === "expr") ? "use date picker" : "use expression";
+  input.title = (mode === "expr")
+    ? "SQL expression, e.g. TO_NUMBER(TO_CHAR(..., 'J'))"
+    : "e.g. 2026-06-01";
+}
+
+function dateFieldLoad(id, v) {
+  v = v || "";
+  dateFieldSetMode(id, v && !DATE_RE.test(v) ? "expr" : "date");
+  el(id).value = v;
+}
+
+function dateFieldToggle(id) {
+  const input = el(id), keep = input.value;
+  if ((input.dataset.mode || "date") === "date") {
+    dateFieldSetMode(id, "expr");
+    input.value = keep;                              // carry the date over as text
+  } else {
+    dateFieldSetMode(id, "date");
+    input.value = DATE_RE.test(keep) ? keep : "";    // keep only if a valid date
+  }
+}
+
 function openEdit(category, index) {
   editing = { category, index };
   const e = index >= 0 ? DOC[category][index] : {};
@@ -155,9 +214,9 @@ function openEdit(category, index) {
   el("f-cdc").value = e.cdc_column || "";
   el("f-wdate").value = e.where_date_column || "";
   el("f-wop").value = e.where_operator || "";
-  el("f-wval").value = e.where_value_of_initial_run || "";
+  dateFieldLoad("f-wval", e.where_value_of_initial_run);
   el("f-wopmax").value = e.where_operator_max || "";
-  el("f-wvalmax").value = e.where_value_max || "";
+  dateFieldLoad("f-wvalmax", e.where_value_max);
   const hp = e.helper || {};
   el("f-h-table").value = hp.table || "";
   el("f-h-cdc").value = hp.cdc_column || "";
@@ -274,6 +333,8 @@ el("add-snap").onclick = () => openEdit("snapshots", -1);
 el("m-filter").oninput = () => renderList("masters");
 el("t-filter").oninput = () => renderList("transactions");
 el("s-filter").oninput = () => renderList("snapshots");
+el("f-wval-toggle").onclick = (ev) => { ev.preventDefault(); dateFieldToggle("f-wval"); };
+el("f-wvalmax-toggle").onclick = (ev) => { ev.preventDefault(); dateFieldToggle("f-wvalmax"); };
 el("f-save").onclick = applyEdit;
 el("f-cancel").onclick = () => el("modal").classList.remove("show");
 el("toggle-raw").onclick = toggleRaw;

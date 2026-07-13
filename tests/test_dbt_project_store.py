@@ -64,3 +64,63 @@ def test_profiles_and_root_files_rejected(proj):
         ps.write_file("dbt_project.yml", "x")
     with pytest.raises(ValueError):
         ps.read_file("foo.yml")
+
+
+# --- metadata enrichment -------------------------------------------------- #
+
+def test_list_models_carry_metadata(proj):
+    import dbt_project_store as ps
+    m = next(x for x in ps.list_models() if x["name"] == "stg_a")
+    assert isinstance(m["size"], int) and m["size"] > 0
+    assert m["modified"] and isinstance(m["modified"], str)
+    assert m["created"] and isinstance(m["created"], str)
+    assert "type" in m
+
+
+def test_model_type_parsed_from_config(proj):
+    import dbt_project_store as ps
+    (proj / "models" / "inc.sql").write_text(
+        "{{ config(materialized='incremental') }}\nselect 1", encoding="utf-8")
+    m = next(x for x in ps.list_models() if x["name"] == "inc")
+    assert m["type"] == "incremental"
+
+
+def test_model_type_defaults_to_view(proj):
+    import dbt_project_store as ps
+    # stg_a.sql has no config() block -> dbt's default materialization.
+    m = next(x for x in ps.list_models() if x["name"] == "stg_a")
+    assert m["type"] == "view"
+
+
+def test_tests_have_test_type(proj):
+    import dbt_project_store as ps
+    t = next(x for x in ps.list_tests() if x["name"] == "assert_x")
+    assert t["type"] == "test"
+
+
+# --- template + content-aware create -------------------------------------- #
+
+def test_template_for_model_uses_materialization(proj):
+    import dbt_project_store as ps
+    body = ps.template_for("model", "stg_products", "view")
+    assert "materialized='view'" in body and "icebergLocal(" in body
+
+
+def test_template_for_test(proj):
+    import dbt_project_store as ps
+    body = ps.template_for("test", "assert_none", None)
+    assert "ref(" in body
+
+
+def test_create_with_content_writes_verbatim(proj):
+    import dbt_project_store as ps
+    out = ps.create_from_template("hand_written", "model", "table",
+                                  content="select 99 as answer")
+    assert ps.read_file(out["path"]) == "select 99 as answer"
+
+
+def test_create_without_content_falls_back_to_template(proj):
+    import dbt_project_store as ps
+    out = ps.create_from_template("templated", "model", "view", content="")
+    body = ps.read_file(out["path"])
+    assert "materialized='view'" in body and "icebergLocal(" in body

@@ -33,7 +33,7 @@ def build_asset(prefix: str, group: str, node_id: str, name: str,
         proc = subprocess.Popen(
             argv, cwd=str(state.REPO_ROOT),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
+            text=True, bufsize=1, encoding="utf-8", errors="replace",
         )
         assert proc.stdout is not None
         for line in proc.stdout:

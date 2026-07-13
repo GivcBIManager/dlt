@@ -33,12 +33,11 @@ SCRIPTS = {
     "snapshot_diff": REPO_ROOT / "snapshot_diff.py",
 }
 
-# --- GUI's own state (logs, run registry, schedules) ---------------------- #
+# --- GUI's own state (logs, run registry, pipelines, flows) --------------- #
 GUI_DIR = REPO_ROOT / "gui"
 STATE_DIR = GUI_DIR / "state"
 LOG_DIR = REPO_ROOT / "run_logs"          # one file per launched run
 RUNS_REGISTRY = STATE_DIR / "runs.json"
-SCHEDULES_JSON = STATE_DIR / "schedules.json"
 PIPELINES_JSON = STATE_DIR / "pipelines.json"
 FLOWS_JSON = STATE_DIR / "flows.json"
 

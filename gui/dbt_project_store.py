@@ -7,7 +7,9 @@ the dbt project dir or uses a disallowed extension.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,10 @@ import dbt_config
 
 _ALLOWED_SUFFIX = {".sql", ".yml", ".yaml"}
 _ALLOWED_SUBDIRS = {"models", "tests", "macros"}
+
+# dbt's global default when a model declares no config(materialized=...).
+_DEFAULT_MATERIALIZATION = "view"
+_MAT_RE = re.compile(r"materialized\s*=\s*['\"](\w+)['\"]")
 
 MODEL_TEMPLATE = """\
 -- {name}: materialize a local Iceberg table into a native ClickHouse table.
@@ -61,12 +67,37 @@ def _rel(p: Path) -> str:
     return p.relative_to(_root()).as_posix()
 
 
+def _meta(p: Path) -> dict[str, Any]:
+    """Filesystem metadata (size + timestamps) for a project file."""
+    st = p.stat()
+    return {
+        "size": st.st_size,
+        "modified": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+        "created": datetime.fromtimestamp(st.st_ctime).isoformat(timespec="seconds"),
+    }
+
+
+def _materialization(p: Path) -> str:
+    """Parse ``config(materialized='...')``; fall back to dbt's default."""
+    try:
+        m = _MAT_RE.search(p.read_text(encoding="utf-8"))
+    except OSError:
+        return _DEFAULT_MATERIALIZATION
+    return m.group(1) if m else _DEFAULT_MATERIALIZATION
+
+
 def _scan(subdir: str) -> list[dict[str, Any]]:
     base = _root() / subdir
     if not base.exists():
         return []
-    return [{"name": p.stem, "path": _rel(p), "resource_type": subdir.rstrip("s")}
-            for p in sorted(base.rglob("*.sql"))]
+    rtype = subdir.rstrip("s")
+    out = []
+    for p in sorted(base.rglob("*.sql")):
+        entry = {"name": p.stem, "path": _rel(p), "resource_type": rtype,
+                 "type": "test" if subdir == "tests" else _materialization(p)}
+        entry.update(_meta(p))
+        out.append(entry)
+    return out
 
 
 def _dbt_ls(resource_type: str) -> list[dict[str, Any]]:
@@ -77,6 +108,7 @@ def _dbt_ls(resource_type: str) -> list[dict[str, Any]]:
             [dbt_config.dbt_executable(), "ls", "--resource-type", resource_type,
              "--output", "json", "--project-dir", d, "--profiles-dir", d],
             capture_output=True, text=True, timeout=60,
+            encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
             return []
@@ -137,18 +169,34 @@ def delete_file(rel: str) -> bool:
     return True
 
 
-def create_from_template(name: str, kind: str, materialization: str = "table") -> dict[str, Any]:
-    stem = "".join(c for c in str(name or "").strip() if c.isalnum() or c in ("_", "-"))
+def _sanitize(name: str) -> str:
+    return "".join(c for c in str(name or "").strip() if c.isalnum() or c in ("_", "-"))
+
+
+def template_for(kind: str, name: str = "", materialization: str = "table") -> str:
+    """Render the starter template for a new model/test (frontend preview)."""
+    if kind == "model":
+        stem = _sanitize(name) or "new_model"
+        return MODEL_TEMPLATE.format(name=stem, materialization=materialization or "table")
+    if kind == "test":
+        stem = _sanitize(name) or "new_test"
+        return TEST_TEMPLATE.format(name=stem)
+    raise ValueError("kind must be 'model' or 'test'")
+
+
+def create_from_template(name: str, kind: str, materialization: str = "table",
+                         content: str | None = None) -> dict[str, Any]:
+    stem = _sanitize(name)
     if not stem:
         raise ValueError("name must be alphanumeric / underscore")
     if kind == "model":
         rel = f"models/{stem}.sql"
-        body = MODEL_TEMPLATE.format(name=stem, materialization=materialization or "table")
     elif kind == "test":
         rel = f"tests/{stem}.sql"
-        body = TEST_TEMPLATE.format(name=stem)
     else:
         raise ValueError("kind must be 'model' or 'test'")
     if _resolve(rel).exists():
         raise ValueError(f"{rel} already exists")
+    # Honor caller-supplied editor content; else fall back to the template.
+    body = content if (content and content.strip()) else template_for(kind, stem, materialization)
     return write_file(rel, body)

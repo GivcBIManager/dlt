@@ -126,7 +126,6 @@ function mountTable(container, columns, rows, opts = {}) {
   draw();
 }
 
-let _toastTimer;
 function toast(msg, kind = "") {
   const box = el("toasts");
   if (!box) return;

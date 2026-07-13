@@ -1,4 +1,4 @@
-re@echo off
+@echo off
 REM ==========================================================================
 REM Clear every runtime artifact so the next pipeline run starts completely
 REM fresh.

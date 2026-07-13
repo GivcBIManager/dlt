@@ -147,8 +147,18 @@ class RunManager:
         if proc is None:
             # Possibly a detached run from a previous session.
             if run and _pid_alive(run.get("pid")):
+                pid = run["pid"]
                 try:
-                    os.kill(run["pid"], signal.SIGTERM)
+                    if os.name == "nt":
+                        os.kill(pid, signal.SIGTERM)
+                    else:
+                        # The detached run was started with start_new_session=True,
+                        # so it leads its own process group (pgid == pid); signal the
+                        # whole group so child workers are reaped too.
+                        try:
+                            os.killpg(pid, signal.SIGTERM)
+                        except (OSError, ProcessLookupError):
+                            os.kill(pid, signal.SIGTERM)
                     return True
                 except OSError:
                     return False

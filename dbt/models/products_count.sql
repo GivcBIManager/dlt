@@ -4,5 +4,6 @@
 -- own filesystem, not this host. Use a path valid on the ClickHouse host.
 {{ config(materialized='table') }}
 
-select branch_id, product_code,count() count from icebergLocal('/var/lib/clickhouse/user_files/iceberg_output/oasis/product_base')
-group by all
+SELECT  branch_id ,count() product_count
+ from icebergLocal('/var/lib/clickhouse/user_files/iceberg_output/oasis/ios_master_data')
+ group by all

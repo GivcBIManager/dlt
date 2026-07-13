@@ -1,0 +1,7 @@
+# Pin line endings so the repo works on both Windows and Linux.
+# Shell scripts MUST stay LF or they fail with `bash\r: No such file or directory`
+# on Linux when deployed outside git (zip/rsync). Windows launchers stay CRLF.
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf

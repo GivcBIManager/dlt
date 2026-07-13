@@ -279,11 +279,11 @@ class Settings:
 
     # live progress heartbeat + peak-memory probe (background daemon thread)
     progress_enabled: bool = True
-    progress_interval_s: float = 10.0
+    progress_interval_s: float = 5.0
 
     # load streaming: rows per Arrow batch when reading staged parquet into the
     # Iceberg load. Caps load-time memory vs reading a whole branch file at once.
-    load_batch_rows: int = 100_000
+    load_batch_rows: int = 50_000
 
     # DQ: tolerate row-hash drift up to this percent of a (table, branch)'s
     # Oracle hashed rows before flagging MISMATCH; at or below it the status is
@@ -471,6 +471,8 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         pool_increment=int(_cfg("etl.pool_increment", 1)),
         pool_acquire_timeout_s=int(_cfg("etl.pool_acquire_timeout_s", 30)),
         pool_acquire_attempts=int(_cfg("etl.pool_acquire_attempts", 5)),
+        pool_backoff_base_s=float(_cfg("etl.pool_backoff_base_s", 2.0)),
+        pool_backoff_cap_s=float(_cfg("etl.pool_backoff_cap_s", 60.0)),
         max_retries=int(_cfg("etl.max_retries", 5)),
         retry_interval_s=int(_cfg("etl.retry_interval_s", 300)),
         dsn_mode=str(_cfg("etl.dsn_mode", "service_name")),

@@ -530,7 +530,16 @@ def api_dbt_file_put():
 def api_dbt_file_create():
     b = _body()
     return jsonify(dbt_project_store.create_from_template(
-        b.get("name", ""), b.get("kind", "model"), b.get("materialization", "table")))
+        b.get("name", ""), b.get("kind", "model"),
+        b.get("materialization", "table"), b.get("content")))
+
+
+@app.get("/api/dbt/template")
+@api
+def api_dbt_template():
+    return jsonify({"content": dbt_project_store.template_for(
+        request.args.get("kind", "model"), request.args.get("name", ""),
+        request.args.get("materialization", "table"))})
 
 
 @app.delete("/api/dbt/file")
