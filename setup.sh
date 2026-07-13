@@ -20,9 +20,23 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   exit 1
 fi
 
+# A $VENV dir without bin/activate is not a usable Linux venv — typically a
+# Windows venv that came along with a folder copy (Scripts/ instead of bin/) or
+# the debris of a venv creation that died halfway (missing python3-venv).
+# Rebuild it rather than failing at the source line below.
+if [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
+  echo "==> $VENV exists but has no bin/activate (Windows copy or broken venv) — recreating"
+  rm -rf "$VENV"
+fi
+
 if [[ ! -d "$VENV" ]]; then
   echo "==> Creating virtual environment at $VENV"
-  "$PYTHON" -m venv "$VENV"
+  if ! "$PYTHON" -m venv "$VENV"; then
+    rm -rf "$VENV"   # don't leave a half-built venv for the next run to trip on
+    echo "ERROR: venv creation failed. On Ubuntu/Debian install the venv module first:" >&2
+    echo "       sudo apt install ${PYTHON}-venv   (e.g. python3.12-venv)" >&2
+    exit 1
+  fi
 fi
 
 # shellcheck disable=SC1091
