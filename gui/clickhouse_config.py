@@ -8,12 +8,10 @@ The password never leaves the server (``get_clickhouse`` redacts it).
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
-from datetime import datetime
 from typing import Any
 
-import security
+import toml_edit
 from config import SECRETS_TOML, STATE_DIR
 
 try:  # tomllib stdlib on 3.11+, tomli backport on 3.10
@@ -79,32 +77,12 @@ def _find_block(lines: list[str]) -> tuple[int, int] | None:
 
 
 def _read_lines() -> list[str]:
-    if not SECRETS_TOML.exists():
-        return []
-    return SECRETS_TOML.read_text(encoding="utf-8").splitlines()
+    return toml_edit.read_lines(SECRETS_TOML)
 
 
 def _write(lines: list[str]) -> None:
-    text = "\n".join(lines)
-    if not text.endswith("\n"):
-        text += "\n"
-    if SECRETS_TOML.exists():
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = STATE_DIR / f"secrets.toml.{stamp}.bak"
-        shutil.copy2(SECRETS_TOML, backup)
-        security.harden_file(backup)
-    tmp = SECRETS_TOML.with_suffix(".toml.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    try:
-        with tmp.open("rb") as fh:
-            _toml.load(fh)
-    except Exception as exc:  # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        raise ValueError(f"refused to write corrupt secrets.toml: {exc}") from exc
-    tmp.replace(SECRETS_TOML)
-    security.harden_file(SECRETS_TOML)
-    security.prune_backups(STATE_DIR, "secrets.toml.*.bak")
+    toml_edit.write_lines(SECRETS_TOML, lines, backup_dir=STATE_DIR,
+                          backup_prefix="secrets.toml", harden=True)
 
 
 def save_clickhouse(payload: dict[str, Any]) -> dict[str, Any]:

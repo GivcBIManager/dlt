@@ -7,14 +7,12 @@ is only overwritten when a new one is supplied.
 from __future__ import annotations
 
 import re
-import shutil
 import smtplib
-from datetime import datetime
 from email.message import EmailMessage
 from typing import Any
 
 import config
-import security
+import toml_edit
 
 try:
     import tomllib as _toml
@@ -62,9 +60,7 @@ def _emit(data: dict[str, Any]) -> list[str]:
 
 
 def _read_lines() -> list[str]:
-    if not config.SECRETS_TOML.exists():
-        return []
-    return config.SECRETS_TOML.read_text(encoding="utf-8").splitlines()
+    return toml_edit.read_lines(config.SECRETS_TOML)
 
 
 def _section_span(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -80,26 +76,8 @@ def _section_span(lines: list[str], name: str) -> tuple[int, int] | None:
 
 
 def _write(lines: list[str]) -> None:
-    text = "\n".join(lines)
-    if not text.endswith("\n"):
-        text += "\n"
-    if config.SECRETS_TOML.exists():
-        config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = config.STATE_DIR / f"secrets.toml.{stamp}.bak"
-        shutil.copy2(config.SECRETS_TOML, backup)
-        security.harden_file(backup)
-    tmp = config.SECRETS_TOML.with_suffix(".toml.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    try:
-        with tmp.open("rb") as fh:
-            _toml.load(fh)
-    except Exception as exc:  # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        raise ValueError(f"refused to write corrupt secrets.toml: {exc}") from exc
-    tmp.replace(config.SECRETS_TOML)
-    security.harden_file(config.SECRETS_TOML)
-    security.prune_backups(config.STATE_DIR, "secrets.toml.*.bak")
+    toml_edit.write_lines(config.SECRETS_TOML, lines, backup_dir=config.STATE_DIR,
+                          backup_prefix="secrets.toml", harden=True)
 
 
 def save_smtp(payload: dict[str, Any]) -> dict[str, Any]:

@@ -41,25 +41,13 @@ def _read_toml(path: Path) -> dict[str, Any]:
 # Branches
 # --------------------------------------------------------------------------- #
 def list_branches() -> list[dict[str, Any]]:
-    """Every ``[oracle_branches.*]`` section as a safe dict (password redacted)."""
-    raw = _read_toml(SECRETS_TOML).get("oracle_branches", {})
-    branches = []
-    for key, sec in raw.items():
-        branches.append(
-            {
-                "key": key,
-                "name": sec.get("name", key),
-                "id": sec.get("id"),
-                "host": sec.get("host"),
-                "port": sec.get("port"),
-                "database": sec.get("database"),
-                "username": sec.get("username"),
-                "fetch_batch_size": sec.get("fetch_batch_size"),
-                "has_password": bool(sec.get("password")),
-            }
-        )
-    branches.sort(key=lambda b: (b["id"] is None, b["id"]))
-    return branches
+    """Every ``[oracle_branches.*]`` section as a safe dict (password redacted).
+
+    Delegates to ``connections`` (the owner of branch config) so the redacted
+    shape and ordering stay defined in one place.
+    """
+    import connections
+    return connections.list_connections()
 
 
 def branch_keys() -> list[str]:

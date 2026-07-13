@@ -17,7 +17,13 @@
 > join-table memory, the binding constraint here. Note: 3.4's streaming was
 > verified with a fake cursor (batching, empty-schema, injected columns); it can't
 > be exercised end-to-end without a live Oracle result that trips the fallback.
-> Phases 4–5 not started.
+>
+> **Phase 4 (complete):** 4.1 shared `gui/toml_edit.py` helper (connections /
+> smtp / clickhouse delegate their read + backup + validate + atomic-replace +
+> prune to it; workspace's config.toml writer left as-is by design), 4.2
+> `workspace.list_branches` delegates to `connections.list_connections` (one
+> canonical redacted shape), 4.3 `matchFilter` moved into `app.js` and removed
+> from the three templates. Phase 5 not started.
 
 Derived from the full-codebase review (security/bad-practice, performance, UI/UX,
 redundancy/dead-code, Windows↔Linux portability). Ordered into phases by

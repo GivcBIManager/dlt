@@ -136,6 +136,20 @@ function toast(msg, kind = "") {
 function ok(msg) { toast(msg, "ok"); }
 function err(msg) { toast(msg, "err"); }
 
+// Wildcard/substring name filter shared by the Run, Tables and Iceberg pages.
+// "*" acts as a glob; otherwise it's a case-insensitive substring match.
+function matchFilter(name, q) {
+  q = String(q || "").trim().toLowerCase();
+  if (!q) return true;
+  name = String(name || "").toLowerCase();
+  if (q.includes("*")) {
+    const re = new RegExp("^" + q.split("*")
+      .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+    return re.test(name);
+  }
+  return name.includes(q);
+}
+
 // Sidebar toggle (mobile / narrow viewports)
 (function () {
   const toggle = el("sidebar-toggle");

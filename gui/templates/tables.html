@@ -135,17 +135,7 @@ function summarize(e) {
   return bits.join(" · ");
 }
 
-function matchFilter(name, q) {
-  q = String(q || "").trim().toLowerCase();
-  if (!q) return true;
-  name = String(name || "").toLowerCase();
-  if (q.includes("*")) {
-    const re = new RegExp("^" + q.split("*")
-      .map(s => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
-    return re.test(name);
-  }
-  return name.includes(q);
-}
+// matchFilter is provided globally by app.js.
 
 function renderList(category) {
   const items = DOC[category] || [];
