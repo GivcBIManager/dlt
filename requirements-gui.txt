@@ -13,7 +13,10 @@ dagster==1.13.11
 dagster-webserver==1.13.11
 dagster-graphql==1.13.11
 
-# dbt-core materialization layer (Iceberg -> ClickHouse). Keep the pair on the
-# same minor. ClickHouse itself is an EXTERNAL prerequisite (24.x+ for icebergLocal).
-dbt-core>=1.9,<1.10
+# dbt-core materialization layer (Iceberg -> ClickHouse). Pin only the adapter;
+# it pulls a compatible dbt-core transitively. NOTE the two version schemes
+# differ -- dbt-clickhouse 1.9.x depends on dbt-core 1.11.x, so do NOT also pin
+# dbt-core to 1.9 (that conflict breaks the resolve). Coexists with the pinned
+# dagster stack above (verified). ClickHouse is an EXTERNAL prerequisite
+# (24.x+ for icebergLocal).
 dbt-clickhouse>=1.9,<1.10

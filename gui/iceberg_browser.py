@@ -526,5 +526,5 @@ def read_run_detail(run_id: str) -> dict[str, Any]:
     return {
         "run_id": run_id,
         "columns": RUN_DETAIL_COLUMNS,
-        "rows": _run_detail_rows(log_rows, control_rows),
+        "rows": _run_detail_rows(log_rows, control_rows)[:1000],
     }

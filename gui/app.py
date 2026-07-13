@@ -438,7 +438,7 @@ def api_ib_sample(table):
     branch_id = request.args.get("branch_id", None, type=int)
     snapshot_id = request.args.get("snapshot_id", None, type=int)
     return jsonify(iceberg_browser.sample_rows(
-        table, limit=min(limit, 500), branch_id=branch_id, snapshot_id=snapshot_id,
+        table, limit=min(limit, 1000), branch_id=branch_id, snapshot_id=snapshot_id,
         date_col=request.args.get("date_col") or None,
         date_from=request.args.get("date_from") or None,
         date_to=request.args.get("date_to") or None))
@@ -480,7 +480,7 @@ def api_ib_aggregate(table):
 @api
 def api_ib_system(table):
     limit = request.args.get("limit", 200, type=int)
-    return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 2000)))
+    return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 1000)))
 
 
 @app.get("/api/iceberg/runs")

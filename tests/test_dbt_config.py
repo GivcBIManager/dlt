@@ -41,3 +41,20 @@ def test_write_profiles_creates_file(wired):
     assert path == dbt_dir / "profiles.yml"
     loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert loaded["oasis"]["outputs"]["dev"]["host"] == "ch"
+
+
+def test_dbt_config_executable_delegates_on_default(monkeypatch):
+    """The default `[dbt].dbt_executable = "dbt"` delegates to config's resolver
+    (which finds the launcher next to the interpreter)."""
+    import config
+    import dbt_config
+    monkeypatch.setattr(dbt_config, "dbt_settings", lambda: {"dbt_executable": "dbt"})
+    monkeypatch.setattr(config, "dbt_executable", lambda: "RESOLVED/dbt")
+    assert dbt_config.dbt_executable() == "RESOLVED/dbt"
+
+
+def test_dbt_config_executable_custom_path_wins(monkeypatch):
+    """An explicit non-default `[dbt].dbt_executable` path is used verbatim."""
+    import dbt_config
+    monkeypatch.setattr(dbt_config, "dbt_settings", lambda: {"dbt_executable": "/opt/x/dbt"})
+    assert dbt_config.dbt_executable() == "/opt/x/dbt"

@@ -51,7 +51,13 @@ def dbt_threads() -> int:
 
 
 def dbt_executable() -> str:
-    return str(_settings().get("dbt_executable") or config.dbt_executable())
+    # An explicit, non-default `[dbt].dbt_executable` path wins; otherwise defer
+    # to config.dbt_executable(), which resolves the launcher next to the running
+    # interpreter (the venv) so the GUI finds dbt without the venv being on PATH.
+    configured = str(_settings().get("dbt_executable") or "").strip()
+    if configured and configured != "dbt":
+        return configured
+    return config.dbt_executable()
 
 
 def render_profiles() -> dict[str, Any]:

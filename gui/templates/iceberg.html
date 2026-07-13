@@ -59,7 +59,7 @@
           <div><label>Date column</label><select id="samp-datecol"><option value="">— none —</option></select></div>
           <div><label>From</label><input type="date" id="samp-from"></div>
           <div><label>To</label><input type="date" id="samp-to"></div>
-          <div><label>Rows (preview)</label><input id="limit" type="number" value="50" style="width:90px"></div>
+          <div><label>Rows (preview)</label><input id="limit" type="number" value="50" min="1" max="1000" style="width:90px"></div>
           <button class="btn sm primary" id="load-sample" style="align-self:flex-end">Load</button>
           <button class="btn sm good" id="export-sample" style="align-self:flex-end"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
           <span class="spacer"></span>
@@ -256,7 +256,8 @@ async function loadSample() {
     const d = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/sample?` + sampleQuery(true));
     el("sample").innerHTML =
       `<div class="muted" style="margin-bottom:8px">${d.rows.length} row(s), ${d.columns.length} columns${sampleSnapshot ? ` · snapshot ${esc(sampleSnapshot)}` : ""}</div>` +
-      `<div class="sample-wrap">${renderTable(d.columns, d.rows, {})}</div>`;
+      `<div class="sample-wrap"></div>`;
+    mountTable(el("sample").querySelector(".sample-wrap"), d.columns, d.rows, {});
   } catch (e) { el("sample").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
 
@@ -277,9 +278,11 @@ async function loadAgg() {
   el("branch-counts").innerHTML = `<div class="muted">Scanning…</div>`;
   try {
     const d = await apiGet(`/api/iceberg/tables/${encodeURIComponent(curTable)}/aggregate?` + p.toString());
-    el("branch-counts").innerHTML = d.rows.length
-      ? renderTable(d.columns, d.rows, { numCols: ["branch_id", "rows"] })
-      : `<div class="muted">No rows (the table may not have a branch_id column).</div>`;
+    if (d.rows.length) {
+      mountTable(el("branch-counts"), d.columns, d.rows, { numCols: ["branch_id", "rows"] });
+    } else {
+      el("branch-counts").innerHTML = `<div class="muted">No rows (the table may not have a branch_id column).</div>`;
+    }
   } catch (e) { el("branch-counts").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
 

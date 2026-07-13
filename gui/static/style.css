@@ -552,14 +552,7 @@ tr.clickable { cursor: pointer; }
 #ib-tables tr.clickable.selected td,
 #files-table tr.clickable.selected td { background: var(--primary-container); font-weight: 600; }
 #ib-tables td:first-child { white-space: nowrap; }
-.sample-wrap {
-  overflow: auto; max-height: 560px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  scrollbar-width: thin; scrollbar-color: var(--primary-light) var(--surface-container);
-}
-.sample-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
-.sample-wrap::-webkit-scrollbar-track { background: var(--surface-container); }
-.sample-wrap::-webkit-scrollbar-thumb { background: var(--primary-light); border-radius: 5px; }
-.sample-wrap .table-wrap { border: none; max-height: none; overflow: visible; }
+.sample-wrap { /* wrapper only: inner .table-wrap scrolls (its own max-height); the pager renders below it and stays visible */ }
 
 /* Multi-select dropdown (Run page branches/tables) */
 select.multi { height: auto; min-height: 120px; padding: 4px; }
@@ -604,3 +597,8 @@ select.multi option { padding: 4px 8px; border-radius: 4px; }
   .topbar-page { display: none; }
   .form-row, .form-row-3 { grid-template-columns: 1fr; }
 }
+
+/* Pagination bar for data tables (mountTable). */
+.pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.pager .pager-count { color: var(--text-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.pager .btn.sm { padding: .2rem .55rem; line-height: 1; }

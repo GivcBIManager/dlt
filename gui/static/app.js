@@ -73,6 +73,59 @@ function renderTable(columns, rows, opts = {}) {
   return `<div class="table-wrap"><table>${head}<tbody>${body}</tbody></table></div>`;
 }
 
+// Mount a paginated table into `container` (a DOM element). Renders one page at
+// a time by reusing renderTable(), so pill/number/escaping behavior is identical
+// to a plain table. A First/Prev/Next/Last pager appears only when the (capped)
+// row count exceeds pageSize, so small tables look exactly as before.
+// opts: { pillCols, numCols, pageSize = 50, cap = 1000 }
+function mountTable(container, columns, rows, opts = {}) {
+  const pageSize = opts.pageSize ?? 50;
+  const cap = opts.cap ?? 1000;
+  const all = rows || [];
+  const truncated = all.length > cap;
+  const capped = truncated ? all.slice(0, cap) : all;
+  const pages = Math.max(1, Math.ceil(capped.length / pageSize));
+  let page = 0; // 0-based
+
+  function pagerBar(start, shown) {
+    const from = capped.length ? start + 1 : 0;
+    const to = start + shown;
+    // `(capped)` marks the mountTable-level 1000-row backstop; upstream fetches
+    // already cap at 1000, so this normally only shows String(capped.length).
+    const total = truncated ? `${cap} (capped)` : String(capped.length);
+    const dis = (c) => (c ? "disabled" : "");
+    return `<div class="pager">
+      <button class="btn sm ghost" data-pg="first" ${dis(page === 0)} title="First" aria-label="First page">⏮</button>
+      <button class="btn sm ghost" data-pg="prev" ${dis(page === 0)} title="Previous" aria-label="Previous page">◀</button>
+      <span class="pager-count">${from}–${to} of ${total}</span>
+      <button class="btn sm ghost" data-pg="next" ${dis(page >= pages - 1)} title="Next" aria-label="Next page">▶</button>
+      <button class="btn sm ghost" data-pg="last" ${dis(page >= pages - 1)} title="Last" aria-label="Last page">⏭</button>
+    </div>`;
+  }
+
+  function draw() {
+    if (page < 0) page = 0;
+    if (page > pages - 1) page = pages - 1;
+    const start = page * pageSize;
+    const slice = capped.slice(start, start + pageSize);
+    let html = renderTable(columns, slice, opts);
+    if (capped.length > pageSize) html += pagerBar(start, slice.length);
+    container.innerHTML = html;
+    container.querySelectorAll("[data-pg]").forEach((b) => {
+      b.onclick = () => {
+        const to = b.dataset.pg;
+        if (to === "first") page = 0;
+        else if (to === "prev") page -= 1;
+        else if (to === "next") page += 1;
+        else if (to === "last") page = pages - 1;
+        draw();
+      };
+    });
+  }
+
+  draw();
+}
+
 let _toastTimer;
 function toast(msg, kind = "") {
   const box = el("toasts");
