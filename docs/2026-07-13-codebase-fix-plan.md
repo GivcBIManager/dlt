@@ -6,8 +6,16 @@
 > content-type check, fail-closed bind + debugger gate in `main()`, secret-backup
 > hardening (0600 + prune) across the config writers, and SQL-identifier
 > validation in `tables_store`. Deferred: the `/api/dagster/{status,stop}` routes
-> and the empty `orchestrator/.../defs/` dg-scaffold (kept intentionally). Phases
-> 3–5 not started.
+> and the empty `orchestrator/.../defs/` dg-scaffold (kept intentionally).
+>
+> **Phase 3 (partial):** done — 3.1 (drop redundant DQ COUNT scan), 3.3
+> (vectorized decimal canonicalizer), 3.5 (push run-id filter into the run-detail
+> Iceberg scan), 3.6 (`pa.repeat` for constant columns). **Skipped 3.2** (drop
+> per-row hashing): no dependency-free vectorized crypto hash is available and
+> dropping the digest would raise join-table memory, the binding constraint here.
+> **Deferred 3.4** (stream cursor-fallback to parquet) — needs a live Oracle
+> fallback path to verify; larger rewrite. Remaining 3.5 sub-items (cache
+> `dbt ls`; offset-tail the logs page) not yet done. Phases 4–5 not started.
 
 Derived from the full-codebase review (security/bad-practice, performance, UI/UX,
 redundancy/dead-code, Windows↔Linux portability). Ordered into phases by

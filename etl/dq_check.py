@@ -170,7 +170,15 @@ def _canon_array(col) -> pa.Array:
     elif pa.types.is_string(t):
         s = col
     elif pa.types.is_decimal(t):
-        s = pa.array([_canon_decimal(v) for v in col.to_pylist()], pa.string())
+        # Vectorized equivalent of _canon_decimal: a decimal column has a fixed
+        # scale, so every value casts to a string with exactly `scale` fractional
+        # digits. Strip trailing zeros then a bare trailing dot (only when scale
+        # > 0, i.e. a '.' is present). Arrow decimals can't be negative-zero
+        # (the unscaled value is an integer), so no "-0" special case is needed.
+        s = pc.cast(col, pa.string())
+        if t.scale > 0:
+            s = pc.replace_substring_regex(s, "0+$", "")
+            s = pc.replace_substring_regex(s, "\\.$", "")
     else:
         s = pa.array([_canon_other(v) for v in col.to_pylist()], pa.string())
     if isinstance(s, pa.ChunkedArray):
@@ -704,7 +712,8 @@ def check_unit(
         else:
             query = _oracle_select(tdef, win)
             src_business, _ = _oracle_business_norms(conn, query, injected)
-            res.oracle_row_count = _oracle_count(conn, _oracle_count_sql(tdef, win))
+            if not do_hash:  # the hash path derives the count from the rows it pulls
+                res.oracle_row_count = _oracle_count(conn, _oracle_count_sql(tdef, win))
 
         if static_table is None:
             res.iceberg_row_count = 0
@@ -721,8 +730,10 @@ def check_unit(
                 src_batches = _oracle_batches(
                     conn, _oracle_select(tdef, win), branch.fetch_batch_size)
             src_kh, src_rows = _accumulate_kh(src_batches, key_norm, common)
-            if self_test:
-                res.oracle_row_count = src_rows  # staged source: count == rows pulled
+            # The windowed hash SELECT returns exactly the windowed COUNT(*) row
+            # set, so take the count from the rows pulled (one fewer full scan)
+            # and keep it consistent with the rows actually hashed.
+            res.oracle_row_count = src_rows
 
             if static_table is not None:
                 scan_cols = sorted(set(common) | set(key_norm) | (

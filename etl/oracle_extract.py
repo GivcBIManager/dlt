@@ -463,24 +463,26 @@ def inject_columns(
     n = table.num_rows
     if now is None:
         now = now_local()
+    # Constant columns: pa.repeat allocates the run in C rather than building an
+    # n-element Python list per column (millions of transient objects per run).
     table = table.append_column(
-        settings.branch_id_column, pa.array([branch_id] * n, pa.int64())
+        settings.branch_id_column, pa.repeat(pa.scalar(branch_id, pa.int64()), n)
     )
     table = table.append_column(
-        settings.inserted_ts_column, pa.array([now] * n, pa.timestamp("us"))
+        settings.inserted_ts_column, pa.repeat(pa.scalar(now, pa.timestamp("us")), n)
     )
     table = table.append_column(
-        settings.recorded_ts_column, pa.array([now] * n, pa.timestamp("us"))
+        settings.recorded_ts_column, pa.repeat(pa.scalar(now, pa.timestamp("us")), n)
     )
     if tdef.is_snapshot:
         version = settings.snapshot_ts or now
         table = table.append_column(
             settings.snapshot_version_column,
-            pa.array([version] * n, pa.timestamp("us")),
+            pa.repeat(pa.scalar(version, pa.timestamp("us")), n),
         )
         table = table.append_column(
             settings.snapshot_date_column,
-            pa.array([version.date()] * n, pa.date32()),
+            pa.repeat(pa.scalar(version.date(), pa.date32()), n),
         )
     return table
 

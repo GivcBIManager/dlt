@@ -495,10 +495,15 @@ def _run_detail_rows(log_rows: list[dict], control_rows: list[dict]) -> list[dic
 # --------------------------------------------------------------------------- #
 # I/O wrappers (system table reads)
 # --------------------------------------------------------------------------- #
-def _scan_pylist(table: str) -> list[dict]:
-    """Whole system table as a list of plain dicts (timestamps -> datetime)."""
+def _scan_pylist(table: str, row_filter=None) -> list[dict]:
+    """System table as a list of plain dicts (timestamps -> datetime).
+
+    ``row_filter`` (a pyiceberg predicate) is pushed into the scan so partitions
+    and files that can't match are pruned instead of read and filtered in Python.
+    """
     tbl = _open_static(table)
-    return tbl.scan().to_arrow().to_pylist()
+    scan = tbl.scan(row_filter=row_filter) if row_filter is not None else tbl.scan()
+    return scan.to_arrow().to_pylist()
 
 
 def read_run_summary(limit_runs: int = 100) -> dict[str, Any]:
@@ -512,9 +517,15 @@ def read_run_summary(limit_runs: int = 100) -> dict[str, Any]:
 
 def read_run_detail(run_id: str) -> dict[str, Any]:
     """One run's units joined to the current etl_control watermark."""
+    from pyiceberg.expressions import EqualTo
+
     try:
+        # Push the run-id predicate into the scan: etl_run_log grows unbounded
+        # (every table x branch, every run), so filtering server-side avoids
+        # materializing the whole table just to keep one run's rows. The Python
+        # filter is kept as a cheap safety net if the scan returns a superset.
         log_rows = [
-            r for r in _scan_pylist("etl_run_log")
+            r for r in _scan_pylist("etl_run_log", EqualTo("pipeline_run_id", run_id))
             if r.get("pipeline_run_id") == run_id
         ]
     except FileNotFoundError:

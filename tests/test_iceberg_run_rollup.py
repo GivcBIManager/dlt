@@ -138,7 +138,7 @@ def test_read_run_detail_filters_and_joins(monkeypatch):
     ]
     ctrl = [_ctrl_row(table="APPT", branch=1, cdc="777")]
 
-    def fake_scan(table):
+    def fake_scan(table, row_filter=None):
         return {"etl_run_log": logs, "etl_control": ctrl}[table]
     monkeypatch.setattr(ib, "_scan_pylist", fake_scan)
 
@@ -152,7 +152,7 @@ def test_read_run_detail_filters_and_joins(monkeypatch):
 def test_read_run_detail_missing_control(monkeypatch):
     logs = [_log_row(run="r1", table="APPT", branch=1)]
 
-    def fake_scan(table):
+    def fake_scan(table, row_filter=None):
         if table == "etl_control":
             raise FileNotFoundError(table)
         return logs

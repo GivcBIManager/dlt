@@ -69,6 +69,25 @@ def test_inject_columns_stamps_shared_version_across_branches():
     assert set(t1.column(dcol).to_pylist()) == {version.date()}
 
 
+def test_inject_columns_constant_columns_values_and_types():
+    now = dt.datetime(2026, 7, 6, 12, 0, 0)
+    settings = Settings()
+    tdef = _tdef(CATEGORY_MASTER)
+    base = pa.table({"ID": pa.array([1, 2, 3], pa.int64())})
+    out = oracle_extract.inject_columns(
+        base, branch_id=7, settings=settings, tdef=tdef, now=now)
+
+    bid = out.column(settings.branch_id_column)
+    assert bid.type == pa.int64()
+    assert bid.to_pylist() == [7, 7, 7]
+
+    ins = out.column(settings.inserted_ts_column)
+    rec = out.column(settings.recorded_ts_column)
+    assert ins.type == pa.timestamp("us") and rec.type == pa.timestamp("us")
+    assert ins.to_pylist() == [now, now, now]
+    assert rec.to_pylist() == [now, now, now]
+
+
 def test_inject_columns_no_version_for_non_snapshot():
     settings = Settings(snapshot_ts=dt.datetime(2026, 7, 6, 10, 0, 0))
     tdef = _tdef(CATEGORY_MASTER)

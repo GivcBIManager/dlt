@@ -44,7 +44,7 @@ def test_run_detail_caps_rows_at_1000(monkeypatch):
         for i in range(1500)
     ]
 
-    def fake_scan(table):
+    def fake_scan(table, row_filter=None):
         return {"etl_run_log": logs, "etl_control": []}[table]
 
     monkeypatch.setattr(ib, "_scan_pylist", fake_scan)
