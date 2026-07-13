@@ -150,6 +150,23 @@ function matchFilter(name, q) {
   return name.includes(q);
 }
 
+// A11y: associate each bare <label> with the control it precedes. The forms use
+// a consistent `<label>Field</label><input|select|textarea id=…>` sibling pair,
+// so a real `for=` can be derived without editing ~40 fields by hand.
+document.querySelectorAll("label:not([for])").forEach(lab => {
+  if (lab.querySelector("input,select,textarea")) return;  // label already wraps its control
+  const n = lab.nextElementSibling;
+  if (n && n.id && /^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName)) lab.setAttribute("for", n.id);
+});
+
+// A11y: let keyboard users activate ".clickable" table rows (Enter/Space), which
+// are otherwise mouse-only. Rows are rendered with tabindex="0" role="button".
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const row = e.target.closest && e.target.closest(".clickable[tabindex]");
+  if (row) { e.preventDefault(); row.click(); }
+});
+
 // Give the bare "↻" icon-only refresh buttons an accessible name.
 document.querySelectorAll("button").forEach(b => {
   if (b.textContent.trim() === "↻" && !b.getAttribute("aria-label")) {

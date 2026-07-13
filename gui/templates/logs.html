@@ -230,7 +230,7 @@ async function loadFiles() {
   try {
     const files = await apiGet("/api/logs");
     el("file-list").innerHTML = files.map(f => `
-      <tr class="clickable ${f.name === curFile ? "selected" : ""}" data-f="${esc(f.name)}" onclick="openFile('${esc(f.name)}')">
+      <tr class="clickable ${f.name === curFile ? "selected" : ""}" data-f="${esc(f.name)}" tabindex="0" role="button" onclick="openFile('${esc(f.name)}')">
         <td class="mono">${esc(f.name)}</td>
         <td class="num">${fmtBytes(f.size)}</td>
         <td class="mono">${fmtDate(f.modified)}</td>

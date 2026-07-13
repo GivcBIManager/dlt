@@ -207,10 +207,13 @@ def _key_and_hash(
     """
     keys = _fingerprint(tbl, key_actual)
     payload = _fingerprint(tbl, payload_actual)
+    # 16-byte binary digest (not 32-char hex): half the memory in the per-window
+    # (key, hash) tables and the comparison join, which is the binding constraint
+    # on the large windows. Equality/min over binary behave identically.
     hashes = pa.array(
-        [blake2b(p.encode("utf-8"), digest_size=16).hexdigest()
+        [blake2b(p.encode("utf-8"), digest_size=16).digest()
          for p in payload.to_pylist()],
-        pa.string(),
+        pa.binary(16),
     )
     return keys, hashes
 
@@ -667,7 +670,7 @@ def _accumulate_kh(
         hash_parts.append(hashes)
         rows += batch.num_rows
     if not key_parts:
-        empty = pa.table({"k": pa.array([], pa.string()), "h": pa.array([], pa.string())})
+        empty = pa.table({"k": pa.array([], pa.string()), "h": pa.array([], pa.binary(16))})
         return empty, 0
     kh = pa.table({"k": pa.chunked_array(key_parts), "h": pa.chunked_array(hash_parts)})
     return kh, rows
@@ -745,7 +748,7 @@ def check_unit(
                 ice_kh, ice_rows = _accumulate_kh(ice_batches, key_norm, common)
             else:
                 ice_kh, ice_rows = pa.table(
-                    {"k": pa.array([], pa.string()), "h": pa.array([], pa.string())}), 0
+                    {"k": pa.array([], pa.string()), "h": pa.array([], pa.binary(16))}), 0
 
             res.iceberg_row_count = ice_rows
             delta = _compare(src_kh, ice_kh)

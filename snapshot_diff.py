@@ -134,13 +134,13 @@ def _key_hash_table(table, snapshot_id: int, branch_col: str, key_col: str,
         keys = _fingerprint(batch, [branch_col, key_col])
         payload = _fingerprint(batch, business)
         hashes = pa.array(
-            [blake2b(p.encode("utf-8"), digest_size=16).hexdigest()
-             for p in payload.to_pylist()], pa.string())
+            [blake2b(p.encode("utf-8"), digest_size=16).digest()
+             for p in payload.to_pylist()], pa.binary(16))  # compact 16-byte digest
         keys_parts.append(keys)
         hash_parts.append(hashes)
         rows += batch.num_rows
     if not keys_parts:
-        empty = pa.table({"k": pa.array([], pa.string()), "h": pa.array([], pa.string())})
+        empty = pa.table({"k": pa.array([], pa.string()), "h": pa.array([], pa.binary(16))})
         return empty, 0, 0
     kh = pa.table({"k": pa.chunked_array(keys_parts), "h": pa.chunked_array(hash_parts)})
     distinct = pc.count_distinct(kh.column("k")).as_py()

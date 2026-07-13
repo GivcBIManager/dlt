@@ -117,7 +117,7 @@ function renderTables() {
   el("tlist").innerHTML = shown.length ? `<table id="ib-tables">
     <thead><tr><th>Table</th><th>Type</th><th class="num">Rows</th><th class="num">Size</th><th class="num">Snaps</th></tr></thead>
     <tbody>` + shown.map(t => `
-      <tr class="clickable" data-t="${esc(t.table)}" onclick="select('${esc(t.table)}')">
+      <tr class="clickable" data-t="${esc(t.table)}" tabindex="0" role="button" onclick="select('${esc(t.table)}')">
         <td class="mono">${esc(t.table)}</td>
         <td>${t.is_system ? '<span class="tag">system</span>' : '<span class="pill ok">data</span>'}</td>
         <td class="num">${fmtNum(t.rows)}</td>

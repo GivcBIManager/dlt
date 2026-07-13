@@ -44,7 +44,7 @@
         {% for key, href, label, icon in items %}
           <li>
             <a href="{{ href }}" class="{{ 'active' if active == key else '' }}">
-              <span class="material-symbols-outlined">{{ icon }}</span>
+              <span class="material-symbols-outlined" aria-hidden="true">{{ icon }}</span>
               <span class="nav-label">{{ label }}</span>
             </a>
           </li>
@@ -61,14 +61,14 @@
   <header class="topbar">
     <div class="topbar-left">
       <button class="icon-btn sidebar-toggle" id="sidebar-toggle" aria-label="Toggle menu">
-        <span class="material-symbols-outlined">menu</span>
+        <span class="material-symbols-outlined" aria-hidden="true">menu</span>
       </button>
       <span class="topbar-title">ETL Pipeline Manager</span>
       <span class="topbar-sep">/</span>
       <span class="topbar-page">{{ titles.get(active, '') }}</span>
     </div>
     <div class="topbar-right">
-      <span class="avatar"><span class="material-symbols-outlined">account_circle</span></span>
+      <span class="avatar"><span class="material-symbols-outlined" aria-hidden="true">account_circle</span></span>
     </div>
   </header>
 

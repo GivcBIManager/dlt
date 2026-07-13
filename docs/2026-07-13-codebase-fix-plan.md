@@ -32,12 +32,20 @@
 > recipient, row-Test feedback, fixed dead ‘No snapshots’ branch, out-of-band CSV
 > export, raw-JSON-toggle icon), plus removed two dead topbar controls. 5.7 did
 > the high-value a11y subset: modal `role="dialog"`/Esc/backdrop (Esc now beats the
-> sidebar) and accessible names on the ↻ buttons. **Deferred:** 5.5 vendor
-> fonts/icons (needs the font WOFF2 files fetched + committed for offline use —
-> Inter/JetBrains already have system fallbacks; Material Symbols would still
-> degrade to ligature text offline). **Remaining a11y (mechanical):** full
-> `<label for=>` association (~40 fields), keyboard-reachable clickable rows, and
-> delegated `data-` listeners to replace `esc()`-in-`onclick`.
+> sidebar) and accessible names on the ↻ buttons.
+>
+> **Follow-up pass (previously-skipped items):** 3.2 revisited — the DQ payload
+> digest is now a compact 16-byte binary instead of a 32-char hex string (halves
+> the hash column in the accumulated key/hash tables and the join; memory is the
+> binding constraint), applied in both `dq_check` and `snapshot_diff` and verified
+> through `_compare`. The remaining a11y is done: a load-time pass in `app.js`
+> derives `<label for=>` from the app's `label`→control sibling pairs, clickable
+> rows are keyboard-activatable (`tabindex`/`role` + Enter/Space), and decorative
+> Material Symbols icons are `aria-hidden`. The stale `test_dbt_scaffold` was fixed
+> (scan any model for the icebergLocal/ClickHouse pattern instead of a renamed
+> filename) — the suite is now fully green (212 passed). **Still deferred:** 5.5
+> vendor fonts/icons — needs the WOFF2 binaries fetched + committed, not feasible
+> in this environment; Inter/JetBrains already fall back to system fonts.
 
 Derived from the full-codebase review (security/bad-practice, performance, UI/UX,
 redundancy/dead-code, Windows↔Linux portability). Ordered into phases by

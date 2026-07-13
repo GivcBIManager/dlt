@@ -10,10 +10,17 @@ def test_dbt_project_yml_names_oasis_profile():
     assert "profile: 'oasis'" in text or 'profile: "oasis"' in text
 
 
-def test_example_model_uses_iceberglocal_and_warns():
-    sql = (REPO / "dbt" / "models" / "example_iceberg_clickhouse.sql").read_text(encoding="utf-8")
-    assert "icebergLocal(" in sql
-    assert "CLICKHOUSE" in sql.upper()  # the operator-path warning comment
+def test_a_model_demonstrates_iceberglocal_and_warns():
+    # A model demonstrating the icebergLocal(...) -> ClickHouse pattern (with the
+    # operator-path warning) must exist; scan models rather than hard-coding a
+    # filename so a model rename doesn't stale this test.
+    texts = [p.read_text(encoding="utf-8")
+             for p in (REPO / "dbt" / "models").glob("*.sql")]
+    assert texts, "expected at least one dbt model in dbt/models/"
+    assert any("icebergLocal(" in t for t in texts), \
+        "expected a model demonstrating the icebergLocal(...) path"
+    assert any("CLICKHOUSE" in t.upper() for t in texts), \
+        "expected the ClickHouse operator-path warning comment"
 
 
 def test_requirements_pin_dbt():
