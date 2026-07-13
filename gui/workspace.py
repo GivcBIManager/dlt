@@ -289,6 +289,37 @@ def read_log_file(name: str, max_bytes: int = 5_242_880) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def tail_log_file(name: str, offset: int = 0, max_bytes: int = 5_242_880) -> dict[str, Any]:
+    """Return log bytes after ``offset`` plus the new end offset (path-safe).
+
+    Mirrors ``RunManager.tail`` for arbitrary run_logs files so the Monitor page
+    can poll incrementally instead of re-downloading the whole file each tick.
+    From ``offset <= 0`` on a file larger than ``max_bytes``, only the trailing
+    ``max_bytes`` are returned (prefixed with a truncation marker). An ``offset``
+    past the current size means the file was rotated/replaced, so it restarts.
+    """
+    safe = Path(name).name
+    p = LOG_DIR / safe
+    if not p.exists() or p.parent.resolve() != LOG_DIR.resolve():
+        raise FileNotFoundError(name)
+    size = p.stat().st_size
+    if offset > size:  # rotated/replaced under us -> re-read from the tail
+        offset = 0
+    truncated = False
+    start = offset
+    if offset <= 0 and size > max_bytes:
+        start = size - max_bytes
+        truncated = True
+    chunk = ""
+    if start < size:
+        with p.open("rb") as fh:
+            fh.seek(max(start, 0))
+            chunk = fh.read().decode("utf-8", errors="replace")
+        if truncated:
+            chunk = "...[truncated]...\n" + chunk
+    return {"name": safe, "offset": size, "chunk": chunk, "truncated": truncated}
+
+
 def purge_logs(before: str | None = None, days: int | None = None) -> dict[str, Any]:
     """Delete ``run_logs/*.log`` files last modified before a cutoff.
 

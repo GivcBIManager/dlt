@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from collections.abc import Iterator
 from typing import Any, Callable, Optional
 
 import oracledb
@@ -411,32 +412,36 @@ def is_retryable(exc: Exception) -> bool:
 # --------------------------------------------------------------------------- #
 # Fetch -> Arrow
 # --------------------------------------------------------------------------- #
-def fetch_to_arrow(conn, query: str, fetch_batch_size: int) -> pa.Table:
-    """Run a query and build a typed Arrow table from the cursor."""
-    cur = conn.cursor()
-    cur.arraysize = fetch_batch_size
-    cur.prefetchrows = fetch_batch_size + 1
-    cur.execute(query)
+def _cursor_arrow_stream(cur, fetch_batch_size: int) -> Iterator[pa.Table]:
+    """Yield one typed Arrow table per ``fetchmany`` chunk from an executed cursor.
 
+    Streaming keeps only one chunk of Python row tuples alive at a time instead
+    of materializing the whole result set. Always yields at least one table --
+    an empty, correctly-typed one when the result set is empty -- so the caller
+    can always recover the schema.
+    """
     description = cur.description
     names = [d.name for d in description]
     target_types = [types_map.oracle_field_to_arrow(d) for d in description]
-    columns: list[list[Any]] = [[] for _ in names]
 
+    emitted = False
     while True:
         rows = cur.fetchmany(fetch_batch_size)
         if not rows:
             break
+        columns: list[list[Any]] = [[] for _ in names]
         for row in rows:
             for i, value in enumerate(row):
                 columns[i].append(value)
-    cur.close()
+        arrays = [types_map.build_arrow_column(columns[i], target_types[i])
+                  for i in range(len(names))]
+        emitted = True
+        yield pa.table(dict(zip(names, arrays)))
 
-    arrays = [
-        types_map.build_arrow_column(columns[i], target_types[i])
-        for i in range(len(names))
-    ]
-    return pa.table(dict(zip(names, arrays)))
+    if not emitted:
+        arrays = [types_map.build_arrow_column([], target_types[i])
+                  for i in range(len(names))]
+        yield pa.table(dict(zip(names, arrays)))
 
 
 def inject_columns(
@@ -534,9 +539,9 @@ def _cleanup_tmp(tdef: TableDef, branch_key: str, settings: Settings) -> None:
 #
 # Fast path: oracledb's native Arrow fetch (fetch_df_batches) builds columnar
 # Arrow data in C and streams it straight to parquet -- no per-row Python tuples.
-# Fallback path: the classic cursor builder (fetch_to_arrow), used automatically
-# for empty results or any column type the Arrow fetch can't handle (an Oracle
-# 11g safety net). Connection errors are NOT swallowed here -- they propagate to
+# Fallback path: the cursor stream (_cursor_arrow_stream -> ParquetWriter), used
+# automatically for empty results or any column type the Arrow fetch can't handle
+# (an Oracle 11g safety net). Connection errors are NOT swallowed here -- they propagate to
 # the caller's retry loop.
 # --------------------------------------------------------------------------- #
 class _ArrowEmpty(Exception):
@@ -572,10 +577,38 @@ def _stage_via_arrow(conn, query, tdef, branch_key, branch_id, settings, fetch_b
 
 
 def _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:
-    table = fetch_to_arrow(conn, query, fetch_batch_size)
-    table = inject_columns(table, branch_id, settings, tdef, now=now)
-    path = _stage(table, tdef, branch_key, settings)
-    return table.num_rows, table.schema, path
+    """Cursor fallback: stream fetchmany chunks straight to a ParquetWriter.
+
+    Mirrors ``_stage_via_arrow`` so a table that trips the fallback (an empty
+    result or a column the native Arrow fetch can't handle) never has to hold the
+    whole result set in Python memory at once.
+    """
+    tmp_path, final_path = _staged_paths(tdef, branch_key, settings)
+    cur = conn.cursor()
+    writer: Optional[pq.ParquetWriter] = None
+    out_schema: Optional[pa.Schema] = None
+    row_count = 0
+    try:
+        cur.arraysize = fetch_batch_size
+        cur.prefetchrows = fetch_batch_size + 1
+        cur.execute(query)
+        # _cursor_arrow_stream always yields >=1 table (an empty, typed one for an
+        # empty result), so the writer and schema are always established.
+        for batch in _cursor_arrow_stream(cur, fetch_batch_size):
+            batch = inject_columns(batch, branch_id, settings, tdef, now=now)
+            if writer is None:
+                out_schema = batch.schema
+                writer = pq.ParquetWriter(tmp_path, out_schema)
+            elif not batch.schema.equals(out_schema):
+                batch = batch.cast(out_schema)
+            writer.write_table(batch)
+            row_count += batch.num_rows
+    finally:
+        if writer is not None:
+            writer.close()
+        cur.close()
+    os.replace(tmp_path, final_path)
+    return row_count, out_schema, final_path
 
 
 def fetch_and_stage(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:

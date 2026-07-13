@@ -88,7 +88,7 @@
 
 {% block scripts %}
 <script>
-let curFile = null, autoTimer = null;
+let curFile = null, autoTimer = null, fileOffset = 0;
 
 // Parse the selected log file into the same progress dashboard as the Run page.
 const fileDash = createLogDash();
@@ -239,6 +239,7 @@ async function loadFiles() {
 }
 async function openFile(name) {
   curFile = name;
+  fileOffset = 0;  // fresh file -> re-read from the start on the next refresh
   el("file-title").textContent = name;
   $$("#files-table tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.f === name));
   await refreshFile();
@@ -249,12 +250,23 @@ async function openFile(name) {
 async function refreshFile() {
   if (!curFile) return;
   try {
-    const r = await apiGet(`/api/logs/${encodeURIComponent(curFile)}`);
+    // Offset-based tail: only transfer + parse bytes appended since last poll.
+    const fresh = fileOffset === 0;
+    const r = await apiGet(`/api/logs/${encodeURIComponent(curFile)}?offset=${fileOffset}`);
     const c = el("file-content");
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-    c.textContent = r.content || "(empty)";
+    if (fresh) {
+      c.textContent = r.chunk || "(empty)";
+      fileDash.reset();
+      if (r.chunk) { fileDash.feed(r.chunk); fileDash.flush(); }
+    } else if (r.chunk) {
+      if (c.textContent === "(empty)") c.textContent = "";
+      c.textContent += r.chunk;
+      fileDash.feed(r.chunk);
+    }
+    fileOffset = r.offset;
+    fileDash.render();
     if (atBottom) c.scrollTop = c.scrollHeight;
-    fileDash.load(r.content || "");
   } catch (e) { err(e.message); }
 }
 async function purgeLogs() {

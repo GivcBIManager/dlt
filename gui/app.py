@@ -430,7 +430,12 @@ def api_logs():
 @app.get("/api/logs/<path:name>")
 @api
 def api_log_one(name):
-    return jsonify({"name": name, "content": workspace.read_log_file(name)})
+    # Offset-based tail: the Monitor page polls with the last offset so only new
+    # bytes cross the wire. Without an offset param, fall back to a full read.
+    offset = request.args.get("offset", type=int)
+    if offset is None:
+        return jsonify({"name": name, "content": workspace.read_log_file(name)})
+    return jsonify(workspace.tail_log_file(name, offset))
 
 
 @app.post("/api/logs/purge")

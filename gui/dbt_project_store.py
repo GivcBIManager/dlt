@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -137,12 +138,50 @@ def _merge(fs: list[dict[str, Any]], ls: list[dict[str, Any]]) -> list[dict[str,
     return sorted(by_name.values(), key=lambda x: x["name"])
 
 
+# ``dbt ls`` shells out and parses the whole project (~seconds); cache its output
+# keyed on the newest models/tests file mtime so navigating the Models page does
+# not spawn a subprocess per request. The filesystem ``_scan`` stays uncached, so
+# a newly added file still shows up immediately even on a cache hit.
+_LS_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_LS_LOCK = threading.Lock()
+
+
+def _project_sig() -> float:
+    """Newest mtime across the project's model/test source files (0 if none)."""
+    root = _root()
+    latest = 0.0
+    for sub in ("models", "tests"):
+        base = root / sub
+        if not base.exists():
+            continue
+        for p in base.rglob("*"):
+            if p.suffix.lower() in _ALLOWED_SUFFIX:
+                try:
+                    latest = max(latest, p.stat().st_mtime)
+                except OSError:
+                    pass
+    return latest
+
+
+def _dbt_ls_cached(resource_type: str) -> list[dict[str, Any]]:
+    key = (str(_root()), resource_type)
+    sig = _project_sig()
+    with _LS_LOCK:
+        hit = _LS_CACHE.get(key)
+        if hit is not None and hit[0] == sig:
+            return hit[1]
+    result = _dbt_ls(resource_type)
+    with _LS_LOCK:
+        _LS_CACHE[key] = (sig, result)
+    return result
+
+
 def list_models() -> list[dict[str, Any]]:
-    return _merge(_scan("models"), _dbt_ls("model"))
+    return _merge(_scan("models"), _dbt_ls_cached("model"))
 
 
 def list_tests() -> list[dict[str, Any]]:
-    return _merge(_scan("tests"), _dbt_ls("test"))
+    return _merge(_scan("tests"), _dbt_ls_cached("test"))
 
 
 def read_file(rel: str) -> str:
