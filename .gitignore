@@ -19,8 +19,10 @@ __pycache__/
 .venv/
 venv/
 
-# secrets stay local
+# secrets / per-host config stay local (edited by the GUI on each host)
 .dlt/secrets.toml
+.dlt/config.toml
+tables.json
 
 # GUI server console logs
 gui-server.log
