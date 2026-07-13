@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import security
 from config import (
     CONFIG_TOML,
     CONTROL_STATE,
@@ -163,6 +164,7 @@ def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any
         tmp.unlink(missing_ok=True)
         raise ValueError(f"refused to write corrupt config.toml: {exc}") from exc
     tmp.replace(CONFIG_TOML)
+    security.prune_backups(STATE_DIR, "config.toml.*.bak")
     return {"applied": applied, "backup": str(backup)}
 
 

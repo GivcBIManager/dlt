@@ -29,6 +29,7 @@ import flows_store  # noqa: E402
 import flow_naming  # noqa: E402
 import iceberg_browser  # noqa: E402
 import pipelines_store  # noqa: E402
+import security  # noqa: E402
 import smtp_config  # noqa: E402
 import tables_store  # noqa: E402
 import workspace  # noqa: E402
@@ -64,6 +65,54 @@ def api(fn):
 
 def _body() -> dict:
     return request.get_json(silent=True) or {}
+
+
+# --------------------------------------------------------------------------- #
+# Security gate: authenticate non-loopback clients and reject cross-site posts
+# --------------------------------------------------------------------------- #
+_AUTH_EXEMPT_PATHS = {"/healthz"}
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _provided_token() -> str | None:
+    """Pull a client-supplied token from header, bearer auth, query, or cookie."""
+    hdr = request.headers.get("X-Auth-Token")
+    if hdr:
+        return hdr.strip()
+    auth = request.headers.get("Authorization", "")
+    if auth[:7].lower() == "bearer ":
+        return auth[7:].strip()
+    q = request.args.get("token")
+    if q:
+        return q.strip()
+    return request.cookies.get("oasis_token")
+
+
+@app.before_request
+def _auth_gate():
+    path = request.path
+    if path.startswith("/static/") or path in _AUTH_EXEMPT_PATHS:
+        return None
+    token = security.gui_token()
+    if not security.request_authorized(request.remote_addr, _provided_token(), token):
+        return jsonify({"error": "unauthorized"}), 401
+    # CSRF: a cross-site <form> POST cannot set an application/json content-type
+    # without triggering a CORS preflight, so require JSON on mutating requests
+    # (API clients that send an explicit token header are exempt).
+    if request.method in _MUTATING_METHODS:
+        if not request.is_json and not request.headers.get("X-Auth-Token"):
+            return jsonify({"error": "mutating requests must be application/json"}), 415
+    return None
+
+
+@app.after_request
+def _persist_token_cookie(resp: Response) -> Response:
+    """Let a browser authenticate once via ``?token=`` and keep a scoped cookie."""
+    token = security.gui_token()
+    q = request.args.get("token")
+    if token and security.token_matches(q, token):
+        resp.set_cookie("oasis_token", token, httponly=True, samesite="Strict")
+    return resp
 
 
 # --------------------------------------------------------------------------- #
@@ -598,7 +647,17 @@ def healthz():
 def main() -> None:
     host = os.environ.get("OASIS_GUI_HOST", "127.0.0.1")
     port = int(os.environ.get("OASIS_GUI_PORT", "8765"))
+    token = security.gui_token()
+    # Fail closed: refuse to expose the panel on a public interface unless a
+    # shared token is configured (it can launch processes and edit config).
+    security.check_bind(host, token)
+    # The Werkzeug debugger is an RCE vector; never enable it on a public bind.
     debug = os.environ.get("OASIS_GUI_DEBUG", "0") == "1"
+    if debug and not security.debugger_allowed(host):
+        print(f"[warn] debugger disabled: refusing debug mode on public bind {host!r}")
+        debug = False
+    if not security.is_loopback(host):
+        print("[info] token authentication required for non-loopback clients")
     print(f"HNH ETLPipeline Manager -> http://{host}:{port}  (Ctrl+C to stop)")
     if os.environ.get("OASIS_DAGSTER_AUTOSTART", "1") == "1":
         try:

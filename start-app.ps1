@@ -12,6 +12,8 @@
 
   Override any setting with env vars before launching:
     OASIS_GUI_HOST, OASIS_GUI_PORT (8765), OASIS_GUI_DEBUG,
+    OASIS_GUI_TOKEN (required for any non-loopback bind),
+    OASIS_ALLOW_CUSTOM_CMD (1 to permit the free-form 'custom' run script),
     OASIS_DAGSTER_AUTOSTART (1), OASIS_DAGSTER_PORT (3000)
 #>
 param(
@@ -34,6 +36,18 @@ if (-not (Test-Path $vpy)) {
 if ($Environment -eq "prod") {
   if (-not $env:OASIS_GUI_HOST)  { $env:OASIS_GUI_HOST = "0.0.0.0" }
   if (-not $env:OASIS_GUI_DEBUG) { $env:OASIS_GUI_DEBUG = "0" }
+  # The panel can launch processes and edit config; refuse to expose it on a
+  # public interface without a shared token (the app enforces this too).
+  $publicBind = $env:OASIS_GUI_HOST -ne "127.0.0.1" -and $env:OASIS_GUI_HOST -ne "::1"
+  if ($publicBind -and -not $env:OASIS_GUI_TOKEN) {
+    Write-Error @"
+Refusing to start prod on $($env:OASIS_GUI_HOST) without authentication.
+Set a shared token first, e.g.:  `$env:OASIS_GUI_TOKEN = '<secret>'
+Then open the UI once at  http://<host>:$($env:OASIS_GUI_PORT)/?token=<secret>
+(or bind to 127.0.0.1 behind a reverse proxy that handles auth).
+"@
+    exit 1
+  }
 }
 else {
   if (-not $env:OASIS_GUI_HOST)  { $env:OASIS_GUI_HOST = "127.0.0.1" }

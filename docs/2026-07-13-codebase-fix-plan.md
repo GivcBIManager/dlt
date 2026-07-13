@@ -1,5 +1,14 @@
 # Codebase Fix Plan — 2026-07-13
 
+> **Status:** Phase 1, Phase 2, and Phase 0 are implemented and tested
+> (commit `9f8dd0e` for Phase 1+2). Phase 0 adds `gui/security.py` (bind/auth/
+> command-lockdown/backup helpers), a `before_request` auth gate + CSRF
+> content-type check, fail-closed bind + debugger gate in `main()`, secret-backup
+> hardening (0600 + prune) across the config writers, and SQL-identifier
+> validation in `tables_store`. Deferred: the `/api/dagster/{status,stop}` routes
+> and the empty `orchestrator/.../defs/` dg-scaffold (kept intentionally). Phases
+> 3–5 not started.
+
 Derived from the full-codebase review (security/bad-practice, performance, UI/UX,
 redundancy/dead-code, Windows↔Linux portability). Ordered into phases by
 risk-to-ship and blast radius. Each item lists the file(s), the concrete change,

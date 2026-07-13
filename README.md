@@ -356,6 +356,13 @@ scripts to run the panel in a **development** or **production** profile:
 - Any environment variable set beforehand overrides the profile preset —
   `OASIS_GUI_HOST`, `OASIS_GUI_PORT` (default 8765), `OASIS_GUI_DEBUG`,
   `OASIS_DAGSTER_AUTOSTART` (default 1), `OASIS_DAGSTER_PORT` (default 3000).
+- **Security:** the panel can launch processes and edit config, so any
+  non-loopback bind (e.g. `prod`'s `0.0.0.0`) now **requires** a shared token —
+  set `OASIS_GUI_TOKEN=<secret>` before starting (`prod` refuses to launch
+  without it) and open the UI once at `http://<host>:8765/?token=<secret>`.
+  Loopback (`dev`) needs no token. The free-form `custom` run script is disabled
+  unless `OASIS_ALLOW_CUSTOM_CMD=1`, and the Flask debugger is forced off on any
+  public bind.
 - Stopping also terminates the embedded Dagster webserver + daemon.
 
 ### Scheduling model

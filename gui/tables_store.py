@@ -14,10 +14,41 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import security
 from config import STATE_DIR, TABLES_JSON
 
 CATEGORIES = ("masters", "transactions", "snapshots")
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
+
+# These fields are concatenated into Oracle SQL unparameterized, so guard them.
+_OPERATORS = {"=", "!=", "<>", "<", ">", "<=", ">="}
+# Tokens that have no place even inside a value expression: statement
+# terminators and comment markers (TO_DATE(...) etc. remain valid).
+_SQL_DANGER = (";", "--", "/*", "*/", "\x00")
+
+
+def _is_sql_identifier(value: str) -> bool:
+    """True for a plain or dotted identifier (``COL`` / ``SCHEMA.TABLE``)."""
+    parts = [p.strip() for p in str(value).split(".")]
+    return 1 <= len(parts) <= 3 and all(_IDENT_RE.match(p) for p in parts)
+
+
+def _value_expr_is_safe(value: Any) -> bool:
+    """A comparison value/expression must not smuggle in a second statement."""
+    s = str(value)
+    return not any(tok in s for tok in _SQL_DANGER)
+
+
+def _is_valid_table_ref(value: str) -> bool:
+    """A source ``table`` is either an identifier or an inline-view subquery.
+
+    Subqueries (``(SELECT ... )``) are a deliberate raw-SQL escape hatch; they
+    are accepted as long as they carry no statement terminator / comment marker.
+    """
+    v = str(value).strip()
+    if v.startswith("(") and v.endswith(")"):
+        return _value_expr_is_safe(v)
+    return _is_sql_identifier(v)
 
 # Recognised keys on a table entry (used to warn about typos, not to reject).
 KNOWN_KEYS = {
@@ -51,11 +82,32 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
     if not table:
         errs.append(f"{where}: 'table' is required (e.g. OASIS.MY_TABLE)")
     name = table or where
+    if table and not _is_valid_table_ref(table):
+        errs.append(f"{name}: 'table' must be a valid identifier (e.g. OASIS.MY_TABLE)")
 
     unique_key = str(entry.get("unique_key") or "").strip()
     # Snapshot tables are append-only (no merge), so they need no unique_key.
     if not unique_key and category != "snapshots":
         errs.append(f"{name}: 'unique_key' is required")
+    if unique_key:
+        for col in unique_key.split(","):
+            if not _is_sql_identifier(col):
+                errs.append(f"{name}: 'unique_key' has an invalid column '{col.strip()}'")
+
+    for col_field in ("cdc_column", "where_date_column"):
+        col = str(entry.get(col_field) or "").strip()
+        if col and not _is_sql_identifier(col):
+            errs.append(f"{name}: '{col_field}' must be a valid column identifier")
+
+    for op_field in ("where_operator", "where_operator_max"):
+        op = str(entry.get(op_field) or "").strip()
+        if op and op not in _OPERATORS:
+            errs.append(f"{name}: '{op_field}' must be one of {' '.join(sorted(_OPERATORS))}")
+
+    for val_field in ("where_value_of_initial_run", "where_value_max"):
+        val = entry.get(val_field)
+        if val not in (None, "") and not _value_expr_is_safe(val):
+            errs.append(f"{name}: '{val_field}' contains a disallowed SQL token (; -- /* */)")
 
     for k in entry:
         if k not in KNOWN_KEYS:
@@ -88,10 +140,19 @@ def _validate_helper(helper: Any, name: str) -> list[str]:
     for k in helper:
         if k not in KNOWN_HELPER_KEYS:
             errs.append(f"{name}: helper has unknown key '{k}'")
-    if not str(helper.get("table") or "").strip():
+    h_table = str(helper.get("table") or "").strip()
+    if not h_table:
         errs.append(f"{name}: helper is missing 'table'")
-    if not str(helper.get("cdc_column") or "").strip():
+    elif not _is_sql_identifier(h_table):
+        errs.append(f"{name}: helper 'table' must be a valid identifier")
+    h_cdc = str(helper.get("cdc_column") or "").strip()
+    if not h_cdc:
         errs.append(f"{name}: helper is missing 'cdc_column'")
+    elif not _is_sql_identifier(h_cdc):
+        errs.append(f"{name}: helper 'cdc_column' must be a valid column identifier")
+    h_wdc = str(helper.get("where_date_column") or "").strip()
+    if h_wdc and not _is_sql_identifier(h_wdc):
+        errs.append(f"{name}: helper 'where_date_column' must be a valid column identifier")
     pairs = helper.get("join") or helper.get("join_keys") or []
     if not pairs:
         errs.append(f"{name}: helper is missing 'join' key pairs")
@@ -104,6 +165,8 @@ def _validate_helper(helper: Any, name: str) -> list[str]:
                 )
             elif not str(pair[0]).strip() or not str(pair[1]).strip():
                 errs.append(f"{name}: empty column in helper join pair {pair!r}")
+            elif not (_is_sql_identifier(pair[0]) and _is_sql_identifier(pair[1])):
+                errs.append(f"{name}: helper join pair {pair!r} must be column identifiers")
     return errs
 
 
@@ -163,4 +226,5 @@ def save_raw(doc: dict[str, Any]) -> dict[str, Any]:
     tmp = TABLES_JSON.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(TABLES_JSON)
+    security.prune_backups(STATE_DIR, "tables.json.*.bak")
     return {"backup": str(backup_path) if backup_path else None}

@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import security
 from config import SECRETS_TOML, STATE_DIR
 
 try:  # tomllib is stdlib on 3.11+, tomli backport on 3.10
@@ -143,6 +144,7 @@ def _write(lines: list[str]) -> None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = STATE_DIR / f"secrets.toml.{stamp}.bak"
         shutil.copy2(SECRETS_TOML, backup)
+        security.harden_file(backup)
     tmp = SECRETS_TOML.with_suffix(".toml.tmp")
     tmp.write_text(text, encoding="utf-8")
     # Validate before committing; restore the backup if we produced bad TOML.
@@ -153,6 +155,8 @@ def _write(lines: list[str]) -> None:
         tmp.unlink(missing_ok=True)
         raise ValueError(f"refused to write corrupt secrets.toml: {exc}") from exc
     tmp.replace(SECRETS_TOML)
+    security.harden_file(SECRETS_TOML)
+    security.prune_backups(STATE_DIR, "secrets.toml.*.bak")
 
 
 def _read_lines() -> list[str]:

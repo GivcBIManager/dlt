@@ -62,6 +62,12 @@ def build_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
     py = python_executable()
 
     if script == "custom":
+        import security
+        if not security.custom_commands_allowed():
+            raise ValueError(
+                "The 'custom' command runs arbitrary argv and is disabled. "
+                "Set OASIS_ALLOW_CUSTOM_CMD=1 to enable it."
+            )
         argv = _split(spec.get("custom"))
         if not argv:
             raise ValueError("Custom command is empty")

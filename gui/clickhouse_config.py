@@ -13,6 +13,7 @@ import subprocess
 from datetime import datetime
 from typing import Any
 
+import security
 from config import SECRETS_TOML, STATE_DIR
 
 try:  # tomllib stdlib on 3.11+, tomli backport on 3.10
@@ -90,7 +91,9 @@ def _write(lines: list[str]) -> None:
     if SECRETS_TOML.exists():
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(SECRETS_TOML, STATE_DIR / f"secrets.toml.{stamp}.bak")
+        backup = STATE_DIR / f"secrets.toml.{stamp}.bak"
+        shutil.copy2(SECRETS_TOML, backup)
+        security.harden_file(backup)
     tmp = SECRETS_TOML.with_suffix(".toml.tmp")
     tmp.write_text(text, encoding="utf-8")
     try:
@@ -100,6 +103,8 @@ def _write(lines: list[str]) -> None:
         tmp.unlink(missing_ok=True)
         raise ValueError(f"refused to write corrupt secrets.toml: {exc}") from exc
     tmp.replace(SECRETS_TOML)
+    security.harden_file(SECRETS_TOML)
+    security.prune_backups(STATE_DIR, "secrets.toml.*.bak")
 
 
 def save_clickhouse(payload: dict[str, Any]) -> dict[str, Any]:
