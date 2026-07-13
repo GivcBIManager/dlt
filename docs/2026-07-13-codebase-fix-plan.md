@@ -23,7 +23,21 @@
 > prune to it; workspace's config.toml writer left as-is by design), 4.2
 > `workspace.list_branches` delegates to `connections.list_connections` (one
 > canonical redacted shape), 4.3 `matchFilter` moved into `app.js` and removed
-> from the three templates. Phase 5 not started.
+> from the three templates.
+>
+> **Phase 5 (mostly complete):** 5.1 resilient live-tail (run + dbt: retry +
+> reconnect banner), 5.2 editor dirty-state guards (dbt + tables, beforeunload),
+> 5.3 initial-load error handling (dbt lists, flows), 5.4 flow-node validation +
+> ✕ delete button, 5.6 consistency wins (Stop confirm/‘Stopping…’, inline SMTP
+> recipient, row-Test feedback, fixed dead ‘No snapshots’ branch, out-of-band CSV
+> export, raw-JSON-toggle icon), plus removed two dead topbar controls. 5.7 did
+> the high-value a11y subset: modal `role="dialog"`/Esc/backdrop (Esc now beats the
+> sidebar) and accessible names on the ↻ buttons. **Deferred:** 5.5 vendor
+> fonts/icons (needs the font WOFF2 files fetched + committed for offline use —
+> Inter/JetBrains already have system fallbacks; Material Symbols would still
+> degrade to ligature text offline). **Remaining a11y (mechanical):** full
+> `<label for=>` association (~40 fields), keyboard-reachable clickable rows, and
+> delegated `data-` listeners to replace `esc()`-in-`onclick`.
 
 Derived from the full-codebase review (security/bad-practice, performance, UI/UX,
 redundancy/dead-code, Windows↔Linux portability). Ordered into phases by
