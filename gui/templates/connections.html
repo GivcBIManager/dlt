@@ -26,7 +26,10 @@
 <div class="panel" style="margin-top:18px">
   <div class="panel-head">
     <h2><i class="fa-solid fa-envelope"></i> SMTP / email settings</h2>
-    <button class="btn ghost sm" id="smtp-test-btn"><i class="fa-solid fa-paper-plane"></i> Send test</button>
+    <span class="row-flex" style="gap:6px">
+      <input id="smtp-test-to" type="email" class="input sm" placeholder="test@example.com" aria-label="Send test email to" style="width:200px">
+      <button class="btn ghost sm" id="smtp-test-btn"><i class="fa-solid fa-paper-plane"></i> Send test</button>
+    </span>
   </div>
   <div style="padding:16px 0">
     <div class="form-row">
@@ -53,7 +56,7 @@
 
 <!-- editor modal -->
 <div class="modal-bg" id="modal">
-  <div class="modal" style="width:560px">
+  <div class="modal" style="width:560px" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <h2 id="modal-title">New connection</h2>
     <div class="form-row">
       <div><label>Branch key * <small>(used with --branch)</small></label><input id="c-key" title="letters, digits, underscore"></div>
@@ -105,7 +108,7 @@ async function load() {
         <td>${c.has_password ? '<span class="pill ok">set</span>' : '<span class="pill failed">none</span>'}</td>
         <td class="row-flex">
           <button class="btn sm ghost" onclick="openEdit('${esc(c.key)}')">Edit</button>
-          <button class="btn sm" onclick="testConn('${esc(c.key)}')">Test</button>
+          <button class="btn sm" onclick="testConn('${esc(c.key)}', this)">Test</button>
           <button class="btn sm bad" onclick="delConn('${esc(c.key)}')">Delete</button>
         </td>
       </tr>`).join("") || `<tr><td colspan="10" class="muted">No connections yet — add one.</td></tr>`;
@@ -160,13 +163,17 @@ async function save() {
   el("c-save").disabled = false;
 }
 
-async function testConn(key) {
-  // From the table: test the saved branch directly.
+async function testConn(key, btn) {
+  // From the table: test the saved branch directly. A dead host can take the
+  // full TCP timeout, so show progress and block repeat clicks meanwhile.
   el("c-msg").innerHTML = "";
+  let label;
+  if (btn) { label = btn.textContent; btn.disabled = true; btn.textContent = "Testing…"; }
   try {
     const r = await apiPost(`/api/connections/${encodeURIComponent(key)}/test`);
     r.ok ? ok(r.message || "Connection OK") : err(r.error || "Connection failed");
   } catch (e) { err(e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
 }
 
 async function testFromModal() {
@@ -229,12 +236,17 @@ async function saveSmtp() {
 }
 
 async function sendSmtpTest() {
-  const to = prompt("Send test email to:");
-  if (!to) return;
+  const input = el("smtp-test-to");
+  const to = (input.value || "").trim();
+  if (!to) { err("Enter a recipient email first"); input.focus(); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) { err("That doesn't look like a valid email"); input.focus(); return; }
+  const btn = el("smtp-test-btn");
+  btn.disabled = true;
   try {
     const r = await apiPost("/api/smtp/test", { to });
     r.ok ? ok(r.message || "Test email sent") : err(r.error || "Send failed");
   } catch (e) { err(e.message); }
+  finally { btn.disabled = false; }
 }
 
 el("s-save").onclick = saveSmtp;

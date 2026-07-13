@@ -389,8 +389,13 @@ async function pollTail() {
 
 async function stopRun() {
   if (!curRun) return;
+  if (!confirm(`Stop run ${curRun}? Work in progress will be abandoned.`)) return;
+  const btn = el("stop-btn");
+  btn.disabled = true; const label = btn.innerHTML;
+  btn.innerHTML = '<i class="fa-solid fa-stop"></i> Stopping…';
   try { await apiPost(`/api/runs/${curRun}/stop`); ok("Stop signal sent"); }
   catch (e) { err(e.message); }
+  finally { btn.disabled = false; btn.innerHTML = label; }
 }
 
 async function loadRuns() {
@@ -409,7 +414,9 @@ async function loadRuns() {
       </tr>`).join("") || `<tr><td colspan="5" class="muted">No runs yet.</td></tr>`;
   } catch (e) { err(e.message); }
 }
-async function stopById(id) { try { await apiPost(`/api/runs/${id}/stop`); ok("Stop sent"); loadRuns(); } catch(e){ err(e.message);} }
+async function stopById(id) {
+  if (!confirm(`Stop run ${id}? Work in progress will be abandoned.`)) return;
+  try { await apiPost(`/api/runs/${id}/stop`); ok("Stop sent"); loadRuns(); } catch(e){ err(e.message);} }
 
 // ---- Saved pipelines (built here, scheduled on the Flows page) -------------
 let SAVED = [];

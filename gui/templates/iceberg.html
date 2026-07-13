@@ -174,6 +174,10 @@ async function select(table) {
 }
 
 function renderSnapshots(snaps) {
+  if (!snaps || !snaps.length) {
+    el("snapshots").innerHTML = `<div class="muted">No snapshots.</div>`;
+    return;
+  }
   el("snapshots").innerHTML = `<div class="table-wrap"><table>
     <thead><tr><th>Committed</th><th>Operation</th><th class="num">Added</th><th class="num">Total</th><th class="num">Files</th><th>Snapshot id</th><th></th></tr></thead>
     <tbody>` + snaps.map(s => `
@@ -185,8 +189,7 @@ function renderSnapshots(snaps) {
         <td class="num">${fmtNum(s.total_files)}</td>
         <td class="mono"><a href="#" onclick="openSnapshotSample('${esc(s.snapshot_id)}');return false;" title="Load this snapshot on the Sample data tab">${esc(s.snapshot_id)}</a></td>
         <td>${s.is_current ? '<span class="pill ok">current</span>' : ''}</td>
-      </tr>`).join("") + `</tbody></table></div>`
-    || `<div class="muted">No snapshots.</div>`;
+      </tr>`).join("") + `</tbody></table></div>`;
 }
 
 function openSnapshotSample(id) {
@@ -253,7 +256,16 @@ async function loadSample() {
 
 function exportSample() {
   if (!curTable) return;
-  window.location.href = `/api/iceberg/tables/${encodeURIComponent(curTable)}/export?` + sampleQuery(false);
+  // Trigger the download out-of-band via a transient <a download> so the current
+  // page (and its explorer state) is never replaced -- previously a mid-export
+  // error navigated the tab to a raw JSON error body.
+  const url = `/api/iceberg/tables/${encodeURIComponent(curTable)}/export?` + sampleQuery(false);
+  const a = document.createElement("a");
+  a.href = url; a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
+  ok("Export started — check your downloads.");
+  const btn = el("export-sample");
+  if (btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, 2000); }
 }
 
 async function loadAgg() {

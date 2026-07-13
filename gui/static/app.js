@@ -150,6 +150,30 @@ function matchFilter(name, q) {
   return name.includes(q);
 }
 
+// Give the bare "↻" icon-only refresh buttons an accessible name.
+document.querySelectorAll("button").forEach(b => {
+  if (b.textContent.trim() === "↻" && !b.getAttribute("aria-label")) {
+    b.setAttribute("aria-label", "Refresh");
+    if (!b.title) b.title = "Refresh";
+  }
+});
+
+// Modal a11y: Esc and backdrop-click close any open ".modal-bg", and Esc closes
+// the modal in preference to the sidebar (capture phase runs before the sidebar
+// handler below, which then can't fire because propagation is stopped).
+(function () {
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const open = document.querySelector(".modal-bg.show");
+    if (open) { open.classList.remove("show"); e.stopPropagation(); }
+  }, true);
+  document.addEventListener("click", (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains("modal-bg") && t.classList.contains("show"))
+      t.classList.remove("show");
+  });
+})();
+
 // Sidebar toggle (mobile / narrow viewports)
 (function () {
   const toggle = el("sidebar-toggle");
