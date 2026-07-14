@@ -53,6 +53,7 @@ def _is_valid_table_ref(value: str) -> bool:
 # Recognised keys on a table entry (used to warn about typos, not to reject).
 KNOWN_KEYS = {
     "table",
+    "name",
     "unique_key",
     "cdc_column",
     "where_date_column",
@@ -81,9 +82,20 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
     table = str(entry.get("table") or "").strip()
     if not table:
         errs.append(f"{where}: 'table' is required (e.g. OASIS.MY_TABLE)")
-    name = table or where
+    is_query = table.startswith("(")
+    iceberg_name = str(entry.get("name") or "").strip()
+    name = iceberg_name or table or where
     if table and not _is_valid_table_ref(table):
         errs.append(f"{name}: 'table' must be a valid identifier (e.g. OASIS.MY_TABLE)")
+
+    # 'name' is the Iceberg table name for subquery sources. Plain tables derive
+    # their name from the identifier, so a stray 'name' there is ambiguous.
+    if is_query and not iceberg_name:
+        errs.append(f"{name}: subquery sources require 'name' (the Iceberg table name)")
+    if iceberg_name and not is_query:
+        errs.append(f"{name}: 'name' is only allowed when 'table' is a subquery")
+    if iceberg_name and not _IDENT_RE.match(iceberg_name):
+        errs.append(f"{name}: 'name' must be a plain identifier (e.g. visits_enriched)")
 
     unique_key = str(entry.get("unique_key") or "").strip()
     # Snapshot tables are append-only (no merge), so they need no unique_key.
@@ -188,7 +200,8 @@ def validate(doc: dict[str, Any]) -> list[str]:
         for idx, entry in enumerate(items):
             total += 1
             errs.extend(_validate_entry(entry, category, idx))
-            t = str((entry or {}).get("table") or "").strip().upper()
+            t = str((entry or {}).get("name")
+                    or (entry or {}).get("table") or "").strip().upper()
             if t:
                 if t in seen:
                     errs.append(f"Duplicate table '{t}' (appears more than once)")
