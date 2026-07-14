@@ -11,11 +11,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
 import tables_store
-from config import ICEBERG_ROOT, SYSTEM_TABLES
+from config import CONTROL_STATE, ICEBERG_ROOT, SYSTEM_TABLES
 
 _VER_RE = re.compile(r"(\d+)-")
 
@@ -570,4 +571,88 @@ def read_run_detail(run_id: str) -> dict[str, Any]:
         "run_id": run_id,
         "columns": RUN_DETAIL_COLUMNS,
         "rows": _run_detail_rows(log_rows, control_rows)[:1000],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Deletion (per-table drop + delete-all), spec 2026-07-14-staging-table-delete
+# --------------------------------------------------------------------------- #
+def _clear_control_state(tables: list[str]) -> list[str]:
+    """Pop the tables' watermark entries from control_state.json.
+
+    Atomic tmp-write + replace so a crash can't truncate the store. Returns
+    the subset of ``tables`` that actually had an entry. A missing or broken
+    control_state.json clears nothing (the ETL will rebuild it).
+    """
+    if not CONTROL_STATE.exists():
+        return []
+    try:
+        state = json.loads(CONTROL_STATE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    cleared = [t for t in tables if t in state]
+    if not cleared:
+        return []
+    for t in cleared:
+        state.pop(t)
+    tmp = CONTROL_STATE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    tmp.replace(CONTROL_STATE)
+    return cleared
+
+
+def _deletable_dir(table: str) -> Path:
+    """Validate a table name for deletion and return its directory.
+
+    Rejects path tricks (separators, ``..``), empty names and the ``_dlt*``
+    bookkeeping folders. System tables pass — deleting them explicitly is
+    allowed; the pipeline recreates them on the next observability write.
+    """
+    safe = Path(table).name
+    if not safe or safe != table or safe in (".", "..") or safe.startswith("_dlt"):
+        raise ValueError(f"table not deletable: {table!r}")
+    return ICEBERG_ROOT / safe
+
+
+def delete_table(table: str) -> dict[str, Any]:
+    """Drop one staging table: its folder AND its control_state watermarks."""
+    tdir = _deletable_dir(table)
+    if not (tdir / "metadata").is_dir():
+        raise FileNotFoundError(table)
+    meta = _load_metadata(table)
+    summary = (_current_snapshot(meta) or {}).get("summary", {}) if meta else {}
+    shutil.rmtree(tdir)
+    return {
+        "deleted": [table],
+        "watermarks_cleared": _clear_control_state([table]),
+        "rows": int(summary.get("total-records", 0) or 0),
+        "size_bytes": int(summary.get("total-files-size", 0) or 0),
+        "errors": {},
+    }
+
+
+def delete_all_tables(include_system: bool = False) -> dict[str, Any]:
+    """Drop every staging table (system tables only when ``include_system``).
+
+    ``_dlt*`` folders are always kept. Per-table failures (e.g. a file locked
+    on Windows) are collected in ``errors`` instead of aborting the sweep.
+    """
+    deleted: list[str] = []
+    errors: dict[str, str] = {}
+    if ICEBERG_ROOT.is_dir():
+        for child in sorted(ICEBERG_ROOT.iterdir()):
+            name = child.name
+            if name.startswith("_dlt") or not (child / "metadata").is_dir():
+                continue
+            if name in SYSTEM_TABLES and not include_system:
+                continue
+            try:
+                shutil.rmtree(child)
+                deleted.append(name)
+            except OSError as exc:
+                errors[name] = str(exc)
+    return {
+        "deleted": deleted,
+        "watermarks_cleared": _clear_control_state(deleted),
+        "errors": errors,
     }
