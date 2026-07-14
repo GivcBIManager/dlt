@@ -7,10 +7,15 @@ import json
 import pytest
 
 from etl.config import (
+    CATEGORY_SNAPSHOT,
     CATEGORY_TRANSACTION,
+    MODE_INCREMENTAL,
+    MODE_INITIAL,
+    Settings,
     TableDef,
     load_table_defs,
 )
+from etl.oracle_extract import Watermark, build_query
 
 QUERY = (
     "(SELECT v.VISIT_ID, v.AMEND_LAST_DATE, v.VISIT_DATE, m.STATUS "
@@ -90,3 +95,33 @@ def test_load_table_defs_query_entry_without_name_raises(tmp_path):
     p = _write_tables_json(tmp_path, {"table": QUERY, "unique_key": "VISIT_ID"})
     with pytest.raises(ValueError, match="name"):
         load_table_defs(p)
+
+
+# --- SQL rendering: the subquery is a valid Oracle inline view --------------- #
+def test_build_query_initial_wraps_inline_view():
+    tdef = _tdef(where_operator=">=", where_value_of_initial_run="2026-06-01")
+    settings = Settings(mode=MODE_INITIAL)
+    q = build_query(tdef, settings, Watermark(value=None), Watermark(value=None))
+    assert q.startswith(f"SELECT t.* FROM {QUERY} t")
+    assert "t.VISIT_DATE >= TO_DATE('2026-06-01', 'YYYY-MM-DD')" in q
+
+
+def test_build_query_incremental_union_uses_inline_view():
+    tdef = _tdef()
+    settings = Settings(mode=MODE_INCREMENTAL)
+    cdc_wm = Watermark(value="2026-07-01 00:00:00.000000", kind="datetime")
+    date_wm = Watermark(value="2026-07-01 00:00:00.000000", kind="datetime")
+    q = build_query(tdef, settings, cdc_wm, date_wm)
+    # both UNION ALL branches select from the inline view
+    assert q.count(f"FROM {QUERY} t") == 2
+    assert "UNION ALL" in q
+    assert "t.AMEND_LAST_DATE >" in q
+    assert "t.VISIT_DATE >=" in q
+
+
+def test_build_query_snapshot_full_copy_of_query():
+    tdef = _tdef(category=CATEGORY_SNAPSHOT, unique_key="",
+                 cdc_column=None, where_date_column=None)
+    settings = Settings(mode=MODE_INCREMENTAL)
+    q = build_query(tdef, settings, Watermark(value=None), Watermark(value=None))
+    assert q == f"SELECT * FROM {QUERY}"
