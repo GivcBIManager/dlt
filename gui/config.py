@@ -20,10 +20,52 @@ CONTROL_STATE = REPO_ROOT / "control_state.json"
 SECRETS_TOML = REPO_ROOT / ".dlt" / "secrets.toml"
 CONFIG_TOML = REPO_ROOT / ".dlt" / "config.toml"
 
-# Iceberg lake: <bucket_url>/<dataset>. Default bucket is ``iceberg_output`` and
-# the dataset is ``oasis`` ([etl].dataset_name in config.toml).
-ICEBERG_BUCKET = REPO_ROOT / "iceberg_output"
+# Iceberg lake: <bucket_url>/<dataset>. The bucket is whatever the pipeline
+# writes to -- [destination.filesystem].bucket_url in config.toml, overridable
+# with $OASIS_BUCKET_URL -- NOT an assumed <repo_root>/iceberg_output. The lake
+# often lives outside the repo (e.g. /var/lib/clickhouse/user_files/iceberg_output
+# so ClickHouse can read it), so hardcoding the repo path leaves the Staging
+# Layer Explorer empty. The dataset is ``oasis`` ([etl].dataset_name).
 ICEBERG_DATASET = "oasis"
+
+
+def _resolve_iceberg_bucket() -> Path:
+    """Local filesystem path of the Iceberg bucket the pipeline writes to.
+
+    Priority mirrors etl.config.resolve_bucket_url: ``$OASIS_BUCKET_URL`` >
+    ``[destination.filesystem].bucket_url`` in config.toml > the default
+    ``<repo_root>/iceberg_output``. A ``file://`` URI is converted back to a
+    path; a relative path is resolved against the repo root. A non-local scheme
+    (s3://, gs://, ...) can't be browsed from disk, so we fall back to the repo
+    default rather than crash.
+    """
+    raw = os.environ.get("OASIS_BUCKET_URL")
+    if not raw:
+        try:
+            import tomllib
+
+            with CONFIG_TOML.open("rb") as fh:
+                raw = (
+                    tomllib.load(fh)
+                    .get("destination", {})
+                    .get("filesystem", {})
+                    .get("bucket_url")
+                )
+        except (OSError, ValueError):
+            raw = None
+    raw = raw or "iceberg_output"
+
+    if raw.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+
+        return Path(unquote(urlparse(raw).path))
+    if "://" in raw:  # non-local scheme -- not browsable from disk
+        return REPO_ROOT / "iceberg_output"
+    p = Path(raw)
+    return p if p.is_absolute() else (REPO_ROOT / p)
+
+
+ICEBERG_BUCKET = _resolve_iceberg_bucket()
 ICEBERG_ROOT = ICEBERG_BUCKET / ICEBERG_DATASET
 
 # Entry-point scripts the panel can launch.
