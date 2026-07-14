@@ -535,6 +535,36 @@ def api_ib_overview(table):
     return jsonify(iceberg_browser.table_overview(table))
 
 
+def _run_guard():
+    """409 body when a pipeline run is alive, else None (deletes allowed)."""
+    live = runner.has_live_run()
+    if live:
+        return jsonify({"error": (
+            f"a pipeline run is active ({live['id']}: {live.get('label') or live.get('command', '')}); "
+            "deleting staging tables while a run is loading would corrupt the lake"
+        )}), 409
+    return None
+
+
+@app.delete("/api/iceberg/tables/<table>")
+@api
+def api_ib_delete_table(table):
+    blocked = _run_guard()
+    if blocked:
+        return blocked
+    return jsonify(iceberg_browser.delete_table(table))
+
+
+@app.delete("/api/iceberg/tables")
+@api
+def api_ib_delete_all():
+    blocked = _run_guard()
+    if blocked:
+        return blocked
+    include_system = bool(_body().get("include_system"))
+    return jsonify(iceberg_browser.delete_all_tables(include_system=include_system))
+
+
 @app.get("/api/iceberg/tables/<table>/sample")
 @api
 def api_ib_sample(table):
