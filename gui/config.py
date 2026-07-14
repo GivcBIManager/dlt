@@ -116,7 +116,14 @@ def dbt_executable() -> str:
 
 
 def dagster_host() -> str:
-    return os.environ.get("OASIS_DAGSTER_HOST", "127.0.0.1")
+    """Dagster webserver bind host; follows the GUI bind unless overridden.
+
+    Inheriting ``OASIS_GUI_HOST`` means a panel exposed on the LAN also makes
+    the Dagster UI reachable there (the browser links point at the same host).
+    """
+    return (os.environ.get("OASIS_DAGSTER_HOST")
+            or os.environ.get("OASIS_GUI_HOST")
+            or "127.0.0.1")
 
 
 def dagster_port() -> int:
@@ -124,7 +131,17 @@ def dagster_port() -> int:
 
 
 def dagster_base_url() -> str:
-    return f"http://{dagster_host()}:{dagster_port()}"
+    """Server-side (connect) base URL; a wildcard bind is reached via loopback.
+
+    Browser-facing links must NOT use this — they are derived per-request from
+    the host the client used (see ``app._dagster_public_base``).
+    """
+    host = dagster_host()
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    elif ":" in host:  # bare IPv6 literal needs brackets in a URL
+        host = f"[{host}]"
+    return f"http://{host}:{dagster_port()}"
 
 
 # Iceberg system tables (rendered specially in the monitor).

@@ -46,6 +46,7 @@ auto-starts Dagster on launch.
 | `OASIS_ALLOW_CUSTOM_CMD`  | `0`         | `1` permits the free-form `custom` run script (arbitrary argv); off by default |
 | `OASIS_PYTHON`            | venv python | Interpreter used to launch pipeline runs          |
 | `OASIS_DAGSTER_AUTOSTART` | `1`         | Set to `0` to skip auto-starting Dagster          |
+| `OASIS_DAGSTER_HOST`      | GUI host    | Bind address for the embedded Dagster UI; follows `OASIS_GUI_HOST` so remote clients can open it. **Dagster has no auth of its own** — override to `127.0.0.1` to keep it local. |
 | `OASIS_DAGSTER_PORT`      | `3000`      | Port for the embedded Dagster UI                  |
 
 ## Pages

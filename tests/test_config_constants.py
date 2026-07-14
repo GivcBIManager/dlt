@@ -2,10 +2,30 @@ def test_dagster_defaults(monkeypatch):
     import config
     monkeypatch.delenv("OASIS_DAGSTER_PORT", raising=False)
     monkeypatch.delenv("OASIS_DAGSTER_HOST", raising=False)
+    monkeypatch.delenv("OASIS_GUI_HOST", raising=False)
     assert config.dagster_port() == 3000
     assert config.dagster_base_url() == "http://127.0.0.1:3000"
     assert config.PIPELINES_JSON.name == "pipelines.json"
     assert config.FLOWS_JSON.name == "flows.json"
+
+
+def test_dagster_host_inherits_gui_host(monkeypatch):
+    import config
+    monkeypatch.delenv("OASIS_DAGSTER_HOST", raising=False)
+    monkeypatch.setenv("OASIS_GUI_HOST", "0.0.0.0")
+    assert config.dagster_host() == "0.0.0.0"
+    # explicit override still wins
+    monkeypatch.setenv("OASIS_DAGSTER_HOST", "192.168.1.10")
+    assert config.dagster_host() == "192.168.1.10"
+
+
+def test_dagster_base_url_is_connectable_on_wildcard_bind(monkeypatch):
+    # The server-side URL (GraphQL client) must reach a wildcard bind via loopback.
+    import config
+    monkeypatch.delenv("OASIS_DAGSTER_PORT", raising=False)
+    monkeypatch.delenv("OASIS_DAGSTER_HOST", raising=False)
+    monkeypatch.setenv("OASIS_GUI_HOST", "0.0.0.0")
+    assert config.dagster_base_url() == "http://127.0.0.1:3000"
 
 
 def test_dbt_paths_and_executable(tmp_path, monkeypatch):

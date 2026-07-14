@@ -11,6 +11,7 @@ import functools
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Must be set before pyarrow is first imported (pulled in transitively by the
 # module imports below): the mimalloc pool holds freed memory, the system pool
@@ -74,6 +75,37 @@ def api(fn):
 
 def _body() -> dict:
     return request.get_json(silent=True) or {}
+
+
+def _dagster_public_base() -> str:
+    """Dagster UI base URL for the browser: the GUI hostname the client used.
+
+    The server-local ``config.dagster_base_url()`` (127.0.0.1) is meaningless
+    on a remote client's machine, so links inherit the request's host instead.
+    """
+    hostname = urlsplit(f"//{request.host}").hostname or "127.0.0.1"
+    if ":" in hostname:  # bare IPv6 literal needs brackets in a URL
+        hostname = f"[{hostname}]"
+    return f"http://{hostname}:{config.dagster_port()}"
+
+
+def _dagster_status_public() -> dict:
+    """Dagster service status with a browser-usable UI URL."""
+    status = dagster_service.status()
+    status["url"] = _dagster_public_base()
+    return status
+
+
+def _publicise_dagster_links(items: list[dict]) -> list[dict]:
+    """Rewrite server-local Dagster links so they work from the client's machine."""
+    local = config.dagster_base_url()
+    public = _dagster_public_base()
+    for item in items:
+        for key in ("link", "run_link"):
+            val = item.get(key)
+            if val and val.startswith(local):
+                item[key] = public + val[len(local):]
+    return items
 
 
 # --------------------------------------------------------------------------- #
@@ -333,7 +365,7 @@ def api_flows_list():
     return jsonify({
         "flows": flows_store.load_flows(),
         "pipelines": pipelines_store.load_pipelines(),
-        "dagster": dagster_service.status(),
+        "dagster": _dagster_status_public(),
         "server_timezone": config.server_timezone(),
     })
 
@@ -413,13 +445,14 @@ def api_smtp_test():
 @app.get("/api/dagster/status")
 @api
 def api_dagster_status():
-    return jsonify(dagster_service.status())
+    return jsonify(_dagster_status_public())
 
 
 @app.post("/api/dagster/start")
 @api
 def api_dagster_start():
-    return jsonify(dagster_service.start())
+    dagster_service.start()
+    return jsonify(_dagster_status_public())
 
 
 @app.post("/api/dagster/stop")
@@ -431,7 +464,7 @@ def api_dagster_stop():
 @app.get("/api/dagster/flow-status")
 @api
 def api_dagster_flow_status():
-    return jsonify(dagster_client.flow_status())
+    return jsonify(_publicise_dagster_links(dagster_client.flow_status()))
 
 
 # --------------------------------------------------------------------------- #
@@ -683,6 +716,9 @@ def main() -> None:
         try:
             dagster_service.start()
             print(f"Dagster UI -> {config.dagster_base_url()}")
+            if not security.is_loopback(config.dagster_host()):
+                print(f"[warn] Dagster UI has no authentication and is listening on "
+                      f"{config.dagster_host()}:{config.dagster_port()}")
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] could not start Dagster: {exc}")
     app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)
