@@ -69,6 +69,14 @@
       <span class="topbar-page">{{ titles.get(active, '') }}</span>
     </div>
     <div class="topbar-right">
+      {% if session.get('user') %}
+      <form class="logout-form" method="post" action="{{ url_for('logout') }}">
+        <button type="submit" class="logout-btn" title="Sign out {{ session.get('user') }}">
+          <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+          Sign out
+        </button>
+      </form>
+      {% endif %}
       <span class="avatar"><span class="material-symbols-outlined" aria-hidden="true">account_circle</span></span>
     </div>
   </header>

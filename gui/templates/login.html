@@ -1,12 +1,28 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Sign in</title></head>
-<body>
-  <form method="post" action="/login">
-    {% if error %}<p>{{ error }}</p>{% endif %}
-    <input name="username" autocomplete="username">
-    <input name="password" type="password" autocomplete="current-password">
-    <button type="submit">Sign in</button>
-  </form>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in - HNH ETLPipeline Manager</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo-mark.svg') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <img class="login-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="HNH">
+    <h1>HNH ETL</h1>
+    <p class="login-sub">Sign in to the pipeline manager</p>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ url_for('page_login') }}">
+      <label for="login-username">Username</label>
+      <input id="login-username" name="username" autocomplete="username" autofocus required>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit" class="login-submit">Sign in</button>
+    </form>
+  </div>
 </body>
 </html>

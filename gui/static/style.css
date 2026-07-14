@@ -638,3 +638,49 @@ select.multi option { padding: 4px 8px; border-radius: 4px; }
 .pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .pager .pager-count { color: var(--text-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .pager .btn.sm { padding: .2rem .55rem; line-height: 1; }
+
+/* ---- Login page ---------------------------------------------------------- */
+.login-body {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--background);
+}
+.login-card {
+  width: min(380px, 92vw); background: var(--surface);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg); padding: 40px 36px; text-align: center;
+}
+.login-logo { width: 56px; height: 56px; margin-bottom: 12px; }
+.login-card h1 { font-size: 1.35rem; font-weight: 800; }
+.login-sub { color: var(--text-muted); font-size: .9rem; margin-bottom: 22px; }
+.login-error {
+  background: var(--error-light); color: var(--error);
+  border-radius: var(--radius-md); padding: 8px 12px;
+  font-size: .85rem; font-weight: 600; margin-bottom: 16px;
+}
+.login-card form { text-align: left; display: flex; flex-direction: column; gap: 6px; }
+.login-card label {
+  font-size: .72rem; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-top: 10px;
+}
+.login-card input {
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); font: inherit; background: var(--surface-low);
+}
+.login-card input:focus { outline: 2px solid var(--primary-light); border-color: var(--primary); }
+.login-submit {
+  margin-top: 20px; padding: 11px; border: 0; border-radius: var(--radius-full);
+  background: var(--gradient-primary); color: var(--on-primary);
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.login-submit:hover { filter: brightness(1.08); }
+
+/* Sign-out button in the top bar */
+.logout-form { display: inline; }
+.logout-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-soft); background: transparent;
+  border-radius: var(--radius-full); padding: 6px 14px;
+  font: inherit; font-size: .82rem; font-weight: 600;
+  color: var(--text-muted); cursor: pointer;
+}
+.logout-btn:hover { border-color: var(--primary); color: var(--primary); }
