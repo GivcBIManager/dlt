@@ -194,6 +194,22 @@ class RunManager:
         with self._lock:
             return sum(1 for r in self._runs.values() if r["status"] in ("running", "detached"))
 
+    def has_live_run(self) -> dict[str, Any] | None:
+        """First run that is actually alive right now, else None.
+
+        ``running`` entries are owned Popens and always count. ``detached``
+        entries (adopted from a previous GUI session) count only while their
+        PID is alive, so a stale registry entry can't block destructive
+        actions forever.
+        """
+        with self._lock:
+            for r in self._runs.values():
+                if r["status"] == "running":
+                    return r
+                if r["status"] == "detached" and _pid_alive(r.get("pid")):
+                    return r
+        return None
+
     def tail(self, run_id: str, offset: int = 0) -> dict[str, Any]:
         """Return new log bytes since ``offset`` plus the run's current status."""
         run = self.get(run_id)
