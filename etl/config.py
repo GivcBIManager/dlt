@@ -123,14 +123,27 @@ class TableDef:
     # expression so the ceiling moves forward each run).
     where_value_max: Optional[str] = None     # upper-bound value/expression (window ceiling)
     where_operator_max: Optional[str] = None  # operator for the upper bound (default "<=")
+    # Explicit Iceberg table name. Only meaningful (and required) when ``table``
+    # is an inline-view subquery source -- plain tables keep deriving their name
+    # from the OWNER.TABLE identifier.
+    name: Optional[str] = None
 
     # ----- derived identifiers ------------------------------------------------
     @property
+    def is_query(self) -> bool:
+        """True when ``table`` is an inline-view subquery, not an identifier."""
+        return self.table.lstrip().startswith("(")
+
+    @property
     def owner(self) -> str:
+        if self.is_query:
+            return ""
         return self.table.split(".", 1)[0] if "." in self.table else ""
 
     @property
     def object_name(self) -> str:
+        if self.is_query:
+            return self.name or ""
         return self.table.split(".", 1)[1] if "." in self.table else self.table
 
     @property
@@ -366,20 +379,25 @@ def load_table_defs(path: Path) -> list[TableDef]:
     defs: list[TableDef] = []
     for category in (CATEGORY_MASTER, CATEGORY_TRANSACTION, CATEGORY_SNAPSHOT):
         for entry in data.get(category, []):
-            defs.append(
-                TableDef(
-                    table=entry["table"],
-                    unique_key=entry.get("unique_key"),
-                    cdc_column=entry.get("cdc_column"),
-                    where_date_column=entry.get("where_date_column"),
-                    where_operator=entry.get("where_operator"),
-                    where_value_of_initial_run=entry.get("where_value_of_initial_run"),
-                    category=category,
-                    helper=_parse_helper(entry),
-                    where_value_max=entry.get("where_value_max"),
-                    where_operator_max=entry.get("where_operator_max"),
-                )
+            tdef = TableDef(
+                table=entry["table"],
+                unique_key=entry.get("unique_key"),
+                cdc_column=entry.get("cdc_column"),
+                where_date_column=entry.get("where_date_column"),
+                where_operator=entry.get("where_operator"),
+                where_value_of_initial_run=entry.get("where_value_of_initial_run"),
+                category=category,
+                helper=_parse_helper(entry),
+                where_value_max=entry.get("where_value_max"),
+                where_operator_max=entry.get("where_operator_max"),
+                name=entry.get("name"),
             )
+            if tdef.is_query and not (tdef.name or "").strip():
+                raise ValueError(
+                    f"{category} entry uses a subquery source and requires a "
+                    f"'name' (the Iceberg table name): {entry['table'][:80]}"
+                )
+            defs.append(tdef)
     if not defs:
         raise ValueError(f"No table definitions found in {path}")
     return defs
