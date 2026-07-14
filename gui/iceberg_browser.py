@@ -14,9 +14,39 @@ import re
 from pathlib import Path
 from typing import Any
 
+import tables_store
 from config import ICEBERG_ROOT, SYSTEM_TABLES
 
 _VER_RE = re.compile(r"(\d+)-")
+
+# tables.json section -> singular label shown/filtered in the explorer.
+_CATEGORY_LABELS = {"masters": "master", "transactions": "transaction", "snapshots": "snapshot"}
+
+
+def _category_index() -> dict[str, str]:
+    """Map Iceberg table name -> tables.json category ('master' / ...).
+
+    The Iceberg name is derived the same way the pipeline derives it
+    (etl.config.TableDef.dataset_table_name): drop the owner prefix, then
+    lower-snake the object name. A missing or unreadable tables.json just
+    yields an empty index -- tables then show as uncategorized data.
+    """
+    try:
+        doc = tables_store.load_raw()
+    except (OSError, ValueError):
+        return {}
+    idx: dict[str, str] = {}
+    for section, label in _CATEGORY_LABELS.items():
+        items = doc.get(section) or []
+        if not isinstance(items, list):
+            continue
+        for entry in items:
+            ref = str(entry.get("table") or "") if isinstance(entry, dict) else ""
+            obj = ref.split(".", 1)[1] if "." in ref else ref
+            name = re.sub(r"[^0-9a-zA-Z]+", "_", obj).strip("_").lower()
+            if name:
+                idx[name] = label
+    return idx
 
 
 # --------------------------------------------------------------------------- #
@@ -75,6 +105,7 @@ def list_tables() -> list[dict[str, Any]]:
     """All Iceberg datasets with headline numbers, data tables first."""
     if not ICEBERG_ROOT.is_dir():
         return []
+    categories = _category_index()
     out: list[dict[str, Any]] = []
     for child in sorted(ICEBERG_ROOT.iterdir()):
         if not (child / "metadata").is_dir():
@@ -96,6 +127,7 @@ def list_tables() -> list[dict[str, Any]]:
             {
                 "table": table,
                 "is_system": table in SYSTEM_TABLES,
+                "category": categories.get(table),
                 "rows": rows,
                 "files": files,
                 "size_bytes": size,

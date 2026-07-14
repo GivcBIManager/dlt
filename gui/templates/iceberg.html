@@ -10,7 +10,14 @@
   <div class="filter-bar">
     <div><label>Filter by name</label><input id="tbl-filter" placeholder="wildcard, e.g. *appointment*"></div>
     <div><label>Type</label>
-      <select id="tbl-type"><option value="">All</option><option value="data">Data</option><option value="system">System</option></select></div>
+      <select id="tbl-type">
+        <option value="">All</option>
+        <option value="master">Masters</option>
+        <option value="transaction">Transactions</option>
+        <option value="snapshot">Snapshots</option>
+        <option value="data">Other data</option>
+        <option value="system">System</option>
+      </select></div>
     <span class="spacer"></span>
     <span id="tbl-count" class="muted" style="align-self:flex-end"></span>
   </div>
@@ -107,9 +114,12 @@ async function loadTables() {
 function renderTables() {
   const q = el("tbl-filter").value;
   const type = el("tbl-type").value;
-  const shown = allTables.filter(t =>
-    matchFilter(t.table, q) &&
-    (type === "" || (type === "system") === !!t.is_system));
+  const matchType = t =>
+    type === "" ? true :
+    type === "system" ? !!t.is_system :
+    type === "data" ? (!t.is_system && !t.category) :
+    t.category === type;
+  const shown = allTables.filter(t => matchFilter(t.table, q) && matchType(t));
 
   el("tbl-count").textContent =
     `${shown.length} of ${allTables.length} table${allTables.length === 1 ? "" : "s"}`;
@@ -119,7 +129,9 @@ function renderTables() {
     <tbody>` + shown.map(t => `
       <tr class="clickable" data-t="${esc(t.table)}" tabindex="0" role="button" onclick="select('${esc(t.table)}')">
         <td class="mono">${esc(t.table)}</td>
-        <td>${t.is_system ? '<span class="tag">system</span>' : '<span class="pill ok">data</span>'}</td>
+        <td>${t.is_system ? '<span class="tag">system</span>'
+             : t.category ? `<span class="pill ${esc(t.category)}">${esc(t.category)}</span>`
+             : '<span class="pill gray">data</span>'}</td>
         <td class="num">${fmtNum(t.rows)}</td>
         <td class="num">${fmtBytes(t.size_bytes)}</td>
         <td class="num">${t.snapshots}</td>
