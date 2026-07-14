@@ -468,6 +468,34 @@ def inject_columns(
     n = table.num_rows
     if now is None:
         now = now_local()
+    # A source table may itself carry a column named like an injected one (e.g.
+    # OASIS.STAFF_POSTS has its own BRANCH_ID). Appending on top would leave the
+    # field twice in the staged parquet and every later lookup by name would
+    # raise 'Field "X" exists 2 times in schema'. Rename the source column with
+    # a SRC_ prefix so its data survives while the reserved name stays the
+    # pipeline's (it is the partition/merge key). Matching is case-insensitive
+    # because dlt normalizes column names case-insensitively downstream.
+    reserved = [settings.branch_id_column, settings.inserted_ts_column,
+                settings.recorded_ts_column]
+    if tdef.is_snapshot:
+        reserved += [settings.snapshot_version_column, settings.snapshot_date_column]
+    reserved_lower = {r.lower() for r in reserved}
+    if any(name.lower() in reserved_lower for name in table.column_names):
+        taken = {name.lower() for name in table.column_names}
+        renamed = []
+        for name in table.column_names:
+            if name.lower() in reserved_lower:
+                new = f"SRC_{name}"
+                while new.lower() in taken:
+                    new = f"SRC_{new}"
+                taken.add(new.lower())
+                log.warning(
+                    "%s: source column %s collides with an ETL-injected column; "
+                    "renamed to %s", tdef.table, name, new)
+                renamed.append(new)
+            else:
+                renamed.append(name)
+        table = table.rename_columns(renamed)
     # Constant columns: pa.repeat allocates the run in C rather than building an
     # n-element Python list per column (millions of transient objects per run).
     table = table.append_column(
