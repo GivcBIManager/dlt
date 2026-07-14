@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+  <form method="post" action="/login">
+    {% if error %}<p>{{ error }}</p>{% endif %}
+    <input name="username" autocomplete="username">
+    <input name="password" type="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

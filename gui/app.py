@@ -16,7 +16,8 @@ from pathlib import Path
 # directory is importable for the flat module imports below.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from flask import Flask, Response, jsonify, render_template, request  # noqa: E402
+from flask import (Flask, Response, jsonify, redirect, render_template, request,  # noqa: E402
+                   session, url_for)
 
 import clickhouse_config  # noqa: E402
 import commands  # noqa: E402
@@ -40,6 +41,9 @@ from pipeline_runner import RunManager  # noqa: E402
 app = Flask(__name__)
 runner = RunManager()
 ensure_dirs()
+# Signed-session key persists across restarts so logins survive a server bounce.
+app.secret_key = security.load_or_create_secret_key(config.STATE_DIR / "secret_key")
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 
 # --------------------------------------------------------------------------- #
@@ -68,24 +72,13 @@ def _body() -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Security gate: authenticate non-loopback clients and reject cross-site posts
+# Security gate: session login for non-loopback clients, JSON-only mutations
 # --------------------------------------------------------------------------- #
-_AUTH_EXEMPT_PATHS = {"/healthz"}
+_AUTH_EXEMPT_PATHS = {"/healthz", "/login"}
+# Login/logout are browser form posts; the session cookie is SameSite=Lax so a
+# cross-site form cannot ride an existing session.
+_CSRF_EXEMPT_PATHS = {"/login", "/logout"}
 _MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-
-def _provided_token() -> str | None:
-    """Pull a client-supplied token from header, bearer auth, query, or cookie."""
-    hdr = request.headers.get("X-Auth-Token")
-    if hdr:
-        return hdr.strip()
-    auth = request.headers.get("Authorization", "")
-    if auth[:7].lower() == "bearer ":
-        return auth[7:].strip()
-    q = request.args.get("token")
-    if q:
-        return q.strip()
-    return request.cookies.get("oasis_token")
 
 
 @app.before_request
@@ -93,26 +86,39 @@ def _auth_gate():
     path = request.path
     if path.startswith("/static/") or path in _AUTH_EXEMPT_PATHS:
         return None
-    token = security.gui_token()
-    if not security.request_authorized(request.remote_addr, _provided_token(), token):
+    if not security.request_authorized(request.remote_addr, "user" in session):
+        # Browsers land on the login page; API clients get a JSON 401.
+        if request.method == "GET" and request.accept_mimetypes.accept_html:
+            return redirect(url_for("page_login"))
         return jsonify({"error": "unauthorized"}), 401
     # CSRF: a cross-site <form> POST cannot set an application/json content-type
-    # without triggering a CORS preflight, so require JSON on mutating requests
-    # (API clients that send an explicit token header are exempt).
-    if request.method in _MUTATING_METHODS:
-        if not request.is_json and not request.headers.get("X-Auth-Token"):
+    # without triggering a CORS preflight, so require JSON on mutating requests.
+    if request.method in _MUTATING_METHODS and path not in _CSRF_EXEMPT_PATHS:
+        if not request.is_json:
             return jsonify({"error": "mutating requests must be application/json"}), 415
     return None
 
 
-@app.after_request
-def _persist_token_cookie(resp: Response) -> Response:
-    """Let a browser authenticate once via ``?token=`` and keep a scoped cookie."""
-    token = security.gui_token()
-    q = request.args.get("token")
-    if token and security.token_matches(q, token):
-        resp.set_cookie("oasis_token", token, httponly=True, samesite="Strict")
-    return resp
+@app.route("/login", methods=["GET", "POST"])
+def page_login():
+    already_in = security.request_authorized(request.remote_addr, "user" in session)
+    if request.method == "GET":
+        if already_in:
+            return redirect(url_for("page_dashboard"))
+        return render_template("login.html", error=None)
+    creds = security.gui_credentials()
+    username = (request.form.get("username") or "").strip()
+    password = request.form.get("password") or ""
+    if security.credentials_match(username, password, creds):
+        session["user"] = username
+        return redirect(url_for("page_dashboard"))
+    return render_template("login.html", error="Invalid username or password"), 401
+
+
+@app.post("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("page_login"))
 
 
 # --------------------------------------------------------------------------- #
@@ -657,17 +663,16 @@ def healthz():
 def main() -> None:
     host = os.environ.get("OASIS_GUI_HOST", "127.0.0.1")
     port = int(os.environ.get("OASIS_GUI_PORT", "8765"))
-    token = security.gui_token()
-    # Fail closed: refuse to expose the panel on a public interface unless a
-    # shared token is configured (it can launch processes and edit config).
-    security.check_bind(host, token)
+    # Fail closed: refuse to expose the panel on a public interface unless
+    # login credentials are configured (it can launch processes and edit config).
+    security.check_bind(host, security.gui_credentials())
     # The Werkzeug debugger is an RCE vector; never enable it on a public bind.
     debug = os.environ.get("OASIS_GUI_DEBUG", "0") == "1"
     if debug and not security.debugger_allowed(host):
         print(f"[warn] debugger disabled: refusing debug mode on public bind {host!r}")
         debug = False
     if not security.is_loopback(host):
-        print("[info] token authentication required for non-loopback clients")
+        print("[info] login required for non-loopback clients")
     print(f"HNH ETLPipeline Manager -> http://{host}:{port}  (Ctrl+C to stop)")
     if os.environ.get("OASIS_DAGSTER_AUTOSTART", "1") == "1":
         try:
