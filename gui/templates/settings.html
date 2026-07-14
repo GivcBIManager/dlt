@@ -46,6 +46,11 @@ const GROUPS = [
       { k: "max_branch_workers", label: "Branch workers", unit: "parallel", help: "Branches extracted at the same time (outer pool)." },
       { k: "max_table_workers",  label: "Table workers",  unit: "per branch", help: "Tables extracted in parallel within each branch." },
     ]},
+  { icon: "fa-rotate-right", title: "Resilience", blurb: "Retry policy for connection failures.",
+    keys: [
+      { k: "max_retries",      label: "Max retries",    unit: "attempts", help: "Retry attempts after a connection failure (0 = fail fast)." },
+      { k: "retry_interval_s", label: "Retry interval", unit: "s", help: "Pause between retry attempts." },
+    ]},
   { icon: "fa-database", title: "Oracle connection", blurb: "Driver mode and the per-branch session pool.",
     keys: [
       { k: "dsn_mode",   label: "DSN mode", options: ["service_name", "sid"], help: "How connect strings are built from branch config." },
@@ -57,11 +62,6 @@ const GROUPS = [
       { k: "thick_mode", label: "Thick mode", help: "Oracle 11g requires the thick (Instant Client) driver." },
       { k: "oracle_client_lib_dir", label: "Instant Client dir", mono: true,
         help: "Ignored when missing on this host; $ORACLE_CLIENT_LIB_DIR overrides." },
-    ]},
-  { icon: "fa-rotate-right", title: "Resilience", blurb: "Retry policy for connection failures.",
-    keys: [
-      { k: "max_retries",      label: "Max retries",    unit: "attempts", help: "Retry attempts after a connection failure (0 = fail fast)." },
-      { k: "retry_interval_s", label: "Retry interval", unit: "s", help: "Pause between retry attempts." },
     ]},
   { icon: "fa-clock-rotate-left", title: "Snapshot retention", blurb: "Iceberg snapshots expired after each load.",
     keys: [

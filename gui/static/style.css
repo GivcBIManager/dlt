@@ -541,11 +541,13 @@ select[multiple] { height: 150px; }
 
 /* ===================== Settings page ===================== */
 .card .v { overflow-wrap: anywhere; word-break: break-word; }
-.settings-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; align-items: start; }
-@media (max-width: 860px) { .settings-groups { grid-template-columns: 1fr; } }
+/* Masonry via CSS multi-column: cards pack tightly under each other, so a tall
+ * card (Oracle connection) no longer leaves dead space beside short ones. */
+.settings-groups { columns: 380px; column-gap: 16px; }
 .settings-group {
   background: var(--surface); border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm);
+  break-inside: avoid; margin-bottom: 16px;
 }
 .settings-group-head {
   display: flex; align-items: center; gap: 12px; padding: 13px 16px;
