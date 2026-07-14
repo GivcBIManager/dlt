@@ -47,6 +47,7 @@ from pipeline_runner import RunManager  # noqa: E402
 app = Flask(__name__)
 runner = RunManager()
 ensure_dirs()
+config.server_timezone()  # prime the cached tz detection at startup, not on page load
 # Signed-session key persists across restarts so logins survive a server bounce.
 app.secret_key = security.load_or_create_secret_key(config.STATE_DIR / "secret_key")
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")

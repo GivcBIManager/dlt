@@ -8,6 +8,7 @@ any current working directory.
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 
@@ -169,8 +170,13 @@ def python_executable() -> str:
     return os.environ.get("OASIS_PYTHON") or sys.executable
 
 
+@functools.cache
 def server_timezone() -> str:
-    """The server's IANA timezone name (e.g. 'Asia/Riyadh'); 'UTC' on failure."""
+    """The server's IANA timezone name (e.g. 'Asia/Riyadh'); 'UTC' on failure.
+
+    Detected once (app.py primes this at startup) so page loads never pay
+    for tz detection and the value stays stable for the process lifetime.
+    """
     try:
         import tzlocal
         return tzlocal.get_localzone_name() or "UTC"
