@@ -129,6 +129,27 @@ Flags override the `[etl]` section in `.dlt/config.toml`.
   columns are stripped before the Iceberg write, so the lake table holds only the
   child's columns (plus `BRANCH_ID` / `insert_at` / `Recorded_updated_at`). Requires that the
   helper's CDC moves whenever a child row is inserted or updated.
+- **Query-based sources.** An entry's `table` may be an Oracle inline-view
+  subquery instead of a physical table. Such an entry must also set `name`,
+  which becomes the Iceberg table name (lower-snake normalized). All other
+  options (`unique_key`, `cdc_column`, `where_date_column`, INITIAL range,
+  category) work as usual, with one constraint: those columns must be
+  **projected by the subquery**, because filters are rendered as `t.<col>`
+  against the inline view. Do not project a column named `BRANCH_ID` (it
+  collides with the injected branch column — alias it inside the subquery).
+  `name` is only allowed on subquery entries; plain tables keep deriving
+  their name from `OWNER.TABLE`.
+
+  ```json
+  {
+    "table": "(SELECT v.VISIT_ID, v.AMEND_LAST_DATE, v.VISIT_DATE, m.STATUS FROM OASIS.VISITS v JOIN OASIS.VISIT_MASTER m ON m.VISIT_ID = v.VISIT_ID)",
+    "name": "visits_enriched",
+    "unique_key": "VISIT_ID",
+    "cdc_column": "AMEND_LAST_DATE",
+    "where_date_column": "VISIT_DATE"
+  }
+  ```
+
 - Branch connections come from `[oracle_branches.<key>]` in `.dlt/secrets.toml`.
   The `<key>` is what you pass to `--branch`. Fetch tuning is **per branch**:
   each section may set its own optional `fetch_batch_size` (the Oracle

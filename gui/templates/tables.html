@@ -54,7 +54,8 @@
 <div class="modal-bg" id="modal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <h2 id="modal-title">Edit table</h2>
-    <div><label>Table (OWNER.NAME) *</label><input id="f-table" title="e.g. OASIS.MY_TABLE"></div>
+    <div><label>Table (OWNER.NAME or subquery) *</label><input id="f-table" title="e.g. OASIS.MY_TABLE or (SELECT ...) inline-view subquery"></div>
+    <div><label>Iceberg name (subquery sources only)</label><input id="f-name" title="e.g. visits_enriched — names the Iceberg table when Table is a (SELECT ...) subquery"></div>
     <div class="form-row">
       <div><label>Unique key *</label><input id="f-key" title="e.g. MY_ID or A,B"></div>
       <div><label>CDC column</label><input id="f-cdc" title="e.g. AMEND_LAST_DATE"></div>
@@ -133,6 +134,7 @@ const CAT_UI = {
 
 function summarize(e) {
   const bits = [];
+  if ((e.table || "").trim().startsWith("(")) bits.push("source=subquery");
   if (e.unique_key) bits.push(`key=${e.unique_key}`);
   if (e.cdc_column) bits.push(`cdc=${e.cdc_column}`);
   if (e.where_date_column) bits.push(`date=${e.where_date_column}`);
@@ -149,11 +151,12 @@ function renderList(category) {
   const box = el(category);
   const ui = CAT_UI[category];
   const q = el(ui.filter).value;
-  const shown = items.map((e, i) => ({ e, i })).filter(({ e }) => matchFilter(e.table, q));
+  const shown = items.map((e, i) => ({ e, i }))
+    .filter(({ e }) => matchFilter(e.name || e.table, q));
   box.innerHTML = shown.map(({ e, i }) => `
     <div class="card" style="margin-bottom:8px">
       <div class="row-flex">
-        <b class="mono">${esc(e.table || "(unnamed)")}</b>
+        <b class="mono">${esc(e.name || e.table || "(unnamed)")}</b>
         <span class="spacer"></span>
         <button class="btn sm ghost" onclick="openEdit('${category}', ${i})">Edit</button>
         <button class="btn sm bad" onclick="removeEntry('${category}', ${i})">Delete</button>
@@ -207,6 +210,7 @@ function openEdit(category, index) {
                  : category === "snapshots" ? "snapshot" : "transaction";
   el("modal-title").textContent = (index >= 0 ? "Edit " : "New ") + catLabel + " table";
   el("f-table").value = e.table || "";
+  el("f-name").value = e.name || "";
   el("f-key").value = e.unique_key || "";
   el("f-cdc").value = e.cdc_column || "";
   el("f-wdate").value = e.where_date_column || "";
@@ -228,7 +232,12 @@ function applyEdit() {
   if (!table) return err("Table is required");
   // Snapshot tables are append-only, so a unique key is optional for them.
   if (!key && editing.category !== "snapshots") return err("Unique key is required");
+  const nm = el("f-name").value.trim();
+  const isQuery = table.startsWith("(");
+  if (isQuery && !nm) return err("Iceberg name is required for subquery sources");
+  if (!isQuery && nm) return err("Iceberg name is only used when Table is a subquery");
   const e = { table };
+  if (nm) e.name = nm;
   if (key) e.unique_key = key;
   const cdc = el("f-cdc").value.trim();
   const wdate = el("f-wdate").value.trim();
