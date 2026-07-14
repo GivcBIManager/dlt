@@ -668,6 +668,25 @@ def build_pipeline(settings: Settings):
     )
 
 
+def clear_pending_packages(pipeline, context: str) -> None:
+    """Drop any pending (extracted/normalized) load packages left on the pipeline.
+
+    Every ``pipeline.run`` first retries pending packages before touching new
+    data, and all tables share one pipeline -- so one poisoned package (e.g. a
+    bad unique_key failing at normalize) would block every later table's run
+    with the same load_id. Watermarks only advance on successful commits, so a
+    dropped table simply re-extracts next run. Best-effort: cleanup must never
+    mask the failure that triggered it.
+    """
+    try:
+        if pipeline.has_pending_data:
+            log.warning("[%s] dropping pending load packages so they cannot "
+                        "block subsequent runs", context)
+            pipeline.drop_pending_packages(with_partial_loads=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[%s] could not drop pending packages: %s", context, exc)
+
+
 def _load_one_table(
     pipeline,
     tdef: TableDef,
@@ -747,6 +766,10 @@ def _load_one_table(
         plan.load_status = "FAILED"
         plan.load_error = f"{type(exc).__name__}: {exc}"
         log.error("[%s] load failed: %s", tdef.dataset_table_name, exc)
+        # Drop this table's stuck package: pipeline.run retries pending
+        # packages before new data, so leaving it would fail every later
+        # table's run (and observability) with the same load_id.
+        clear_pending_packages(pipeline, tdef.dataset_table_name)
         # Persist any per-branch watermarks that committed before the failure.
         control.save()
     finally:
@@ -776,6 +799,9 @@ def load_and_record(
     table still lands as soon as it is ready rather than waiting for the rest.
     """
     pipeline = build_pipeline(settings)
+    # A crash (OOM, kill) can leave pending packages behind with no except
+    # handler having run; sweep them so this run doesn't inherit the blockage.
+    clear_pending_packages(pipeline, "startup")
     table_defs = {t.dataset_table_name: t for t in tables}
     order = {t.dataset_table_name: i for i, t in enumerate(tables)}
 
