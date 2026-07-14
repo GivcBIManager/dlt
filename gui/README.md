@@ -41,7 +41,8 @@ auto-starts Dagster on launch.
 | `OASIS_GUI_HOST`          | `127.0.0.1` | Bind address (use `0.0.0.0` for LAN)              |
 | `OASIS_GUI_PORT`          | `8765`      | HTTP port                                         |
 | `OASIS_GUI_DEBUG`         | `0`         | `1` enables Flask debug (loopback binds only)     |
-| `OASIS_GUI_TOKEN`         | _(unset)_   | Shared token; **required** for any non-loopback bind. Non-loopback clients must send it via `X-Auth-Token`, `Authorization: Bearer`, `?token=`, or the `oasis_token` cookie (open `/?token=<secret>` once). |
+| `OASIS_GUI_USER`          | _(unset)_   | Login username; **required** (with `OASIS_GUI_PASSWORD`) for any non-loopback bind. Remote browsers sign in at `/login`; loopback clients need no login. |
+| `OASIS_GUI_PASSWORD`      | _(unset)_   | Login password. The old `OASIS_GUI_TOKEN` / `?token=` URL authentication has been removed and no longer works. |
 | `OASIS_ALLOW_CUSTOM_CMD`  | `0`         | `1` permits the free-form `custom` run script (arbitrary argv); off by default |
 | `OASIS_PYTHON`            | venv python | Interpreter used to launch pipeline runs          |
 | `OASIS_DAGSTER_AUTOSTART` | `1`         | Set to `0` to skip auto-starting Dagster          |

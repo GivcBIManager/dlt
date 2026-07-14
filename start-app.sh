@@ -13,7 +13,7 @@
 #
 # Override any setting with env vars before launching:
 #   OASIS_GUI_HOST, OASIS_GUI_PORT (8765), OASIS_GUI_DEBUG,
-#   OASIS_GUI_TOKEN (required for any non-loopback bind),
+#   OASIS_GUI_USER / OASIS_GUI_PASSWORD (required for any non-loopback bind),
 #   OASIS_ALLOW_CUSTOM_CMD (1 to permit the free-form 'custom' run script),
 #   OASIS_DAGSTER_AUTOSTART (1), OASIS_DAGSTER_PORT (3000)
 #
@@ -34,12 +34,13 @@ case "$ENVIRONMENT" in
     : "${OASIS_GUI_HOST:=0.0.0.0}"
     : "${OASIS_GUI_DEBUG:=0}"
     # The panel can launch processes and edit config; refuse to expose it on a
-    # public interface without a shared token (the app enforces this too).
+    # public interface without login credentials (the app enforces this too).
     if [[ "$OASIS_GUI_HOST" != "127.0.0.1" && "$OASIS_GUI_HOST" != "::1" \
-          && -z "${OASIS_GUI_TOKEN:-}" ]]; then
+          && ( -z "${OASIS_GUI_USER:-}" || -z "${OASIS_GUI_PASSWORD:-}" ) ]]; then
       echo "ERROR: refusing to start prod on $OASIS_GUI_HOST without authentication." >&2
-      echo "       Set a shared token first, e.g.:  export OASIS_GUI_TOKEN='<secret>'" >&2
-      echo "       Then open  http://<host>:${OASIS_GUI_PORT:-8765}/?token=<secret>" >&2
+      echo "       Set login credentials first, e.g.:" >&2
+      echo "         export OASIS_GUI_USER='admin' OASIS_GUI_PASSWORD='<secret>'" >&2
+      echo "       Then sign in at  http://<host>:${OASIS_GUI_PORT:-8765}/login" >&2
       echo "       (or bind 127.0.0.1 behind a reverse proxy that handles auth)." >&2
       exit 1
     fi
