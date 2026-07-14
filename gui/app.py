@@ -12,6 +12,11 @@ import os
 import sys
 from pathlib import Path
 
+# Must be set before pyarrow is first imported (pulled in transitively by the
+# module imports below): the mimalloc pool holds freed memory, the system pool
+# returns it to the OS.
+os.environ.setdefault("ARROW_DEFAULT_MEMORY_POOL", "system")
+
 # Allow both ``python gui/app.py`` and ``python -m gui.app`` by ensuring this
 # directory is importable for the flat module imports below.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
