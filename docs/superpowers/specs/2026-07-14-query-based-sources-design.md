@@ -31,8 +31,9 @@ Allow an entry's `table` to be an Oracle inline-view subquery, and add a new
 Rules:
 
 - `name` is **required** when `table` is a subquery (starts with `(`).
-- `name` is **optional** on plain-table entries, acting as a rename of the
-  Iceberg table; when absent, naming behaves exactly as today.
+- `name` is **not used** on plain-table entries: the Iceberg name keeps
+  deriving from the table identifier exactly as today, and the GUI validator
+  rejects a `name` key on a plain-table entry so the config stays unambiguous.
 - `name` is normalized with the existing `_normalize_name` (lower-snake).
 
 ## Changes
@@ -41,8 +42,9 @@ Rules:
 
 - `TableDef` gains `name: Optional[str] = None` and an `is_query` property
   (true when `table` starts with `(`).
-- `dataset_table_name` returns `_normalize_name(name)` when `name` is set,
-  else the current derivation from `object_name`.
+- `dataset_table_name` returns `_normalize_name(name)` for query entries,
+  else the current derivation from `object_name` (plain entries ignore
+  `name`).
 - `object_name` returns `name` for query entries so the `--tables` CLI filter
   (`oracle_to_iceberg.py`, `dq_check.py`) matches query entries by their given
   name.
@@ -67,25 +69,27 @@ inside the subquery.
 
 - Add `"name"` to `KNOWN_KEYS`.
 - Validate `name` as a plain identifier.
-- Require `name` when `table` is a subquery.
-- Duplicate detection uses the effective name (`name` or `table`).
+- Require `name` when `table` is a subquery; reject `name` on a plain-table
+  entry.
+- Duplicate detection uses the effective name (`name` for query entries,
+  `table` otherwise).
 
 ### gui/templates/tables.html
 
 - New "Iceberg name" input wired into the entry load/save round-trip and
-  shown in the entry summary line.
+  shown in the entry summary line. Only saved when `table` is a subquery
+  (left empty / omitted for plain tables, matching the validator rule).
 
 ## Testing
 
 - `load_table_defs`: query entry with `name` loads; query entry without
-  `name` raises; plain entry with `name` renames; plain entry without `name`
-  unchanged.
+  `name` raises; plain entry without `name` unchanged.
 - `TableDef`: `dataset_table_name` / `object_name` overrides; `is_query`.
 - `build_query`: initial, incremental, and snapshot SQL for a query entry
   render `FROM (SELECT ...)` correctly.
 - `tables_store.validate`: accepts query entry with valid `name`; rejects
-  query entry without `name`; rejects invalid `name`; duplicate detection by
-  effective name.
+  query entry without `name`; rejects `name` on a plain-table entry; rejects
+  invalid `name`; duplicate detection by effective name.
 
 ## Out of scope
 
