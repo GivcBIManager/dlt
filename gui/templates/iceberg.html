@@ -6,7 +6,12 @@
 </div>
 
 <div class="panel" style="margin-bottom:18px">
-  <div class="panel-head"><h2>Tables</h2><button class="btn sm ghost" id="refresh">↻</button></div>
+  <div class="panel-head"><h2>Tables</h2>
+    <div class="row-flex">
+      <button class="btn sm bad" id="delete-all"><i class="fa-solid fa-trash"></i> Delete all…</button>
+      <button class="btn sm ghost" id="refresh">↻</button>
+    </div>
+  </div>
   <div class="filter-bar">
     <div><label>Filter by name</label><input id="tbl-filter" placeholder="wildcard, e.g. *appointment*"></div>
     <div><label>Type</label>
@@ -89,6 +94,25 @@
       </section>
     </div>
   </div>
+
+<div class="modal-bg" id="del-modal">
+  <div class="modal" style="max-width:480px">
+    <h2 id="del-title"></h2>
+    <div id="del-info" style="margin-bottom:12px"></div>
+    <label id="del-sys-wrap" hidden style="display:block;margin-bottom:12px">
+      <input type="checkbox" id="del-include-sys" checked>
+      Include system tables (etl_control, etl_run_log, etl_dq_results)
+    </label>
+    <div>
+      <label id="del-prompt"></label>
+      <input id="del-confirm" autocomplete="off" spellcheck="false" style="width:100%">
+    </div>
+    <div class="row-flex" style="margin-top:16px;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" id="del-cancel">Cancel</button>
+      <button class="btn bad" id="del-go" disabled>Delete</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -125,7 +149,7 @@ function renderTables() {
     `${shown.length} of ${allTables.length} table${allTables.length === 1 ? "" : "s"}`;
 
   el("tlist").innerHTML = shown.length ? `<table id="ib-tables">
-    <thead><tr><th>Table</th><th>Type</th><th class="num">Rows</th><th class="num">Size</th><th class="num">Snaps</th></tr></thead>
+    <thead><tr><th>Table</th><th>Type</th><th class="num">Rows</th><th class="num">Size</th><th class="num">Snaps</th><th></th></tr></thead>
     <tbody>` + shown.map(t => `
       <tr class="clickable" data-t="${esc(t.table)}" tabindex="0" role="button" onclick="select('${esc(t.table)}')">
         <td class="mono">${esc(t.table)}</td>
@@ -135,6 +159,8 @@ function renderTables() {
         <td class="num">${fmtNum(t.rows)}</td>
         <td class="num">${fmtBytes(t.size_bytes)}</td>
         <td class="num">${t.snapshots}</td>
+        <td>${t.table.startsWith("_dlt") ? "" : `<button class="btn sm ghost" title="Delete table"
+             onclick="event.stopPropagation();openDeleteModal('${esc(t.table)}')"><i class="fa-solid fa-trash"></i></button>`}</td>
       </tr>`).join("") + `</tbody></table>`
     : `<div class="muted" style="padding:12px">${allTables.length ? "No tables match the filter." : "No Iceberg tables found."}</div>`;
   if (curTable) markSelected(curTable);
@@ -299,6 +325,72 @@ async function loadAgg() {
     }
   } catch (e) { el("branch-counts").innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
 }
+
+// --- deletion (typed-confirmation modal) --------------------------------- //
+const SYSTEM_TABLE_NOTE = "System table — the pipeline recreates it on the next run, but its history (runs / watermark mirror) is lost.";
+let delTarget = null;   // table name, or null => delete-all mode
+
+function openDeleteModal(table) {
+  const t = allTables.find(x => x.table === table);
+  delTarget = table;
+  el("del-title").textContent = `Delete ${table}?`;
+  el("del-info").innerHTML =
+    `<div>${fmtNum(t?.rows)} rows · ${fmtBytes(t?.size_bytes)} on disk.</div>` +
+    (t?.is_system
+      ? `<div class="banner warn" style="margin-top:8px">${esc(SYSTEM_TABLE_NOTE)}</div>`
+      : `<div class="muted" style="margin-top:8px">Also clears its extraction watermarks — the next run re-extracts this table from its initial window.</div>`);
+  el("del-sys-wrap").hidden = true;
+  el("del-prompt").textContent = "Type the table name to confirm:";
+  showDelModal();
+}
+
+function openDeleteAllModal() {
+  const data = allTables.filter(t => !t.is_system);
+  const size = allTables.reduce((s, t) => s + (t.size_bytes || 0), 0);
+  delTarget = null;
+  el("del-title").textContent = "Delete ALL staging tables?";
+  el("del-info").innerHTML =
+    `<div>${data.length} data table(s), ${fmtBytes(size)} total. All their extraction watermarks are cleared — the next run re-extracts everything from scratch.</div>`;
+  el("del-sys-wrap").hidden = false;
+  el("del-prompt").textContent = "Type DELETE ALL to confirm:";
+  showDelModal();
+}
+
+function showDelModal() {
+  el("del-confirm").value = "";
+  el("del-go").disabled = true;
+  el("del-modal").classList.add("show");
+  el("del-confirm").focus();
+}
+function hideDelModal() { el("del-modal").classList.remove("show"); }
+
+el("del-confirm").oninput = () => {
+  const want = delTarget === null ? "DELETE ALL" : delTarget;
+  el("del-go").disabled = el("del-confirm").value !== want;
+};
+
+el("del-go").onclick = async () => {
+  el("del-go").disabled = true;
+  try {
+    const res = delTarget === null
+      ? await api("DELETE", "/api/iceberg/tables", { include_system: el("del-include-sys").checked })
+      : await api("DELETE", `/api/iceberg/tables/${encodeURIComponent(delTarget)}`);
+    hideDelModal();
+    const nErr = Object.keys(res.errors || {}).length;
+    ok(`Deleted ${res.deleted.length} table(s), cleared ${res.watermarks_cleared.length} watermark(s)` +
+       (nErr ? ` — ${nErr} failed` : ""));
+    if (nErr) err(Object.entries(res.errors).map(([t, m]) => `${t}: ${m}`).join("; "));
+    if (delTarget === null || delTarget === curTable) {
+      curTable = null;
+      el("detail").hidden = true;
+      el("detail-head").innerHTML = `<div class="muted">Select a table to inspect.</div>`;
+    }
+    loadTables();
+  } catch (e) { err(e.message); el("del-go").disabled = false; }
+};
+
+el("del-cancel").onclick = hideDelModal;
+el("delete-all").onclick = openDeleteAllModal;
 
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("refresh").onclick = loadTables;
