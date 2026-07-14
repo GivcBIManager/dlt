@@ -108,6 +108,7 @@ function makePipelineView(opts = {}) {
     loaded: /\[([^/\]]+)\]\s+loaded:\s+disp=(\S+)\s+ok=(\d+)\s+fail=(\d+)\s+rows=([\d,]+)/,
     loadFail: /\[([^/\]]+)\]\s+load failed:\s*(.+)/,
     skipped: /\[([^/\]]+)\]\s+skipped:\s*(.+)/,
+    noRows: /\[([^/\]]+)\]\s+no rows; load skipped\s+\(disp=(\S+)\s+ok=(\d+)\s+fail=(\d+)\)/,
     summaryRow: /^\s{2,}(\S+)\s+(SUCCESS|FAILED)\s+disp=(\S+)\s+ok=(\d+)\s+fail=(\d+)\s+rows=(\d+)/,
   };
   let dash;
@@ -156,6 +157,7 @@ function makePipelineView(opts = {}) {
     if ((m = RE.unitErr.exec(line))) { const t = tdef(m[2]); t.fail++; t.err = m[3].slice(0, 160); bdef(m[1]).fail++; pushIssue(line, "error"); return; }
     if ((m = RE.loaded.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.load = +m[4] > 0 ? "failed" : "loaded"; t.rows = +m[5].replace(/,/g, ""); return; }
     if ((m = RE.loadFail.exec(line))) { const t = tdef(m[1]); t.load = "failed"; t.err = m[2].slice(0, 160); pushIssue(line, "error"); return; }
+    if ((m = RE.noRows.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.load = "no rows"; return; }
     if ((m = RE.skipped.exec(line))) { const t = tdef(m[1]); t.load = "skipped"; t.err = m[2].slice(0, 160); return; }
     if ((m = RE.summaryRow.exec(line))) { const t = tdef(m[1]); t.final = m[2]; t.disp = m[3]; if (t.load === "pending" || t.load === "loading") t.load = m[2] === "SUCCESS" ? "loaded" : "failed"; return; }
     if (/\|\s*(WARNING|ERROR)\s*\||\|\[(WARNING|ERROR)\]\||UserWarning|Traceback/.test(line)) pushIssue(line, /ERROR|Traceback/.test(line) ? "error" : "warn");
@@ -175,14 +177,17 @@ function makePipelineView(opts = {}) {
     return "";
   }
   function loadPill(s) {
-    const cls = { pending: "gray", loading: "running", loaded: "ok", failed: "failed", skipped: "skipped" }[s] || "gray";
+    const cls = { pending: "gray", loading: "running", loaded: "ok", failed: "failed", skipped: "skipped", "no rows": "gray" }[s] || "gray";
     return `<span class="pill ${cls}">${esc(s)}</span>`;
   }
   function hasContent() { return !!dash && (dash.started || dash.tables.size > 0 || dash.issues.length > 0); }
   function render(meta) {
     el("rd-pipeline").hidden = false;
     const bt = branchTotal();
-    const done = dash.unitsDone || [...dash.tables.values()].reduce((a, t) => a + t.branches.size, 0);
+    // The PROGRESS heartbeat only ticks every ~5s; the per-unit extract lines are
+    // fresher, so show whichever count is further along.
+    const done = Math.max(dash.unitsDone,
+      [...dash.tables.values()].reduce((a, t) => a + t.branches.size, 0));
     const total = dash.unitsTotal || (bt * (dash.tablesTotal || dash.tables.size)) || 0;
     const exited = meta && meta.exit != null;
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
@@ -198,9 +203,12 @@ function makePipelineView(opts = {}) {
     el("rd-bar-fill").className = "rd-bar-fill" + (exited && meta.exit ? " err" : (failTotal ? " has-fail" : ""));
     el("rd-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%` + (dash.tablesTotal ? ` · tables ${dash.tablesDone}/${dash.tablesTotal}` : "");
 
+    // Each branch extracts every table once, so a branch chip's total is the
+    // table count (bt is branches-per-table, the denominator for table rows).
+    const tpb = dash.tablesTotal || dash.tables.size || 0;
     el("rd-branch-strip").innerHTML = [...dash.branches.entries()].sort().map(([k, b]) => {
-      const cls = b.fail ? "err" : (bt && b.ok >= bt ? "done" : "");
-      return `<span class="rd-bchip ${cls}" title="${esc(k)}: ${b.ok} ok${b.fail ? `, ${b.fail} failed` : ""}">${esc(k)} ${b.ok}${bt ? `/${bt}` : ""}</span>`;
+      const cls = b.fail ? "err" : (tpb && b.ok >= tpb ? "done" : "");
+      return `<span class="rd-bchip ${cls}" title="${esc(k)}: ${b.ok} ok${b.fail ? `, ${b.fail} failed` : ""}">${esc(k)} ${b.ok}${tpb ? `/${tpb}` : ""}</span>`;
     }).join("");
 
     el("rd-tbody").innerHTML = [...dash.tables.entries()].map(([name, t]) => {
