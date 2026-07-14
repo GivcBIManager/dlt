@@ -11,12 +11,11 @@
     <h2>Command builder</h2>
     <label>Script / task</label>
     <select id="script">
-      <option value="oracle_to_iceberg">oracle_to_iceberg — extract → Iceberg</option>
-      <option value="dq_check">dq_check — Oracle vs Iceberg reconciliation</option>
-      <option value="snapshot_diff">snapshot_diff — per-record change report</option>
-      <option value="fresh_run">fresh_run — clear runtime artefacts</option>
-      <option value="custom">custom — raw command</option>
+      <option value="oracle_to_iceberg" title="Extract Oracle → Iceberg">Ingest</option>
+      <option value="dq_check" title="Oracle vs Iceberg reconciliation">data_validation</option>
+      <option value="custom" title="Raw command — runs verbatim in the repo root">custom</option>
     </select>
+    <div class="hint" id="script-desc"></div>
 
     <div data-grp="oracle_to_iceberg">
       <div class="form-row">
@@ -41,14 +40,6 @@
       <div class="checkbox"><input type="checkbox" id="self_test_d"><label for="self_test_d">--self-test</label></div>
     </div>
 
-    <div data-grp="snapshot_diff" hidden>
-      <div class="form-row">
-        <div><label>Lake table</label><input id="sd_table" value="delivery_charge"></div>
-        <div><label>Unique key</label><input id="sd_key" value="delivery_charge_id"></div>
-      </div>
-      <label>As-of day (YYYY-MM-DD, optional)</label><input id="sd_asof" placeholder="default: yesterday">
-    </div>
-
     <div data-grp="custom" hidden>
       <label>Raw command (runs verbatim in the repo root)</label>
       <textarea id="custom" placeholder="python diagnostics/table_stats.py --branch jazan"></textarea>
@@ -58,12 +49,19 @@
       <legend>Filters</legend>
 
       <label>Branches <small>(none = all)</small></label>
-      <select id="branches" multiple class="multi" size="5"></select>
-      <div class="hint">Ctrl/⌘-click to pick several · empty = all branches.</div>
+      <div class="picker">
+        <input id="branch-search" placeholder="search branches…" autocomplete="off">
+        <div class="suggest" id="branch-suggest" hidden></div>
+      </div>
+      <div class="chips sel-chips" id="branch-chips"></div>
+      <div class="hint">Type to search · click or Enter adds · × removes · empty = all branches.</div>
 
       <label style="margin-top:12px">Tables <small>(none = all)</small></label>
-      <input id="table-search" placeholder="wildcard filter — e.g. *appointment*" style="margin-bottom:6px" autocomplete="off">
-      <select id="tables" multiple class="multi" size="6"></select>
+      <div class="picker">
+        <input id="table-search" placeholder="search tables — e.g. *appointment*" autocomplete="off">
+        <div class="suggest" id="table-suggest" hidden></div>
+      </div>
+      <div class="chips sel-chips" id="table-chips"></div>
       <div class="hint" id="table-hint"></div>
 
       <div class="form-row" style="margin-top:12px">
@@ -72,7 +70,8 @@
         <div></div>
       </div>
 
-      <label style="margin-top:8px">Extra args <small>(tick to add · hover a value for examples)</small></label>
+      <label style="margin-top:8px">Extra args <small>(pick one to add it · hover for help)</small></label>
+      <select id="extra-arg-add"></select>
       <div id="extra-args" class="extra-args"></div>
     </fieldset>
 
@@ -82,6 +81,7 @@
       <button class="btn primary" id="run-btn"><i class="fa-solid fa-play"></i> Run now</button>
       <button class="btn good" id="save-pipe-btn"><i class="fa-solid fa-floppy-disk"></i> Save as pipeline</button>
       <button class="btn ghost" id="copy-btn"><i class="fa-solid fa-copy"></i> Copy command</button>
+      <button class="btn ghost" id="reset-btn" title="Clear the whole builder back to its defaults"><i class="fa-solid fa-rotate-left"></i> Reset</button>
     </div>
     <div class="hint">“Save as pipeline” stores this command (auto-named) so you can re-run it or schedule it on the <a href="/flows">Flows</a> page.</div>
   </div>
@@ -145,6 +145,14 @@ const selBranches = new Set(), selTables = new Set();
 let curRun = null, tailOffset = 0, tailTimer = null, tailFails = 0;
 const TAIL_MAX_FAILS = 10;
 
+// Tasks offered in the builder. fresh_run / snapshot_diff were removed from the
+// UI on purpose; the backend still runs them for previously saved pipelines.
+const SCRIPT_DESC = {
+  oracle_to_iceberg: "Ingest — extract Oracle → Iceberg",
+  dq_check: "data_validation — Oracle vs Iceberg reconciliation",
+  custom: "custom — raw command, runs verbatim in the repo root",
+};
+
 function setTailBanner(html) {
   const b = el("tail-banner");
   if (!b) return;
@@ -161,9 +169,9 @@ function reconnectTail() {
   tailTimer = setInterval(pollTail, 1300);
 }
 
-// Extra args: each is a flag, optionally taking a value. The value field's
-// tooltip shows example values (so the user knows the expected shape) and ticking
-// the box (or typing a value) adds it to the command.
+// Extra args: each is a flag, optionally taking a value picked from a dropdown
+// of typical values. Args only appear in the builder once added via the
+// "add an extra arg" dropdown, and each row has a × to take it back out.
 const EXTRA_ARGS = [
   { flag: "--thin", help: "oracledb thin mode (no Instant Client)" },
   { flag: "--no-progress", help: "suppress the progress bar / interval lines" },
@@ -193,10 +201,6 @@ function buildSpec() {
     spec.no_write = el("no_write").checked;
     spec.no_progress = el("no_progress_d").checked;
     spec.self_test = el("self_test_d").checked;
-  } else if (script === "snapshot_diff") {
-    spec.table = el("sd_table").value;
-    spec.unique_key = el("sd_key").value;
-    spec.as_of = el("sd_asof").value;
   } else if (script === "custom") {
     spec.custom = el("custom").value;
   }
@@ -214,6 +218,13 @@ function syncGroups() {
   $$("[data-grp]").forEach(g => {
     g.hidden = !g.dataset.grp.split(" ").includes(script);
   });
+  updateScriptDesc();
+}
+
+function updateScriptDesc() {
+  const desc = SCRIPT_DESC[el("script").value] || "";
+  el("script-desc").textContent = desc;
+  el("script").title = desc;   // hover on the closed select shows it too
 }
 
 let previewTimer;
@@ -229,15 +240,9 @@ async function refreshPreview() {
 
 // matchFilter is provided globally by app.js.
 
-// Category only applies to oracle_to_iceberg; dq_check has no category -> all.
+// Category only applies to Ingest; data_validation has no category -> all.
 function currentCategory() {
   return el("script").value === "oracle_to_iceberg" ? el("category").value : "both";
-}
-
-function renderBranches() {
-  el("branches").innerHTML = BRANCHES.map(b =>
-    `<option value="${esc(b)}" ${selBranches.has(b) ? "selected" : ""}>${esc(b)}</option>`).join("")
-    || `<option disabled>no branches</option>`;
 }
 
 function tablePool() {
@@ -249,62 +254,174 @@ function tablePool() {
   return [...new Set(pool)].filter(Boolean).sort();
 }
 
-function renderTables() {
-  const all = tablePool();
-  const q = el("table-search").value;
-  const shown = all.filter(n => matchFilter(n, q));
-  el("tables").innerHTML = shown.map(n =>
-    `<option value="${esc(n)}" ${selTables.has(n) ? "selected" : ""}>${esc(n)}</option>`).join("")
-    || `<option disabled>no matching tables</option>`;
+function updateTableHint() {
   const cat = currentCategory();
   el("table-hint").textContent =
-    `${shown.length} of ${all.length} ${cat === "both" ? "" : cat + " "}table(s)` +
+    `${tablePool().length} ${cat === "both" ? "" : cat + " "}table(s) available` +
     (selTables.size ? ` · ${selTables.size} selected` : "");
 }
 
-// Read the multi-select back into selTables, preserving picks that are currently
-// filtered out (only the visible options' state is authoritative).
-function syncTables() {
-  const visible = [...el("tables").options].map(o => o.value);
-  visible.forEach(v => selTables.delete(v));
-  [...el("tables").selectedOptions].forEach(o => selTables.add(o.value));
-  renderTables();
+// Search box + floating suggestion list + removable chips. `pool` is re-read on
+// every render so category changes re-filter the table suggestions live.
+function makePicker({ inputId, suggestId, chipsId, pool, selected, onChange }) {
+  const input = el(inputId), box = el(suggestId), chips = el(chipsId);
+  let hi = -1;   // highlighted suggestion index (keyboard)
+
+  const items = () =>
+    pool().filter(v => !selected.has(v) && matchFilter(v, input.value)).slice(0, 40);
+
+  function renderChips() {
+    chips.innerHTML = [...selected].sort().map(v =>
+      `<span class="chip on">${esc(v)}<button type="button" class="chip-x" data-v="${esc(v)}"
+         title="Remove ${esc(v)}" aria-label="Remove ${esc(v)}">×</button></span>`).join("");
+    chips.querySelectorAll(".chip-x").forEach(b =>
+      b.onclick = () => { selected.delete(b.dataset.v); sync(); });
+  }
+
+  function renderSuggest() {
+    const list = items();
+    if (hi >= list.length) hi = list.length - 1;
+    box.innerHTML = list.map((v, i) =>
+      `<div class="suggest-item${i === hi ? " hi" : ""}" data-v="${esc(v)}">${esc(v)}</div>`).join("")
+      || `<div class="suggest-empty">no matches</div>`;
+    box.hidden = document.activeElement !== input;
+    box.querySelectorAll(".suggest-item").forEach(d =>
+      // mousedown (not click) so it beats the input's blur and keeps focus for more picks
+      d.addEventListener("mousedown", e => { e.preventDefault(); add(d.dataset.v); }));
+  }
+
+  function add(v) {
+    if (!v) return;
+    selected.add(v);
+    input.value = ""; hi = -1;
+    sync();
+  }
+
+  function sync() { renderChips(); renderSuggest(); if (onChange) onChange(); }
+
+  input.addEventListener("input", () => { hi = -1; renderSuggest(); });
+  input.addEventListener("focus", renderSuggest);
+  input.addEventListener("blur", () => setTimeout(() => { box.hidden = true; }, 120));
+  input.addEventListener("keydown", e => {
+    const list = items();
+    if (e.key === "ArrowDown") { e.preventDefault(); hi = Math.min(hi + 1, list.length - 1); renderSuggest(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); hi = Math.max(hi - 1, 0); renderSuggest(); }
+    else if (e.key === "Enter") { e.preventDefault(); add(list[hi >= 0 ? hi : 0]); }
+    else if (e.key === "Escape") { box.hidden = true; }
+  });
+
+  return { sync };
 }
 
-function renderExtraArgs() {
-  el("extra-args").innerHTML = EXTRA_ARGS.map(a => `
-    <div class="extra-arg"${a.value ? ` title="${esc(a.help)}"` : ""}>
-      <label class="checkbox" style="margin:0">
-        <input type="checkbox" data-flag="${esc(a.flag)}">
-        <span class="mono">${esc(a.flag)}</span>
-        ${a.value ? "" : `<span class="info-icon" tabindex="0" role="img"
-             title="${esc(a.help)}" aria-label="${esc(a.help)}">i</span>`}
-      </label>
-      ${a.value
-        ? `<input class="ea-val" placeholder="value" autocomplete="off"
-             title="Examples: ${esc(a.examples)} — ${esc(a.help)}">`
-        : ""}
-    </div>`).join("");
-  $$("#extra-args input[type=checkbox]").forEach(cb =>
-    cb.addEventListener("change", refreshPreview));
-  $$("#extra-args .ea-val").forEach(inp => inp.addEventListener("input", () => {
-    // Typing a value implies the flag is on.
-    const cb = inp.closest(".extra-arg").querySelector('input[type=checkbox]');
-    if (inp.value.trim() && cb) cb.checked = true;
+const branchPicker = makePicker({
+  inputId: "branch-search", suggestId: "branch-suggest", chipsId: "branch-chips",
+  pool: () => BRANCHES, selected: selBranches, onChange: refreshPreview,
+});
+const tablePicker = makePicker({
+  inputId: "table-search", suggestId: "table-suggest", chipsId: "table-chips",
+  pool: tablePool, selected: selTables,
+  onChange: () => { updateTableHint(); refreshPreview(); },
+});
+
+// ---- Extra args: dropdown adds a row; each row = flag + value dropdown + × ----
+function renderExtraArgAdd() {
+  const added = new Set($$("#extra-args .extra-arg").map(r => r.dataset.flag));
+  el("extra-arg-add").innerHTML =
+    `<option value="">+ add an extra arg…</option>` +
+    EXTRA_ARGS.filter(a => !added.has(a.flag)).map(a =>
+      `<option value="${esc(a.flag)}" title="${esc(a.help)}">${esc(a.flag)} — ${esc(a.help)}</option>`).join("");
+}
+
+function addExtraArg(flag, val = "") {
+  const a = EXTRA_ARGS.find(x => x.flag === flag);
+  if (!a || $$("#extra-args .extra-arg").some(r => r.dataset.flag === flag)) return;
+  let valueHtml = `<span class="hint" style="margin:0">${esc(a.help)}</span>`;
+  let custom = false;
+  if (a.value) {
+    const opts = a.examples.split(",").map(s => s.trim()).filter(Boolean);
+    custom = !!val && !opts.includes(val);   // restored value outside the examples
+    valueHtml = `<span class="ea-valwrap">
+        <select class="ea-val" title="${esc(a.help)}"${custom ? " hidden" : ""}>
+          <option value="">value…</option>
+          ${opts.map(o => `<option value="${esc(o)}"${o === val ? " selected" : ""}>${esc(o)}</option>`).join("")}
+          <option value="__custom__"${custom ? " selected" : ""}>custom…</option>
+        </select>
+        <input class="ea-custom" placeholder="custom value" autocomplete="off"
+          title="${esc(a.help)}" value="${custom ? esc(val) : ""}"${custom ? "" : " hidden"}>
+      </span>`;
+  }
+  const row = h(`<div class="extra-arg" data-flag="${esc(flag)}" title="${esc(a.help)}">
+      <span class="mono">${esc(flag)}</span>
+      ${valueHtml}
+      <button type="button" class="btn sm ghost ea-del" title="Remove ${esc(flag)}"
+        aria-label="Remove ${esc(flag)}">×</button>
+    </div>`);
+  row.querySelector(".ea-del").onclick = () => { row.remove(); renderExtraArgAdd(); refreshPreview(); };
+  const sel = row.querySelector("select.ea-val");
+  const inp = row.querySelector("input.ea-custom");
+  if (sel) sel.addEventListener("change", () => {
+    if (sel.value === "__custom__") {   // swap the dropdown for a free-text input
+      sel.hidden = true; inp.hidden = false; inp.focus();
+    }
     refreshPreview();
-  }));
+  });
+  if (inp) {
+    inp.addEventListener("input", refreshPreview);
+    inp.addEventListener("blur", () => {   // empty custom value -> back to the dropdown
+      if (inp.value.trim()) return;
+      inp.hidden = true; sel.hidden = false; sel.value = "";
+      refreshPreview();
+    });
+  }
+  el("extra-args").appendChild(row);
+  renderExtraArgAdd();
+  refreshPreview();
 }
 
 function collectExtra() {
   const parts = [];
   $$("#extra-args .extra-arg").forEach(row => {
-    const cb = row.querySelector('input[type=checkbox]');
-    if (!cb || !cb.checked) return;
-    parts.push(cb.dataset.flag);
-    const val = row.querySelector(".ea-val");
-    if (val && val.value.trim()) parts.push(val.value.trim());
+    parts.push(row.dataset.flag);
+    const sel = row.querySelector("select.ea-val");
+    const inp = row.querySelector("input.ea-custom");
+    const v = (inp && !inp.hidden) ? inp.value.trim()
+            : (sel && sel.value !== "__custom__") ? sel.value.trim() : "";
+    if (v) parts.push(v);
   });
   return parts.join(" ");
+}
+
+// Best-effort restore of the extra-arg rows from a stored flag string.
+function restoreExtra(extraStr) {
+  el("extra-args").innerHTML = "";
+  const tokens = String(extraStr || "").trim().split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const a = EXTRA_ARGS.find(x => x.flag === tokens[i]);
+    if (!a) continue;
+    let val = "";
+    if (a.value && i + 1 < tokens.length && !tokens[i + 1].startsWith("--")) val = tokens[++i];
+    addExtraArg(a.flag, val);
+  }
+  renderExtraArgAdd();
+}
+
+// Clear the whole builder back to its defaults so the user can start over.
+function resetBuilder() {
+  el("script").value = "oracle_to_iceberg";
+  el("mode").value = "INCREMENTAL";
+  el("category").value = "both";
+  ["self_test_o", "no_progress", "no_hash", "no_write", "no_progress_d", "self_test_d"]
+    .forEach(id => el(id).checked = false);
+  ["since", "until", "csv", "custom", "branch-search", "table-search"]
+    .forEach(id => el(id).value = "");
+  el("log_level").value = "INFO";
+  selBranches.clear(); selTables.clear();
+  el("extra-args").innerHTML = "";
+  renderExtraArgAdd();
+  branchPicker.sync(); tablePicker.sync();
+  syncGroups();
+  refreshPreview();
+  ok("Builder reset");
 }
 
 async function startRun() {
@@ -458,14 +575,20 @@ async function delPipeline(id) {
 // Populate the builder form from a saved spec (reverse of buildSpec).
 function loadSpec(spec) {
   spec = spec || {};
-  el("script").value = spec.script || "oracle_to_iceberg";
+  const script = spec.script || "oracle_to_iceberg";
+  if (!(script in SCRIPT_DESC)) {
+    // fresh_run / snapshot_diff pipelines still run, but can't be edited here.
+    err(`Task “${script}” is no longer editable in the builder — use Run to execute it as saved`);
+    return;
+  }
+  el("script").value = script;
   syncGroups();
-  if (spec.script === "oracle_to_iceberg") {
+  if (script === "oracle_to_iceberg") {
     if (spec.mode) el("mode").value = spec.mode;
     if (spec.category) el("category").value = spec.category;
     el("self_test_o").checked = !!spec.self_test;
     el("no_progress").checked = !!spec.no_progress;
-  } else if (spec.script === "dq_check") {
+  } else if (script === "dq_check") {
     el("since").value = spec.since || "";
     el("until").value = spec.until || "";
     el("csv").value = spec.csv || "";
@@ -473,11 +596,7 @@ function loadSpec(spec) {
     el("no_write").checked = !!spec.no_write;
     el("no_progress_d").checked = !!spec.no_progress;
     el("self_test_d").checked = !!spec.self_test;
-  } else if (spec.script === "snapshot_diff") {
-    el("sd_table").value = spec.table || "";
-    el("sd_key").value = spec.unique_key || "";
-    el("sd_asof").value = spec.as_of || "";
-  } else if (spec.script === "custom") {
+  } else if (script === "custom") {
     el("custom").value = spec.custom || "";
   }
   const toList = v => Array.isArray(v) ? v : (v ? String(v).split(",") : []);
@@ -487,24 +606,8 @@ function loadSpec(spec) {
   toList(spec.tables).map(s => s.trim()).filter(Boolean).forEach(t => selTables.add(t));
   if (spec.log_level) el("log_level").value = spec.log_level;
   restoreExtra(spec.extra || "");
-  renderBranches(); renderTables(); refreshPreview();
-}
-
-// Best-effort restore of the extra-args checkboxes/values from a flag string.
-function restoreExtra(extraStr) {
-  $$("#extra-args .extra-arg").forEach(row => {
-    const cb = row.querySelector('input[type=checkbox]'); if (cb) cb.checked = false;
-    const v = row.querySelector(".ea-val"); if (v) v.value = "";
-  });
-  const tokens = String(extraStr || "").trim().split(/\s+/).filter(Boolean);
-  const rows = [...$$("#extra-args .extra-arg")];
-  for (let i = 0; i < tokens.length; i++) {
-    const row = rows.find(r => r.querySelector('input[type=checkbox]')?.dataset.flag === tokens[i]);
-    if (!row) continue;
-    row.querySelector('input[type=checkbox]').checked = true;
-    const valInput = row.querySelector(".ea-val");
-    if (valInput && i + 1 < tokens.length && !tokens[i + 1].startsWith("--")) valInput.value = tokens[++i];
-  }
+  branchPicker.sync(); tablePicker.sync();
+  refreshPreview();
 }
 
 async function init() {
@@ -517,33 +620,32 @@ async function init() {
         return full.includes(".") ? full.split(".").pop() : full;
       }).filter(Boolean);
   } catch (e) { err(e.message); }
-  renderBranches();
-  renderTables();
-  renderExtraArgs();
+  branchPicker.sync();
+  tablePicker.sync();
+  renderExtraArgAdd();
   syncGroups();
   refreshPreview();
   loadRuns();
   loadPipelines();
 }
 
-el("script").onchange = () => { syncGroups(); renderTables(); refreshPreview(); };
+el("script").onchange = () => { syncGroups(); tablePicker.sync(); refreshPreview(); };
 $$("input, select, textarea").forEach(node => {
   node.addEventListener("input", refreshPreview);
   node.addEventListener("change", refreshPreview);
 });
-// Category drives which tables are offered; the search box filters them live.
-el("category").addEventListener("change", renderTables);
-el("table-search").addEventListener("input", renderTables);
-el("branches").addEventListener("change", () => {
-  selBranches.clear();
-  [...el("branches").selectedOptions].forEach(o => selBranches.add(o.value));
+// Category drives which tables are suggested; the search box filters them live.
+el("category").addEventListener("change", () => tablePicker.sync());
+el("extra-arg-add").addEventListener("change", () => {
+  addExtraArg(el("extra-arg-add").value);
+  el("extra-arg-add").value = "";
 });
-el("tables").addEventListener("change", syncTables);
 el("run-btn").onclick = startRun;
 el("stop-btn").onclick = stopRun;
 el("toggle-raw").onclick = () => el("run-panel").classList.toggle("raw-hidden");
 el("refresh-runs").onclick = loadRuns;
 el("copy-btn").onclick = () => { navigator.clipboard.writeText(el("preview").textContent); ok("Copied"); };
+el("reset-btn").onclick = resetBuilder;
 el("save-pipe-btn").onclick = savePipeline;
 el("refresh-saved").onclick = loadPipelines;
 $$(".tab[data-rtab]").forEach(b => b.onclick = () => showRtab(b.dataset.rtab));
