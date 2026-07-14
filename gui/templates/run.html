@@ -616,6 +616,7 @@ async function init() {
     BRANCHES = t._branches || [];
     for (const cat of ["masters", "transactions", "snapshots"])
       TABLES_BY_CAT[cat] = (t[cat] || []).map(e => {
+        if (e.name) return e.name;
         const full = e.table || "";
         return full.includes(".") ? full.split(".").pop() : full;
       }).filter(Boolean);

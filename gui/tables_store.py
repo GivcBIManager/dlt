@@ -50,6 +50,46 @@ def _is_valid_table_ref(value: str) -> bool:
         return _value_expr_is_safe(v)
     return _is_sql_identifier(v)
 
+
+def _normalize_dataset_name(raw: str) -> str:
+    """Lower-snake a name into a stable id.
+
+    Duplicated from ``etl.config._normalize_name`` on purpose: this module
+    already avoids importing the ``etl`` package (see the module docstring --
+    validation here only *mirrors* what ``etl/config.py`` expects), so we keep
+    a small local copy in sync rather than reaching across that boundary.
+    """
+    return re.sub(r"[^0-9a-zA-Z]+", "_", str(raw)).strip("_").lower()
+
+
+def _entry_label(entry: dict[str, Any], where: str) -> str:
+    """Best human label for this entry in error messages.
+
+    Subquery sources are identified by their 'name' (the Iceberg table name);
+    plain tables are always labeled by 'table', even if a (disallowed) 'name'
+    is also present -- that stray 'name' is itself flagged as an error and
+    should not steal the label for the entry's other messages.
+    """
+    table = str(entry.get("table") or "").strip()
+    if table.startswith("("):
+        return str(entry.get("name") or "").strip() or table or where
+    return table or where
+
+
+def _dataset_name(entry: dict[str, Any]) -> str:
+    """Effective Iceberg dataset/table name this entry maps to.
+
+    Mirrors ``etl.config.TableDef.dataset_table_name``: for a subquery source
+    it's the normalized 'name'; for a plain table it's the normalized object
+    name (the identifier with the owner prefix dropped).
+    """
+    table = str(entry.get("table") or "").strip()
+    if table.startswith("("):
+        raw = str(entry.get("name") or "").strip()
+    else:
+        raw = table.split(".", 1)[1] if "." in table else table
+    return _normalize_dataset_name(raw) if raw else ""
+
 # Recognised keys on a table entry (used to warn about typos, not to reject).
 KNOWN_KEYS = {
     "table",
@@ -84,7 +124,7 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
         errs.append(f"{where}: 'table' is required (e.g. OASIS.MY_TABLE)")
     is_query = table.startswith("(")
     iceberg_name = str(entry.get("name") or "").strip()
-    name = iceberg_name or table or where
+    name = _entry_label(entry, where)
     if table and not _is_valid_table_ref(table):
         errs.append(f"{name}: 'table' must be a valid identifier (e.g. OASIS.MY_TABLE)")
 
@@ -188,7 +228,7 @@ def validate(doc: dict[str, Any]) -> list[str]:
     if not isinstance(doc, dict):
         return ["Document must be a JSON object"]
 
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
     total = 0
     for category in CATEGORIES:
         items = doc.get(category, [])
@@ -200,12 +240,22 @@ def validate(doc: dict[str, Any]) -> list[str]:
         for idx, entry in enumerate(items):
             total += 1
             errs.extend(_validate_entry(entry, category, idx))
-            t = str((entry or {}).get("name")
-                    or (entry or {}).get("table") or "").strip().upper()
-            if t:
-                if t in seen:
-                    errs.append(f"Duplicate table '{t}' (appears more than once)")
-                seen.add(t)
+            if not isinstance(entry, dict):
+                continue
+            # Dedupe on the *effective* Iceberg dataset name -- a query entry's
+            # 'name' and a plain table's derived object name can collide even
+            # though their raw 'table'/'name' values look nothing alike.
+            eff = _dataset_name(entry)
+            if not eff:
+                continue
+            label = _entry_label(entry, f"{category}[{idx}]")
+            if eff in seen:
+                errs.append(
+                    f"Duplicate Iceberg table '{eff}': '{seen[eff]}' and "
+                    f"'{label}' both resolve to it"
+                )
+            else:
+                seen[eff] = label
     if total == 0:
         errs.append("No tables defined (need at least one master or transaction)")
     return errs

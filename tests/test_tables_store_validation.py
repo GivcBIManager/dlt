@@ -97,6 +97,14 @@ def test_name_on_plain_table_rejected():
     assert errs and any("'name'" in e for e in errs)
 
 
+def test_name_on_plain_table_error_labeled_by_table_not_name():
+    # A disallowed 'name' on a plain entry must not steal the label used for
+    # that entry's OTHER errors -- 'table' stays the label, 'name' does not.
+    errs = _errs(_doc(name="renamed", unique_key="ID; DELETE"))
+    assert any(e.startswith("OASIS.MY_TABLE:") for e in errs)
+    assert not any(e.startswith("renamed:") for e in errs)
+
+
 def test_invalid_name_rejected():
     errs = _errs(_doc(table="(SELECT 1 AS ID FROM DUAL)", name="bad name;"))
     assert errs
@@ -109,3 +117,23 @@ def test_duplicate_by_name_rejected():
           "unique_key": "ID"}
     doc = {"masters": [e1, e2], "transactions": [], "snapshots": []}
     assert any("Duplicate" in e for e in _errs(doc))
+
+
+def test_duplicate_query_name_vs_plain_table_derived_name_rejected():
+    # A query entry named 'visits' and a plain OASIS.VISITS table both map to
+    # the same Iceberg dataset table ('visits') -- that silent collision must
+    # be flagged even though the raw 'table'/'name' values don't match.
+    plain = {"table": "OASIS.VISITS", "unique_key": "VISIT_ID"}
+    query = {"table": "(SELECT ID AS VISIT_ID FROM DEVDBA.V_VISITS)",
+             "name": "visits", "unique_key": "VISIT_ID"}
+    doc = {"masters": [plain], "transactions": [query], "snapshots": []}
+    errs = _errs(doc)
+    assert any("Duplicate" in e and "visits" in e for e in errs)
+
+
+def test_non_colliding_query_and_plain_table_entries_stay_valid():
+    plain = {"table": "OASIS.VISITS", "unique_key": "VISIT_ID"}
+    query = {"table": "(SELECT ID AS VISIT_ID FROM DEVDBA.V_VISITS)",
+             "name": "visits_enriched", "unique_key": "VISIT_ID"}
+    doc = {"masters": [plain], "transactions": [query], "snapshots": []}
+    assert _errs(doc) == []

@@ -42,9 +42,13 @@ def _category_index() -> dict[str, str]:
         if not isinstance(items, list):
             continue
         for entry in items:
-            ref = str(entry.get("table") or "") if isinstance(entry, dict) else ""
-            obj = ref.split(".", 1)[1] if "." in ref else ref
-            name = re.sub(r"[^0-9a-zA-Z]+", "_", obj).strip("_").lower()
+            if not isinstance(entry, dict):
+                continue
+            raw = str(entry.get("name") or "").strip()
+            if not raw:
+                ref = str(entry.get("table") or "")
+                raw = ref.split(".", 1)[1] if "." in ref else ref
+            name = re.sub(r"[^0-9a-zA-Z]+", "_", raw).strip("_").lower()
             if name:
                 idx[name] = label
     return idx

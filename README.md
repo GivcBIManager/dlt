@@ -135,8 +135,10 @@ Flags override the `[etl]` section in `.dlt/config.toml`.
   options (`unique_key`, `cdc_column`, `where_date_column`, INITIAL range,
   category) work as usual, with one constraint: those columns must be
   **projected by the subquery**, because filters are rendered as `t.<col>`
-  against the inline view. Do not project a column named `BRANCH_ID` (it
-  collides with the injected branch column — alias it inside the subquery).
+  against the inline view. If the entry also has a `helper` block, the child
+  columns used in `helper.join` must likewise be projected by the subquery, so
+  the helper join can resolve them. Do not project a column named `BRANCH_ID`
+  (it collides with the injected branch column — alias it inside the subquery).
   `name` is only allowed on subquery entries; plain tables keep deriving
   their name from `OWNER.TABLE`.
 
