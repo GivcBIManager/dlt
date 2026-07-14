@@ -13,7 +13,8 @@
 #
 # Override any setting with env vars before launching:
 #   OASIS_GUI_HOST, OASIS_GUI_PORT (8765), OASIS_GUI_DEBUG,
-#   OASIS_GUI_USER / OASIS_GUI_PASSWORD (required for any non-loopback bind),
+#   OASIS_GUI_USER / OASIS_GUI_PASSWORD (required for any non-loopback bind;
+#     prompted for interactively when missing),
 #   OASIS_ALLOW_CUSTOM_CMD (1 to permit the free-form 'custom' run script),
 #   OASIS_DAGSTER_AUTOSTART (1), OASIS_DAGSTER_PORT (3000)
 #
@@ -33,16 +34,32 @@ case "$ENVIRONMENT" in
   prod)
     : "${OASIS_GUI_HOST:=0.0.0.0}"
     : "${OASIS_GUI_DEBUG:=0}"
-    # The panel can launch processes and edit config; refuse to expose it on a
-    # public interface without login credentials (the app enforces this too).
+    # The panel can launch processes and edit config; a public interface needs
+    # login credentials (the app enforces this too). Prompt for any that are
+    # missing when a terminal is attached; otherwise fail closed.
     if [[ "$OASIS_GUI_HOST" != "127.0.0.1" && "$OASIS_GUI_HOST" != "::1" \
           && ( -z "${OASIS_GUI_USER:-}" || -z "${OASIS_GUI_PASSWORD:-}" ) ]]; then
-      echo "ERROR: refusing to start prod on $OASIS_GUI_HOST without authentication." >&2
-      echo "       Set login credentials first, e.g.:" >&2
-      echo "         export OASIS_GUI_USER='admin' OASIS_GUI_PASSWORD='<secret>'" >&2
-      echo "       Then sign in at  http://<host>:${OASIS_GUI_PORT:-8765}/login" >&2
-      echo "       (or bind 127.0.0.1 behind a reverse proxy that handles auth)." >&2
-      exit 1
+      if [[ -t 0 ]]; then
+        echo "==> Login credentials required for public bind on $OASIS_GUI_HOST"
+        if [[ -z "${OASIS_GUI_USER:-}" ]]; then
+          read -r -p "    GUI username: " OASIS_GUI_USER
+        fi
+        if [[ -z "${OASIS_GUI_PASSWORD:-}" ]]; then
+          read -r -s -p "    GUI password: " OASIS_GUI_PASSWORD; echo
+        fi
+        if [[ -z "$OASIS_GUI_USER" || -z "$OASIS_GUI_PASSWORD" ]]; then
+          echo "ERROR: username and password must be non-empty." >&2
+          exit 1
+        fi
+        export OASIS_GUI_USER OASIS_GUI_PASSWORD
+      else
+        echo "ERROR: refusing to start prod on $OASIS_GUI_HOST without authentication." >&2
+        echo "       Set login credentials first, e.g.:" >&2
+        echo "         export OASIS_GUI_USER='admin' OASIS_GUI_PASSWORD='<secret>'" >&2
+        echo "       Then sign in at  http://<host>:${OASIS_GUI_PORT:-8765}/login" >&2
+        echo "       (or bind 127.0.0.1 behind a reverse proxy that handles auth)." >&2
+        exit 1
+      fi
     fi
     ;;
   dev)

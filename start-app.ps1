@@ -12,7 +12,8 @@
 
   Override any setting with env vars before launching:
     OASIS_GUI_HOST, OASIS_GUI_PORT (8765), OASIS_GUI_DEBUG,
-    OASIS_GUI_USER / OASIS_GUI_PASSWORD (required for any non-loopback bind),
+    OASIS_GUI_USER / OASIS_GUI_PASSWORD (required for any non-loopback bind;
+      prompted for interactively when missing),
     OASIS_ALLOW_CUSTOM_CMD (1 to permit the free-form 'custom' run script),
     OASIS_DAGSTER_AUTOSTART (1), OASIS_DAGSTER_PORT (3000)
 #>
@@ -36,18 +37,35 @@ if (-not (Test-Path $vpy)) {
 if ($Environment -eq "prod") {
   if (-not $env:OASIS_GUI_HOST)  { $env:OASIS_GUI_HOST = "0.0.0.0" }
   if (-not $env:OASIS_GUI_DEBUG) { $env:OASIS_GUI_DEBUG = "0" }
-  # The panel can launch processes and edit config; refuse to expose it on a
-  # public interface without login credentials (the app enforces this too).
+  # The panel can launch processes and edit config; a public interface needs
+  # login credentials (the app enforces this too). Prompt for any that are
+  # missing when a terminal is attached; otherwise fail closed.
   $publicBind = $env:OASIS_GUI_HOST -ne "127.0.0.1" -and $env:OASIS_GUI_HOST -ne "::1"
   if ($publicBind -and (-not $env:OASIS_GUI_USER -or -not $env:OASIS_GUI_PASSWORD)) {
-    Write-Error @"
+    if (-not [Console]::IsInputRedirected) {
+      Write-Host "==> Login credentials required for public bind on $($env:OASIS_GUI_HOST)"
+      if (-not $env:OASIS_GUI_USER) {
+        $env:OASIS_GUI_USER = Read-Host "    GUI username"
+      }
+      if (-not $env:OASIS_GUI_PASSWORD) {
+        $secret = Read-Host "    GUI password" -AsSecureString
+        $env:OASIS_GUI_PASSWORD = [System.Net.NetworkCredential]::new('', $secret).Password
+      }
+      if (-not $env:OASIS_GUI_USER -or -not $env:OASIS_GUI_PASSWORD) {
+        Write-Error "Username and password must be non-empty."
+        exit 1
+      }
+    }
+    else {
+      Write-Error @"
 Refusing to start prod on $($env:OASIS_GUI_HOST) without authentication.
 Set login credentials first, e.g.:
   `$env:OASIS_GUI_USER = 'admin'; `$env:OASIS_GUI_PASSWORD = '<secret>'
 Then sign in at  http://<host>:$($env:OASIS_GUI_PORT)/login
 (or bind to 127.0.0.1 behind a reverse proxy that handles auth).
 "@
-    exit 1
+      exit 1
+    }
   }
 }
 else {
