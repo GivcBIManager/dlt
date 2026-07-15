@@ -7,6 +7,7 @@
 
 <div class="row-flex" style="margin-bottom:16px">
   <button class="btn tab primary" data-tab="files">Log files</button>
+  <button class="btn tab" data-tab="flowruns">Flow runs</button>
   <button class="btn tab" data-tab="dq">DQ results</button>
   <button class="btn tab" data-tab="runs">Runs</button>
   <button class="btn tab" data-tab="runlog">ETL run log</button>
@@ -42,6 +43,33 @@
       <table id="files-table">
         <thead><tr><th>Name</th><th class="num">Size</th><th>Modified</th></tr></thead>
         <tbody id="file-list"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section data-panel="flowruns" hidden>
+  <div class="panel" id="fr-log-panel" hidden>
+    <div class="panel-head">
+      <h2 id="fr-log-title">—</h2>
+      <a class="btn sm ghost" id="fr-dagster-link" target="_blank" rel="noopener">
+        <i class="fa-solid fa-arrow-up-right-from-square"></i> Dagster UI</a>
+    </div>
+    <div id="fr-log" class="console">—</div>
+  </div>
+
+  <div class="panel" style="margin-top:18px">
+    <div class="panel-head">
+      <h2>Scheduled flow runs <small id="fr-stat" class="muted"></small></h2>
+      <div class="row-flex">
+        <label class="checkbox" style="margin:0"><input type="checkbox" id="fr-auto"><span>auto-refresh</span></label>
+        <button class="btn sm ghost" id="fr-refresh">↻</button>
+      </div>
+    </div>
+    <div class="table-wrap" style="max-height:340px">
+      <table>
+        <thead><tr><th>Flow</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr></thead>
+        <tbody id="fr-list"></tbody>
       </table>
     </div>
   </div>
@@ -219,6 +247,7 @@ const controlView = SysTable({
 function showTab(tab) {
   $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
   $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
+  if (tab === "flowruns") frLoadRuns();
   if (tab === "runs") runsView.load();
   if (tab === "dq") dqView.load();
   if (tab === "runlog") runlogView.load();
@@ -382,6 +411,71 @@ const runsView = (function () {
   }
   return { load };
 })();
+
+// ---------- Flow runs (Dagster scheduled/run-now jobs) ----------
+const FR_ACTIVE = new Set(["QUEUED", "NOT_STARTED", "STARTING", "STARTED", "CANCELING"]);
+let frRuns = [], frSel = null, frCursor = null, frStatus = null, frTimer = null, frBusy = false;
+
+function frPill(s) {
+  const cls = s === "SUCCESS" ? "ok" : (s === "FAILURE" ? "failed" : "warn");
+  return `<span class="run-badge ${cls}">${esc(s || "—")}</span>`;
+}
+async function frLoadRuns() {
+  try {
+    frRuns = await apiGet("/api/flow-runs?limit=50");
+    el("fr-stat").textContent = frRuns.length ? `${frRuns.length} runs` : "";
+    el("fr-list").innerHTML = frRuns.map(r => `
+      <tr class="clickable ${r.run_id === frSel ? "selected" : ""}" data-r="${esc(r.run_id)}" tabindex="0" role="button">
+        <td>${esc(r.flow_name)}</td>
+        <td>${frPill(r.status)}</td>
+        <td class="mono">${r.start_time ? fmtDate(new Date(r.start_time * 1000).toISOString()) : "—"}</td>
+        <td class="mono">${r.end_time && r.start_time ? fmtDur((r.end_time - r.start_time) * 1000) : "—"}</td>
+        <td>${r.run_link ? `<a href="${esc(r.run_link)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
+      </tr>`).join("") ||
+      `<tr><td colspan="5" class="muted">No flow runs yet (is Dagster running?).</td></tr>`;
+    $$("#fr-list tr.clickable").forEach(tr => tr.onclick = () => frOpen(tr.dataset.r));
+  } catch (e) { err(e.message); }
+}
+function frOpen(runId) {
+  frSel = runId; frCursor = null; frStatus = null;
+  const run = frRuns.find(r => r.run_id === runId);
+  el("fr-log-panel").hidden = false;
+  el("fr-log-title").textContent = run ? `${run.flow_name} — ${runId.slice(0, 8)}` : runId;
+  el("fr-dagster-link").href = (run && run.run_link) || "#";
+  el("fr-log").textContent = "";
+  $$("#fr-list tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.r === runId));
+  frTail();
+}
+async function frTail() {
+  if (!frSel || frBusy) return;
+  frBusy = true;
+  try {
+    // Drain: keep fetching while the server says there is more.
+    for (let i = 0; i < 20; i++) {
+      const r = await apiGet(`/api/flow-runs/${encodeURIComponent(frSel)}/log?cursor=${encodeURIComponent(frCursor || "")}`);
+      if (r.error) { el("fr-log").textContent += `\n[${r.error}]`; break; }
+      const c = el("fr-log");
+      const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+      if (r.chunk) {
+        if (c.textContent === "—") c.textContent = "";
+        c.textContent += r.chunk;
+      }
+      if (atBottom) c.scrollTop = c.scrollHeight;
+      frCursor = r.cursor; frStatus = r.status;
+      if (!r.has_more) break;
+    }
+  } catch (e) { err(e.message); }
+  finally { frBusy = false; }
+}
+el("fr-refresh").onclick = frLoadRuns;
+el("fr-auto").onchange = (e) => {
+  clearInterval(frTimer);
+  if (e.target.checked)
+    frTimer = setInterval(() => {
+      frLoadRuns();
+      if (frSel && (frStatus === null || FR_ACTIVE.has(frStatus))) frTail();
+    }, 3000);
+};
 
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("toggle-raw").onclick = () => el("file-panel").classList.toggle("raw-hidden");
