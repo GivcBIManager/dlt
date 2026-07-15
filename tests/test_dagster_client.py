@@ -83,6 +83,25 @@ def test_run_log_tail_parses_connection(monkeypatch):
     assert r["error"] is None
 
 
+def test_query_surfaces_graphql_body_on_http_error(monkeypatch):
+    # dagster-webserver returns resolver-level PythonError payloads with HTTP
+    # 500; the JSON body must be parsed instead of reporting an opaque
+    # "HTTP Error 500" (which hides e.g. "Limit of N is too large").
+    import io
+    import urllib.error
+    import urllib.request
+    import dagster_client as dc
+    body = (b'{"data":{"logsForRun":{"__typename":"PythonError",'
+            b'"message":"boom"}}}')
+    def raise_500(req, timeout=0):
+        raise urllib.error.HTTPError(
+            req.full_url, 500, "Internal Server Error",
+            {"Content-Type": "application/json"}, io.BytesIO(body))
+    monkeypatch.setattr(urllib.request, "urlopen", raise_500)
+    res = dc._query("query { x }")
+    assert res["data"]["logsForRun"]["message"] == "boom"
+
+
 def test_run_log_tail_respects_dagster_page_cap(monkeypatch):
     # Dagster rejects logsForRun limits above 1000 with a PythonError
     # ("Limit of N is too large. Max is 1000"), so the query must stay <= 1000.

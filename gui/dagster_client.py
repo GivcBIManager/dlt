@@ -43,6 +43,14 @@ def _query(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        # dagster-webserver ships resolver-level errors (PythonError payloads)
+        # with HTTP 500 -- the body is still a normal GraphQL response, so
+        # prefer it over an opaque "HTTP Error 500".
+        try:
+            return json.loads(exc.read().decode())
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {"errors": [{"message": str(exc)}]}
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
         return {"errors": [{"message": str(exc)}]}
 
