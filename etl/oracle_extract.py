@@ -409,6 +409,38 @@ def is_retryable(exc: Exception) -> bool:
     return any(tok in msg for tok in ("DPY-4011", "DPY-6005", "TIMEOUT", "TNS"))
 
 
+def _is_arrow_unsupported(exc: Exception) -> bool:
+    """DPY-3030: a column type the native Arrow fetch has no conversion for."""
+    return "DPY-3030" in str(exc)
+
+
+def arrow_safe_rewrite(conn, query: str) -> Optional[str]:
+    """Rewrite ``query`` so Arrow-unsupported columns survive the native fetch.
+
+    Peeks the result shape without fetching rows (``ROWNUM < 1`` ->
+    ``cursor.description``) and, when a ROWID/UROWID column is present (the
+    cause of DPY-3030 on ``fetch_df_batches``), wraps the query in an outer
+    SELECT that casts it with ``ROWIDTOCHAR`` -- the same 18-char string the
+    cursor path would produce. Returns None when there is nothing to rewrite.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SELECT * FROM ({query}) WHERE ROWNUM < 1")
+        description = list(cur.description)
+    finally:
+        cur.close()
+    items, rewrote = [], False
+    for d in description:
+        if d.type_code in types_map.ARROW_UNSUPPORTED_ROWID_TYPES:
+            items.append(f'ROWIDTOCHAR("{d.name}") AS "{d.name}"')
+            rewrote = True
+        else:
+            items.append(f'"{d.name}"')
+    if not rewrote:
+        return None
+    return f"SELECT {', '.join(items)} FROM ({query})"
+
+
 # --------------------------------------------------------------------------- #
 # Fetch -> Arrow
 # --------------------------------------------------------------------------- #
@@ -698,11 +730,33 @@ def fetch_and_stage(conn, query, tdef, branch_key, branch_id, settings, fetch_ba
     except Exception as exc:  # noqa: BLE001
         if is_retryable(exc):
             raise  # genuine connection/transient error -> caller retries
+        _cleanup_tmp(tdef, branch_key, settings)
+        if _is_arrow_unsupported(exc):
+            rewritten = None
+            try:
+                rewritten = arrow_safe_rewrite(conn, query)
+            except Exception as peek_exc:  # noqa: BLE001
+                if is_retryable(peek_exc):
+                    raise
+            if rewritten is not None:
+                log.info(
+                    "[%s/%s] casting Arrow-unsupported column(s) server-side and "
+                    "retrying the native Arrow fetch",
+                    branch_key, tdef.dataset_table_name,
+                )
+                try:
+                    return _stage_via_arrow(conn, rewritten, tdef, branch_key, branch_id, settings, fetch_batch_size, now)
+                except _ArrowEmpty:
+                    return _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now)
+                except Exception as retry_exc:  # noqa: BLE001
+                    if is_retryable(retry_exc):
+                        raise
+                    exc = retry_exc
+                    _cleanup_tmp(tdef, branch_key, settings)
         log.warning(
             "[%s/%s] native Arrow fetch unavailable (%s); using cursor fetch",
             branch_key, tdef.dataset_table_name, exc,
         )
-        _cleanup_tmp(tdef, branch_key, settings)
         return _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now)
 
 

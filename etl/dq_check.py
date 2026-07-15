@@ -600,10 +600,51 @@ def _oracle_count(conn, sql: str) -> int:
 
 
 def _oracle_batches(conn, query: str, fetch_batch_size: int) -> Iterator[pa.Table]:
-    for odf in conn.fetch_df_batches(query, size=fetch_batch_size):
-        batch = pa.table(odf)
-        if batch.num_rows:
-            yield batch
+    from .oracle_extract import (
+        _cursor_arrow_stream,
+        _is_arrow_unsupported,
+        arrow_safe_rewrite,
+    )
+
+    yielded = False
+    try:
+        for odf in conn.fetch_df_batches(query, size=fetch_batch_size):
+            batch = pa.table(odf)
+            if batch.num_rows:
+                yielded = True
+                yield batch
+        return
+    except Exception as exc:  # noqa: BLE001
+        # DPY-3030 (e.g. a ROWID column) fires before the first batch; anything
+        # else -- or a mid-stream failure -- is a real error for this check unit.
+        if yielded or not _is_arrow_unsupported(exc):
+            raise
+
+    # Retry the fast path with Arrow-unsupported columns cast server-side
+    # (ROWIDTOCHAR), mirroring the extract's fetch_and_stage behavior.
+    rewritten = None
+    try:
+        rewritten = arrow_safe_rewrite(conn, query)
+    except Exception:  # noqa: BLE001 - peek is best-effort; cursor path below
+        rewritten = None
+    if rewritten is not None:
+        for odf in conn.fetch_df_batches(rewritten, size=fetch_batch_size):
+            batch = pa.table(odf)
+            if batch.num_rows:
+                yield batch
+        return
+
+    # Last resort: row-by-row cursor stream (handles ROWID etc. natively).
+    cur = conn.cursor()
+    try:
+        cur.arraysize = fetch_batch_size
+        cur.prefetchrows = fetch_batch_size + 1
+        cur.execute(query)
+        for batch in _cursor_arrow_stream(cur, fetch_batch_size):
+            if batch.num_rows:
+                yield batch
+    finally:
+        cur.close()
 
 
 def _staged_file(settings: Settings, tdef: TableDef, branch: str) -> Optional[Path]:

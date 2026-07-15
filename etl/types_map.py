@@ -63,6 +63,12 @@ _STRING_TYPES.discard(None)
 _TIMESTAMP_TYPES.discard(None)
 _BINARY_TYPES.discard(None)
 
+# Types python-oracledb's native Arrow fetch cannot convert (raises DPY-3030);
+# they must be cast server-side (ROWIDTOCHAR) to keep the fast path.
+ARROW_UNSUPPORTED_ROWID_TYPES = {
+    t for t in (_dbtype("DB_TYPE_ROWID"), _dbtype("DB_TYPE_UROWID")) if t is not None
+}
+
 DB_TYPE_NUMBER = _dbtype("DB_TYPE_NUMBER")
 DB_TYPE_BINARY_FLOAT = _dbtype("DB_TYPE_BINARY_FLOAT")
 DB_TYPE_BINARY_DOUBLE = _dbtype("DB_TYPE_BINARY_DOUBLE")
