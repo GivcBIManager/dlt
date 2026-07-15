@@ -35,6 +35,7 @@ import dbt_project_store  # noqa: E402
 import flows_store  # noqa: E402
 import flow_naming  # noqa: E402
 import iceberg_browser  # noqa: E402
+import iceberg_maintenance  # noqa: E402
 import pipelines_store  # noqa: E402
 import security  # noqa: E402
 import smtp_config  # noqa: E402
@@ -553,13 +554,13 @@ def api_ib_overview(table):
     return jsonify(iceberg_browser.table_overview(table))
 
 
-def _run_guard():
-    """409 body when a pipeline run is alive, else None (deletes allowed)."""
+def _run_guard(action: str = "deleting staging tables"):
+    """409 body when a pipeline run is alive, else None (mutation allowed)."""
     live = runner.has_live_run()
     if live:
         return jsonify({"error": (
             f"a pipeline run is active ({live['id']}: {live.get('label') or live.get('command', '')}); "
-            "deleting staging tables while a run is loading would corrupt the lake"
+            f"{action} while a run is loading would corrupt the lake"
         )}), 409
     return None
 
@@ -581,6 +582,15 @@ def api_ib_delete_all():
         return blocked
     include_system = bool(_body().get("include_system"))
     return jsonify(iceberg_browser.delete_all_tables(include_system=include_system))
+
+
+@app.post("/api/iceberg/tables/<table>/expire-snapshots")
+@api
+def api_ib_expire_snapshots(table):
+    blocked = _run_guard("expiring snapshots")
+    if blocked:
+        return blocked
+    return jsonify(iceberg_maintenance.expire_snapshots(table))
 
 
 @app.get("/api/iceberg/tables/<table>/sample")
