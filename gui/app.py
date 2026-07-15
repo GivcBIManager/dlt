@@ -468,6 +468,24 @@ def api_dagster_flow_status():
     return jsonify(_publicise_dagster_links(dagster_client.flow_status()))
 
 
+@app.get("/api/flow-runs")
+@api
+def api_flow_runs():
+    limit = min(request.args.get("limit", 50, type=int), 200)
+    runs = dagster_client.flow_runs(limit=limit)
+    names = {f["id"]: f["name"] for f in flows_store.load_flows()}
+    for r in runs:
+        r["flow_name"] = names.get(r["flow_id"]) or r["job"]
+    return jsonify(_publicise_dagster_links(runs))
+
+
+@app.get("/api/flow-runs/<run_id>/log")
+@api
+def api_flow_run_log(run_id):
+    cursor = request.args.get("cursor") or None
+    return jsonify(dagster_client.run_log_tail(run_id, cursor))
+
+
 # --------------------------------------------------------------------------- #
 # Logs API
 # --------------------------------------------------------------------------- #
