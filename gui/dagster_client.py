@@ -6,10 +6,11 @@ raising, so the GUI stays responsive when Dagster is down.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Optional
 
 import config
 import flow_naming
@@ -187,3 +188,86 @@ def flow_status() -> list[dict[str, Any]]:
     if not nodes:
         return []
     return _rows_from_repos(nodes)
+
+
+def _runs_from_payload(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep flow-job runs and reshape to the GUI's row format."""
+    out: list[dict[str, Any]] = []
+    for r in results:
+        job = r.get("jobName") or ""
+        if not job.startswith("flow_"):
+            continue
+        rid = r.get("runId")
+        out.append({
+            "run_id": rid,
+            "job": job,
+            "flow_id": flow_naming.flow_id_from_job(job),
+            "status": r.get("status"),
+            "start_time": r.get("startTime"),
+            "end_time": r.get("endTime"),
+            "run_link": run_link(rid) if rid else None,
+        })
+    return out
+
+
+def flow_runs(limit: int = 50) -> list[dict[str, Any]]:
+    """Recent flow-job runs, newest first. Empty list if Dagster unreachable."""
+    q = """
+    query FlowRuns($limit: Int!) {
+      runsOrError(limit: $limit) {
+        ... on Runs { results { runId jobName status startTime endTime } }
+      }
+    }"""
+    res = _query(q, {"limit": limit})
+    results = (res.get("data", {}).get("runsOrError", {}) or {}).get("results")
+    if not results:
+        return []
+    return _runs_from_payload(results)
+
+
+def _fmt_event(ev: dict[str, Any]) -> Optional[str]:
+    """One log line per MessageEvent; None for empty/non-message events."""
+    msg = ev.get("message")
+    if not msg:
+        return None
+    try:
+        hhmmss = dt.datetime.fromtimestamp(
+            float(ev.get("timestamp")) / 1000).strftime("%H:%M:%S")
+    except (TypeError, ValueError, OSError, OverflowError):
+        hhmmss = "--:--:--"
+    return f"{hhmmss} | {ev.get('level') or '':<8} | {msg}"
+
+
+def run_log_tail(run_id: str, cursor: Optional[str] = None) -> dict[str, Any]:
+    """New log lines for a run since ``cursor`` -- the GraphQL analogue of the
+    byte-offset file tail the Monitor page uses for run_logs files."""
+    q = """
+    query Tail($runId: ID!, $cursor: String) {
+      logsForRun(runId: $runId, afterCursor: $cursor, limit: 2000) {
+        __typename
+        ... on EventConnection {
+          events { __typename ... on MessageEvent { message timestamp level } }
+          cursor
+          hasMore
+        }
+        ... on RunNotFoundError { message }
+        ... on PythonError { message }
+      }
+      runOrError(runId: $runId) { ... on Run { status } }
+    }"""
+    res = _query(q, {"runId": run_id, "cursor": cursor})
+    err_shape = {"chunk": "", "cursor": cursor, "has_more": False, "status": None}
+    if "errors" in res:
+        return {**err_shape, "error": _first_error(res)}
+    data = res.get("data", {})
+    node = data.get("logsForRun", {}) or {}
+    if node.get("__typename") != "EventConnection":
+        return {**err_shape, "error": node.get("message", "log fetch failed")}
+    lines = [ln for ev in node.get("events", []) if (ln := _fmt_event(ev))]
+    return {
+        "chunk": "\n".join(lines) + ("\n" if lines else ""),
+        "cursor": node.get("cursor") or cursor,
+        "has_more": bool(node.get("hasMore")),
+        "status": (data.get("runOrError", {}) or {}).get("status"),
+        "error": None,
+    }
