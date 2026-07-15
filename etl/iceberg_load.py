@@ -618,6 +618,51 @@ class LoadSummary:
         return "\n".join(lines)
 
 
+def _table_snapshot_ids(pipeline, table_name: str) -> set[int]:
+    """Snapshot ids currently in the table's metadata (empty if it doesn't exist)."""
+    try:
+        from dlt.common.libs.pyiceberg import get_iceberg_tables
+
+        tbl = get_iceberg_tables(pipeline, table_name)[table_name]
+        return {s.snapshot_id for s in tbl.metadata.snapshots}
+    except Exception:  # noqa: BLE001 - first run: table not created yet
+        return set()
+
+
+def _squash_run_snapshots(tbl, before_ids: set[int]) -> int:
+    """Expire this run's intermediate snapshots so one snapshot remains per run.
+
+    Per-branch loading (``_run_per_branch_rebuild``/``_run_per_branch_append``)
+    and dlt's chunked ``merge`` commit one snapshot per branch/chunk; only the
+    last one matters for history. Expires every snapshot not in ``before_ids``
+    except the current snapshot and any ref targets, so prior runs' history is
+    untouched and time travel keeps exactly one point per run.
+    """
+    meta = tbl.metadata
+    protected = {ref.snapshot_id for ref in meta.refs.values()}
+    if meta.current_snapshot_id is not None:
+        protected.add(meta.current_snapshot_id)
+    ids = [s.snapshot_id for s in meta.snapshots
+           if s.snapshot_id not in before_ids and s.snapshot_id not in protected]
+    if ids:
+        tbl.maintenance.expire_snapshots().by_ids(ids).commit()
+    return len(ids)
+
+
+def _squash_table_run_snapshots(pipeline, table_name: str, before_ids: set[int]) -> None:
+    """Best-effort squash of the snapshots this run just committed to a table."""
+    try:
+        from dlt.common.libs.pyiceberg import get_iceberg_tables
+
+        tbl = get_iceberg_tables(pipeline, table_name)[table_name]
+        expired = _squash_run_snapshots(tbl, before_ids)
+        if expired:
+            log.info("[%s] squashed %d intra-run snapshot(s); 1 kept for this run",
+                     table_name, expired)
+    except Exception as exc:  # noqa: BLE001 - maintenance never fails the load
+        log.warning("[%s] snapshot squash failed: %s", table_name, exc)
+
+
 def apply_snapshot_retention(pipeline, settings: Settings) -> None:
     """Configure + enforce per-table snapshot retention (keep last N days).
 
@@ -731,6 +776,13 @@ def _load_one_table(
     # pyiceberg to cast an existing column to ``null``.
     plan.unified_schema = _coerce_unified_nulls(pipeline, tdef, plan.unified_schema)
 
+    # Snapshot ids present before this run's commits: per-branch loading (and
+    # chunked merge) commits several snapshots; after a successful load every
+    # snapshot newer than these is squashed down to the final one so history
+    # keeps exactly 1 snapshot per run instead of 1 per branch per run.
+    before_ids = (_table_snapshot_ids(pipeline, tdef.dataset_table_name)
+                  if settings.snapshot_maintenance else set())
+
     # Label the peak-memory window: this is where the staged parquet is read
     # back into Arrow and committed to Iceberg.
     monitor.set_activity(f"load:{tdef.dataset_table_name}")
@@ -758,6 +810,8 @@ def _load_one_table(
             for r in plan.success:
                 control.advance(r)
         control.save()
+        if settings.snapshot_maintenance:
+            _squash_table_run_snapshots(pipeline, tdef.dataset_table_name, before_ids)
         plan.load_status = "SUCCESS"
         log.info("[%s] loaded: disp=%s ok=%d fail=%d rows=%d",
                  tdef.dataset_table_name, plan.disposition, len(plan.success),
