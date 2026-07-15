@@ -576,11 +576,72 @@ class _ArrowEmpty(Exception):
     """Native Arrow fetch produced no rows -> use the cursor path for the schema."""
 
 
+class _StagingWriter:
+    """ParquetWriter wrapper that survives mid-stream schema drift.
+
+    Unconstrained NUMBER columns (typical for query-based/computed sources)
+    carry no precision metadata, so their Arrow type is inferred per batch from
+    the values. The first batch then pins the parquet schema, and a later,
+    wider batch fails a plain safe cast with "Decimal value does not fit in
+    precision N" -- aborting the whole phase. Instead, widen the schema
+    (types_map.widen_types semantics) and rewrite the rows already staged,
+    then keep streaming.
+    """
+
+    def __init__(self, tmp_path: Path, label: str):
+        self._tmp_path = tmp_path
+        self._label = label
+        self._writer: Optional[pq.ParquetWriter] = None
+        self.schema: Optional[pa.Schema] = None
+        self.row_count = 0
+
+    def write(self, batch: pa.Table) -> None:
+        if self._writer is None:
+            self.schema = batch.schema
+            self._writer = pq.ParquetWriter(self._tmp_path, self.schema)
+        elif not batch.schema.equals(self.schema):
+            widened = types_map.unify_schemas([self.schema, batch.schema])
+            if not widened.equals(self.schema):
+                self._rewiden(widened)
+            batch = types_map.cast_table_to_schema(batch, self.schema)
+        self._writer.write_table(batch)
+        self.row_count += batch.num_rows
+
+    def _rewiden(self, widened: pa.Schema) -> None:
+        """Restart the writer with ``widened`` and re-stage the rows written so far."""
+        log.warning(
+            "[%s] schema drift mid-stream; widening staged schema: %s",
+            self._label,
+            types_map.schema_diff(self.schema, widened).get("type_widened"),
+        )
+        assert self._writer is not None
+        self._writer.close()
+        narrow_path = self._tmp_path.with_name(self._tmp_path.name + ".narrow")
+        os.replace(self._tmp_path, narrow_path)
+        self.schema = widened
+        self._writer = pq.ParquetWriter(self._tmp_path, widened)
+        try:
+            staged = pq.ParquetFile(narrow_path)
+            try:
+                for rb in staged.iter_batches():
+                    self._writer.write_table(types_map.cast_table_to_schema(
+                        pa.Table.from_batches([rb]), widened))
+            finally:
+                staged.close()
+        finally:
+            try:
+                narrow_path.unlink()
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+
+
 def _stage_via_arrow(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:
     tmp_path, final_path = _staged_paths(tdef, branch_key, settings)
-    writer: Optional[pq.ParquetWriter] = None
-    out_schema: Optional[pa.Schema] = None
-    row_count = 0
+    writer = _StagingWriter(tmp_path, f"{branch_key}/{tdef.dataset_table_name}")
     try:
         # OracleDataFrame batches -> zero-copy-ish pyarrow tables.
         for odf in conn.fetch_df_batches(query, size=fetch_batch_size):
@@ -588,20 +649,13 @@ def _stage_via_arrow(conn, query, tdef, branch_key, branch_id, settings, fetch_b
             if batch.num_rows == 0:
                 continue
             batch = inject_columns(batch, branch_id, settings, tdef, now=now)
-            if writer is None:
-                out_schema = batch.schema
-                writer = pq.ParquetWriter(tmp_path, out_schema)
-            elif not batch.schema.equals(out_schema):
-                batch = batch.cast(out_schema)
-            writer.write_table(batch)
-            row_count += batch.num_rows
-        if writer is None:
+            writer.write(batch)
+        if writer.schema is None:
             raise _ArrowEmpty()
     finally:
-        if writer is not None:
-            writer.close()
+        writer.close()
     os.replace(tmp_path, final_path)
-    return row_count, out_schema, final_path
+    return writer.row_count, writer.schema, final_path
 
 
 def _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:
@@ -613,9 +667,7 @@ def _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_
     """
     tmp_path, final_path = _staged_paths(tdef, branch_key, settings)
     cur = conn.cursor()
-    writer: Optional[pq.ParquetWriter] = None
-    out_schema: Optional[pa.Schema] = None
-    row_count = 0
+    writer = _StagingWriter(tmp_path, f"{branch_key}/{tdef.dataset_table_name}")
     try:
         cur.arraysize = fetch_batch_size
         cur.prefetchrows = fetch_batch_size + 1
@@ -624,19 +676,12 @@ def _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_
         # empty result), so the writer and schema are always established.
         for batch in _cursor_arrow_stream(cur, fetch_batch_size):
             batch = inject_columns(batch, branch_id, settings, tdef, now=now)
-            if writer is None:
-                out_schema = batch.schema
-                writer = pq.ParquetWriter(tmp_path, out_schema)
-            elif not batch.schema.equals(out_schema):
-                batch = batch.cast(out_schema)
-            writer.write_table(batch)
-            row_count += batch.num_rows
+            writer.write(batch)
     finally:
-        if writer is not None:
-            writer.close()
+        writer.close()
         cur.close()
     os.replace(tmp_path, final_path)
-    return row_count, out_schema, final_path
+    return writer.row_count, writer.schema, final_path
 
 
 def fetch_and_stage(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now) -> tuple[int, pa.Schema, Path]:
