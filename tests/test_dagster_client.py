@@ -83,6 +83,18 @@ def test_run_log_tail_parses_connection(monkeypatch):
     assert r["error"] is None
 
 
+def test_run_log_tail_respects_dagster_page_cap(monkeypatch):
+    # Dagster rejects logsForRun limits above 1000 with a PythonError
+    # ("Limit of N is too large. Max is 1000"), so the query must stay <= 1000.
+    import re
+    import dagster_client as dc
+    captured = {}
+    monkeypatch.setattr(dc, "_query", lambda q, v=None: captured.update(q=q) or {"data": {}})
+    dc.run_log_tail("r1")
+    m = re.search(r"limit:\s*(\d+)", captured["q"])
+    assert m and int(m.group(1)) <= 1000
+
+
 def test_run_log_tail_run_not_found(monkeypatch):
     import dagster_client as dc
     payload = {"data": {"logsForRun": {"__typename": "RunNotFoundError",

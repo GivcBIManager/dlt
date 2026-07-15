@@ -243,7 +243,7 @@ def run_log_tail(run_id: str, cursor: Optional[str] = None) -> dict[str, Any]:
     byte-offset file tail the Monitor page uses for run_logs files."""
     q = """
     query Tail($runId: ID!, $cursor: String) {
-      logsForRun(runId: $runId, afterCursor: $cursor, limit: 2000) {
+      logsForRun(runId: $runId, afterCursor: $cursor, limit: 1000) {
         __typename
         ... on EventConnection {
           events { __typename ... on MessageEvent { message timestamp level } }
