@@ -113,6 +113,17 @@
     </div>
   </div>
 </div>
+
+<div class="modal-bg" id="exp-modal">
+  <div class="modal" style="max-width:480px">
+    <h2 id="exp-title"></h2>
+    <div id="exp-info" style="margin-bottom:12px"></div>
+    <div class="row-flex" style="margin-top:16px;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" id="exp-cancel">Cancel</button>
+      <button class="btn primary" id="exp-go">Expire snapshots</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -159,7 +170,8 @@ function renderTables() {
         <td class="num">${fmtNum(t.rows)}</td>
         <td class="num">${fmtBytes(t.size_bytes)}</td>
         <td class="num">${t.snapshots}</td>
-        <td>${t.table.startsWith("_dlt") ? "" : `<button class="btn sm ghost" title="Delete table"
+        <td>${t.table.startsWith("_dlt") ? "" : `${t.snapshots > 1 ? `<button class="btn sm ghost" title="Expire old snapshots (keep latest)"
+             onclick="event.stopPropagation();openExpireModal('${esc(t.table)}')"><i class="fa-solid fa-broom"></i></button>` : ""}<button class="btn sm ghost" title="Delete table"
              onclick="event.stopPropagation();openDeleteModal('${esc(t.table)}')"><i class="fa-solid fa-trash"></i></button>`}</td>
       </tr>`).join("") + `</tbody></table>`
     : `<div class="muted" style="padding:12px">${allTables.length ? "No tables match the filter." : "No Iceberg tables found."}</div>`;
@@ -391,6 +403,36 @@ el("del-go").onclick = async () => {
 
 el("del-cancel").onclick = hideDelModal;
 el("delete-all").onclick = openDeleteAllModal;
+
+// --- snapshot expiry (keep latest only) ----------------------------------- //
+let expTarget = null;
+
+function openExpireModal(table) {
+  const t = allTables.find(x => x.table === table);
+  expTarget = table;
+  el("exp-title").textContent = `Expire snapshots of ${table}?`;
+  el("exp-info").innerHTML =
+    `<div>${fmtNum(t?.snapshots)} snapshot(s) · ${fmtBytes(t?.size_bytes)} on disk.</div>` +
+    `<div class="muted" style="margin-top:8px">Keeps only the latest snapshot and deletes the files older snapshots referenced. Current rows are untouched; time-travel history is lost.</div>`;
+  el("exp-go").disabled = false;
+  el("exp-modal").classList.add("show");
+}
+function hideExpireModal() { el("exp-modal").classList.remove("show"); }
+
+el("exp-go").onclick = async () => {
+  el("exp-go").disabled = true;
+  try {
+    const res = await api("POST", `/api/iceberg/tables/${encodeURIComponent(expTarget)}/expire-snapshots`, {});
+    hideExpireModal();
+    const nErr = Object.keys(res.errors || {}).length;
+    ok(`Expired ${res.expired} snapshot(s), removed ${res.orphans_deleted} orphan file(s), freed ${fmtBytes(res.bytes_freed)}` +
+       (nErr ? ` — ${nErr} file(s) failed` : ""));
+    if (nErr) err(Object.entries(res.errors).map(([f, m]) => `${f}: ${m}`).join("; "));
+    if (expTarget === curTable) select(curTable);
+    loadTables();
+  } catch (e) { err(e.message); el("exp-go").disabled = false; }
+};
+el("exp-cancel").onclick = hideExpireModal;
 
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("refresh").onclick = loadTables;
