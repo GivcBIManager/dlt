@@ -263,7 +263,14 @@ def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Sch
     try:
         from dlt.common.libs.pyiceberg import get_iceberg_tables
         from pyiceberg.io.pyarrow import schema_to_pyarrow
-        tbl = get_iceberg_tables(pipeline).get(tdef.dataset_table_name)
+        # Open ONLY this table: get_iceberg_tables(pipeline) with no name opens
+        # every table in the dataset, so a single unrelated broken table (e.g. a
+        # pending/malformed one) makes this read raise -- and the except below
+        # would then fall back to `string`, which fails dlt's schema evolution
+        # for any all-null column the destination stores as a non-string type
+        # ("Cannot promote string to double").
+        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
+            tdef.dataset_table_name)
         if tbl is not None:
             # dlt normalizes identifiers to lower snake; for these clean
             # UPPER_SNAKE / already-lower names that is just lower-casing.
