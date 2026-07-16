@@ -167,6 +167,9 @@ class TableLoadPlan:
     schema_diffs: dict = field(default_factory=dict)
     load_status: str = "PENDING"     # SUCCESS | FAILED | SKIPPED
     load_error: Optional[str] = None
+    # A commit that hung past the watchdog: the pipeline is poisoned (a daemon
+    # worker is still stuck inside it) and must be rebuilt before the next table.
+    load_timed_out: bool = False
 
 
 def _plan_table(
@@ -218,9 +221,17 @@ def _plan_table(
     # a `--branch` subset, or any INCREMENTAL), so we never clobber branches that
     # are not part of this run. INCREMENTAL deltas are small, so the chunked
     # upsert cost there is acceptable.
+    #
+    # A table with no CDC source (no own ``cdc_column`` and no helper) cannot do a
+    # real incremental -- ``build_query`` re-extracts it in full every run -- so
+    # merging that full extract is a pointless commit storm. Treat it as a full
+    # rebuild (single bulk ``replace``) whenever the run covers every branch; a
+    # branch subset still has to merge, since ``replace`` overwrites the whole
+    # table and would drop the branches it isn't loading.
+    no_cdc = not tdef.is_snapshot and tdef.cdc_capture_column is None
     full_rebuild = (
-        settings.mode == MODE_INITIAL
-        and branches_in_run == total_branches
+        branches_in_run == total_branches
+        and (settings.mode == MODE_INITIAL or no_cdc)
     )
     if tdef.is_snapshot:
         plan.disposition = "append"
@@ -473,7 +484,9 @@ def _run_per_branch_rebuild(
     """
     disposition = "replace"  # first branch truncates the prior table
     for r in plan.success:
-        pipeline.run([_iceberg_resource(plan, settings, [r.staged_path], disposition)])
+        _run_pipeline(
+            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], disposition)],
+            settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:{disposition}")
         control.advance(r)
         disposition = "append"  # everything after the first adds on
 
@@ -493,7 +506,9 @@ def _run_per_branch_append(
     the already-appended branches correct.
     """
     for r in plan.success:
-        pipeline.run([_iceberg_resource(plan, settings, [r.staged_path], "append")])
+        _run_pipeline(
+            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], "append")],
+            settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:append")
         control.advance(r)
 
 
@@ -594,7 +609,7 @@ def _write_observability(pipeline, plans, settings, run_id) -> None:
     if log_rows:
         resources.append(log_res())
     if resources:
-        pipeline.run(resources)
+        _run_pipeline(pipeline, resources, settings, "observability")
 
 
 # --------------------------------------------------------------------------- #
@@ -713,6 +728,90 @@ def build_pipeline(settings: Settings):
     )
 
 
+class _PipelineHolder:
+    """Mutable handle to the shared dlt pipeline so a hung commit can be swapped.
+
+    A commit that trips the watchdog leaves a daemon worker stuck inside the old
+    pipeline -- a native pyiceberg call can't be force-killed. Reusing that
+    pipeline for the next table (or clear_pending_packages / observability) would
+    race the zombie on shared client + working-dir state, so on a timeout the
+    holder is rebuilt to a fresh pipeline and the poisoned one is abandoned. All
+    reads/rebuilds happen on the single load thread, so no locking is needed.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self.pipeline = build_pipeline(settings)
+
+    def rebuild(self):
+        self.pipeline = build_pipeline(self._settings)
+        return self.pipeline
+
+
+def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> None:
+    """Upsert an Iceberg merge delta in ONE commit (drop-in for dlt's batched merge).
+
+    Mirrors dlt's ``merge_iceberg_table`` exactly -- same schema union, same
+    primary-key / parent-unique join-key detection, same upsert flags -- but
+    calls ``table.upsert`` once over the whole (already dlt-normalized) delta
+    instead of once per 1,000-row chunk. That turns a large-delta merge from
+    thousands of Iceberg commits into a single snapshot, changing only the commit
+    granularity: naming, typing and merge semantics are untouched.
+    """
+    from dlt.common.libs.pyiceberg import (
+        ensure_iceberg_compatible_arrow_data,
+        ensure_iceberg_compatible_arrow_schema,
+    )
+    from dlt.common.schema.utils import (
+        get_columns_names_with_prop,
+        get_first_column_name_with_prop,
+    )
+
+    strategy = schema["x-merge-strategy"]
+    if strategy not in ("upsert", "insert-only"):
+        raise ValueError(
+            f'Merge strategy "{strategy}" is not supported for Iceberg tables. '
+            f'Table: "{load_table_name}".'
+        )
+
+    # Evolve the table schema so any new column in the delta is accepted.
+    with table.update_schema() as update:
+        update.union_by_name(ensure_iceberg_compatible_arrow_schema(data.schema))
+
+    if "parent" in schema:
+        join_cols = [get_first_column_name_with_prop(schema, "unique")]
+    else:
+        join_cols = get_columns_names_with_prop(schema, "primary_key")
+
+    table.upsert(
+        df=ensure_iceberg_compatible_arrow_data(data),
+        join_cols=join_cols,
+        when_matched_update_all=(strategy == "upsert"),
+        when_not_matched_insert_all=True,
+        case_sensitive=True,
+    )
+
+
+_merge_iceberg_single_commit._single_commit = True  # tag for idempotent install
+
+
+def _install_single_commit_merge() -> None:
+    """Replace dlt's per-1,000-row Iceberg merge with a single-commit upsert.
+
+    dlt hardcodes ``max_chunksize=1_000`` in ``merge_iceberg_table`` -- one
+    Iceberg commit per chunk, a metadata-rewrite storm on any sizeable delta.
+    ``IcebergLoadFilesystemJob.run`` re-imports that symbol from the module on
+    every load, so swapping the module attribute makes each merge commit exactly
+    one snapshot. Idempotent; safe (and cheap) to call at the start of every run.
+    """
+    import dlt.common.libs.pyiceberg as _dlt_ice
+
+    if getattr(_dlt_ice.merge_iceberg_table, "_single_commit", False):
+        return
+    _dlt_ice.merge_iceberg_table = _merge_iceberg_single_commit
+    log.info("installed single-commit Iceberg merge (1 snapshot per table per merge)")
+
+
 def clear_pending_packages(pipeline, context: str) -> None:
     """Drop any pending (extracted/normalized) load packages left on the pipeline.
 
@@ -730,6 +829,56 @@ def clear_pending_packages(pipeline, context: str) -> None:
             pipeline.drop_pending_packages(with_partial_loads=True)
     except Exception as exc:  # noqa: BLE001
         log.warning("[%s] could not drop pending packages: %s", context, exc)
+
+
+def _run_with_timeout(fn: Callable[[], object], timeout_s: Optional[float], label: str):
+    """Run ``fn`` under a wall-clock watchdog, turning a hang into ``TimeoutError``.
+
+    A pyiceberg commit can block forever with no error and never return -- dlt's
+    ``.reference`` followup job spins inside ``pipeline.run`` -- so the per-table
+    ``except`` recovery can never fire and the whole run deadlocks. Running the
+    commit on a daemon worker and waiting ``timeout_s`` lets a genuine hang
+    surface as a ``TimeoutError`` (the caller's ``except`` then marks the table
+    FAILED and the run continues), while a normal -- even minutes-long -- commit
+    still returns its result untouched.
+
+    ``timeout_s`` of 0/None disables the watchdog and runs ``fn`` inline. On
+    timeout the worker thread is abandoned (it is a daemon, so it never blocks
+    process exit): a Python thread blocked in a native pyiceberg call cannot be
+    force-killed, so the caller MUST NOT reuse the now-poisoned pipeline.
+    """
+    if not timeout_s or timeout_s <= 0:
+        return fn()
+    box: dict = {}
+
+    def _target() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=_target, name=f"commit:{label}", daemon=True)
+    worker.start()
+    worker.join(timeout_s)
+    if worker.is_alive():
+        raise TimeoutError(
+            f"Iceberg commit for '{label}' exceeded {timeout_s}s (likely a hung "
+            f"pyiceberg .reference job); abandoning it and failing the table"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _run_pipeline(pipeline, resources, settings: Settings, label: str):
+    """``pipeline.run(resources)`` under the per-commit hang watchdog.
+
+    Every Iceberg commit goes through here so a single hung ``.reference`` job
+    can never deadlock the whole run -- it surfaces as a ``TimeoutError`` that the
+    caller's ``except`` turns into a FAILED table (see ``_run_with_timeout``).
+    """
+    return _run_with_timeout(
+        lambda: pipeline.run(resources), settings.load_commit_timeout_s, label)
 
 
 def _load_one_table(
@@ -803,9 +952,12 @@ def _load_one_table(
             existing = _existing_insert_at(
                 pipeline, tdef, settings,
                 [r.branch_id for r in plan.success], plan.unified_schema)
-            pipeline.run([_iceberg_resource(
-                plan, settings, [r.staged_path for r in plan.success],
-                plan.disposition, existing_insert_at=existing)])
+            _run_pipeline(
+                pipeline,
+                [_iceberg_resource(
+                    plan, settings, [r.staged_path for r in plan.success],
+                    plan.disposition, existing_insert_at=existing)],
+                settings, f"{tdef.dataset_table_name}:{plan.disposition}")
             # Advance watermarks only for a table that actually loaded.
             for r in plan.success:
                 control.advance(r)
@@ -816,6 +968,18 @@ def _load_one_table(
         log.info("[%s] loaded: disp=%s ok=%d fail=%d rows=%d",
                  tdef.dataset_table_name, plan.disposition, len(plan.success),
                  len(plan.failed), sum(r.row_count for r in plan.success))
+    except TimeoutError as exc:
+        # The commit hung past the watchdog: a daemon worker is still stuck
+        # inside this pipeline and cannot be killed, so we must NOT touch it
+        # (clear_pending_packages / reuse would race the zombie). Flag the plan
+        # so the orchestrator abandons and rebuilds the pipeline. Watermarks for
+        # any branch that committed before the hang were already advanced.
+        plan.load_status = "FAILED"
+        plan.load_timed_out = True
+        plan.load_error = f"{type(exc).__name__}: {exc}"
+        log.error("[%s] load commit timed out; abandoning pipeline: %s",
+                  tdef.dataset_table_name, exc)
+        control.save()
     except Exception as exc:  # noqa: BLE001 - isolate per-table load failures
         plan.load_status = "FAILED"
         plan.load_error = f"{type(exc).__name__}: {exc}"
@@ -852,10 +1016,13 @@ def load_and_record(
     because a dlt pipeline is not safe to run concurrently with itself, but each
     table still lands as soon as it is ready rather than waiting for the rest.
     """
-    pipeline = build_pipeline(settings)
+    # Make every Iceberg merge commit a single snapshot instead of one per
+    # 1,000 rows (see _install_single_commit_merge). Must run before any load.
+    _install_single_commit_merge()
+    holder = _PipelineHolder(settings)
     # A crash (OOM, kill) can leave pending packages behind with no except
     # handler having run; sweep them so this run doesn't inherit the blockage.
-    clear_pending_packages(pipeline, "startup")
+    clear_pending_packages(holder.pipeline, "startup")
     table_defs = {t.dataset_table_name: t for t in tables}
     order = {t.dataset_table_name: i for i, t in enumerate(tables)}
 
@@ -873,6 +1040,20 @@ def load_and_record(
         enabled=settings.progress_enabled,
     ).start()
 
+    def _load_task(tdef: TableDef, batch: list[ExtractResult]) -> TableLoadPlan:
+        # Resolve the pipeline at execution time (on the single load thread) so a
+        # rebuild after a hung commit is seen by every later table. If this
+        # table's commit timed out, the pipeline is poisoned -- swap it for a
+        # fresh one before the next table (and before finalize) touches it.
+        plan = _load_one_table(
+            holder.pipeline, tdef, batch, settings, control,
+            total_branches, branches_in_run, monitor)
+        if plan.load_timed_out:
+            log.warning("[%s] rebuilding pipeline after commit timeout",
+                        tdef.dataset_table_name)
+            holder.rebuild()
+        return plan
+
     def on_table_done(result: ExtractResult) -> None:
         name = result.table
         monitor.record_unit(result.row_count, result.status)
@@ -883,9 +1064,7 @@ def load_and_record(
             ready = remaining[name] == 0
             batch = list(collected[name]) if ready else None
         if ready:
-            load_futures.append(load_pool.submit(
-                _load_one_table, pipeline, table_defs[name], batch,
-                settings, control, total_branches, branches_in_run, monitor))
+            load_futures.append(load_pool.submit(_load_task, table_defs[name], batch))
 
     extraction_error: Optional[BaseException] = None
     try:
@@ -906,9 +1085,10 @@ def load_and_record(
     try:
         control.save()
         # Observability + retention reflect everything that completed this run.
+        # Use holder.pipeline: a mid-run commit timeout may have replaced it.
         monitor.set_activity("finalize")
-        _write_observability(pipeline, plans, settings, run_id)
-        apply_snapshot_retention(pipeline, settings)
+        _write_observability(holder.pipeline, plans, settings, run_id)
+        apply_snapshot_retention(holder.pipeline, settings)
     finally:
         monitor.stop()
 

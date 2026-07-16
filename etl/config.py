@@ -298,6 +298,13 @@ class Settings:
     # Iceberg load. Caps load-time memory vs reading a whole branch file at once.
     load_batch_rows: int = 50_000
 
+    # Watchdog on each blocking Iceberg commit (``pipeline.run``). A pyiceberg
+    # commit can hang forever with no error, deadlocking the whole run; if a
+    # single commit exceeds this many seconds it is abandoned and that table is
+    # marked FAILED so the run proceeds. Generous enough that a legitimate
+    # (even minutes-long) large-branch commit never trips it. 0 disables it.
+    load_commit_timeout_s: int = 900
+
     # DQ: tolerate row-hash drift up to this percent of a (table, branch)'s
     # Oracle hashed rows before flagging MISMATCH; at or below it the status is
     # WITHIN_TOLERANCE. Row-count drift is always a hard MISMATCH.
@@ -506,6 +513,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         progress_enabled=bool(_cfg("etl.progress_enabled", True)),
         progress_interval_s=float(_cfg("etl.progress_interval_s", 5.0)),
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),
+        load_commit_timeout_s=int(_cfg("etl.load_commit_timeout_s", 900)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
     )
 
