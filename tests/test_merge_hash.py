@@ -2,6 +2,8 @@
 from __future__ import annotations
 import subprocess
 import sys
+from decimal import Decimal
+import pytest
 import pyarrow as pa
 from etl.iceberg_load import _serialize_keys, _merge_hash_array
 
@@ -111,3 +113,22 @@ def test_sort_by_hash_noop_when_missing_or_empty():
 
 def test_settings_has_merge_hash_column_default():
     assert Settings().merge_hash_column == "merge_hash"
+
+
+def test_merge_hash_column_normalized_to_lowercase():
+    from etl.config import Settings
+    assert Settings(merge_hash_column="MERGE_HASH").merge_hash_column == "merge_hash"
+    assert Settings().merge_hash_column == "merge_hash"     # default unchanged
+
+
+def test_hash_rejects_fractional_decimal_key():
+    t = pa.table({"id": pa.array([Decimal("1.50")], pa.decimal128(18, 2)),
+                  "branch_id": pa.array([1], pa.int64())})
+    with pytest.raises(ValueError, match="not run-stable"):
+        _merge_hash_array(t, ["id", "branch_id"])
+
+
+def test_hash_allows_scale_zero_decimal_key():
+    t = pa.table({"id": pa.array([Decimal("123")], pa.decimal128(18, 0)),
+                  "branch_id": pa.array([1], pa.int64())})
+    assert len(_merge_hash_array(t, ["id", "branch_id"])) == 1   # scale-0 decimal id OK

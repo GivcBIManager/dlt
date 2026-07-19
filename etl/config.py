@@ -317,6 +317,12 @@ class Settings:
 
     self_test: bool = False
 
+    def __post_init__(self):
+        # merge_hash is an internal derived column; force its name lowercase so it
+        # always matches dlt's normalized Iceberg field across the write, readiness,
+        # merge-join, and carry-forward paths.
+        self.merge_hash_column = self.merge_hash_column.lower()
+
     @property
     def control_table_name(self) -> str:
         return "etl_control"

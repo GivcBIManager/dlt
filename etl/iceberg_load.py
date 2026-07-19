@@ -851,10 +851,21 @@ def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
     hash INVARIANT to a numeric key's Arrow representation: the same integer id
     hashes identically whether a run materializes it as int32, int64, or
     decimal128(p,0) -- Oracle NUMBER ids may be inferred as any of these across
-    runs. Caveat: an unconstrained NUMBER key with a *fractional* value relies on
-    a stable inferred scale across runs; real key columns are integer ids, so
-    that does not arise in practice.
+    runs. A floating or fractional-decimal (scale > 0) key column is NOT
+    run-stable this way (its string cast can drift across runs -> silent
+    duplicate rows), so such columns are rejected up front rather than hashed.
     """
+    for name in key_cols:
+        t = table.column(name).type
+        if pa.types.is_floating(t) or (pa.types.is_decimal(t) and t.scale > 0):
+            raise ValueError(
+                f"merge-key column {name!r} has type {t}, which is not "
+                f"run-stable: hashing a floating or fractional-decimal key is "
+                f"not run-stable across runs (its string cast can vary -> "
+                f"silent duplicate rows). Merge keys must be integer, "
+                f"scale-0 decimal, or string."
+            )
+
     col_strs = [pc.cast(table.column(name), pa.string()).to_pylist()
                 for name in key_cols]
     out: list[bytes] = []
