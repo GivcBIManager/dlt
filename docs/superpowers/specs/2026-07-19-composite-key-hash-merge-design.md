@@ -39,7 +39,7 @@ batch sorted there. The merge's join-column choice lives in `_merge_iceberg_sing
 (`etl/iceberg_load.py:758`). The readiness gate piggybacks on `_existing_insert_at`
 (`etl/iceberg_load.py:320`), which already opens the stored table and reads its schema.
 
-```
+```text
 initial load  ─┐
                 ├─▶ _iceberg_resource._finish ─▶ [cast → +merge_hash → sort_by(merge_hash)] ─▶ Iceberg
 incremental  ──┘                                        (only when hash-ready)
@@ -83,11 +83,21 @@ incremental merge ─▶ _merge_iceberg_single_commit ─▶ join_cols = ["merge
 
 ## Component 2: write path (initial load + every write)
 
-- In `_finish`, when hash-ready: append `merge_hash` via `_merge_hash_array`, then
-  `tbl.sort_by([("merge_hash", "ascending")])` before returning the batch. Clustering lets
-  per-file `merge_hash` min/max prune the `In(merge_hash)` scan.
-- A full `replace` **always** writes `merge_hash` (all rows) → the table becomes
-  hash-ready. This is the sole path that flips a table to ready (= the reload gate).
+- The caller passes an explicit **`write_hash: bool`** into `_iceberg_resource`. `_finish`
+  writes `merge_hash` (append via `_merge_hash_array`, then
+  `tbl.sort_by([("merge_hash", "ascending")])`) **iff `write_hash` is true**; otherwise it
+  behaves exactly as today. Clustering lets per-file `merge_hash` min/max prune the
+  `In(merge_hash)` scan.
+- **The exact `write_hash` rule** (computed by each caller, not inferred from disposition
+  alone):
+  - snapshot/append tables (`tdef.is_snapshot`) → **False** (never hashed);
+  - full rebuild (`_run_per_branch_rebuild`, i.e. `disposition == "replace"`) → **True for
+    every branch of the rebuild**, including the branches it writes with `append` after the
+    first branch's `replace` — so the whole table ends up hashed;
+  - incremental merge (`disposition == "merge"`) → **True iff the stored table is already
+    hash-ready** (Component 4), else False.
+- Because a full rebuild sets `write_hash=True` for all its branches, a `replace` is the
+  sole path that flips a not-ready table to ready (= the reload gate).
 - Sort/append are correctness-neutral: row order does not affect a merge or an append.
 
 ## Component 3: merge path
@@ -108,8 +118,9 @@ incremental merge ─▶ _merge_iceberg_single_commit ─▶ join_cols = ["merge
 ## Component 4: reload-gated readiness (safety-critical)
 
 - **Readiness signal:** the stored Iceberg table already has a `merge_hash` column,
-  detected in `_existing_insert_at` (already reads `tbl.schema().fields`) and threaded to
-  `_iceberg_resource` (alongside `existing_insert_at`).
+  detected in `_existing_insert_at` (already reads `tbl.schema().fields`). This readiness
+  bool becomes the merge path's `write_hash` value (Component 2) threaded to
+  `_iceberg_resource` alongside `existing_insert_at`.
 - **Discipline that makes the signal trustworthy:** an *incremental* merge writes
   `merge_hash` **only if the table is already ready**. On a not-ready table it emits **no**
   hash, so `union_by_name` (`etl/iceberg_load.py:785`) never adds a half-populated
