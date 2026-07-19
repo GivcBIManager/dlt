@@ -80,3 +80,34 @@ def test_decimal_hash_stable_across_a_fresh_process():
     out2 = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out1.stdout.strip() == out2.stdout.strip()
     assert len(out1.stdout.strip()) == 32   # 16 bytes hex
+
+
+from etl.iceberg_load import _append_merge_hash, _sort_by_hash
+from etl.config import Settings
+
+
+def test_append_adds_binary_hash_column():
+    t = _t([1, 2], [7, 7])
+    out = _append_merge_hash(t, ["id", "branch_id"], "merge_hash")
+    assert "merge_hash" in out.column_names
+    assert out.schema.field("merge_hash").type == pa.binary()
+    assert out.num_rows == 2
+
+
+def test_sort_by_hash_orders_rows_and_is_stable():
+    t = _append_merge_hash(_t([3, 1, 2], [7, 7, 7]), ["id", "branch_id"], "merge_hash")
+    out = _sort_by_hash(t, "merge_hash")
+    hashes = [v.as_py() for v in out.column("merge_hash")]
+    assert hashes == sorted(hashes)
+
+
+def test_sort_by_hash_noop_when_missing_or_empty():
+    t = _t([1], [7])
+    assert _sort_by_hash(t, "merge_hash").equals(t)        # column absent
+    empty = t.slice(0, 0)
+    assert _sort_by_hash(_append_merge_hash(empty, ["id", "branch_id"], "merge_hash"),
+                         "merge_hash").num_rows == 0
+
+
+def test_settings_has_merge_hash_column_default():
+    assert Settings().merge_hash_column == "merge_hash"

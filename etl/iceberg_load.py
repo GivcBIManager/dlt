@@ -802,6 +802,20 @@ def _merge_hash_array(table: pa.Table, key_cols: list[str]) -> pa.Array:
     return pa.array(digests, type=pa.binary())
 
 
+def _append_merge_hash(tbl: pa.Table, key_cols: list[str], hash_col: str) -> pa.Table:
+    """Append the derived merge-hash column (no sort). Row-aligned to ``tbl``."""
+    return tbl.append_column(hash_col, _merge_hash_array(tbl, key_cols))
+
+
+def _sort_by_hash(tbl: pa.Table, hash_col: str) -> pa.Table:
+    """Cluster a batch by the merge hash so per-file min/max can prune the In
+    scan (and less copy-on-write rewrite). No-op if the column is absent or the
+    table is empty; row content/count is unchanged either way."""
+    if hash_col not in tbl.column_names or tbl.num_rows == 0:
+        return tbl
+    return tbl.sort_by([(hash_col, "ascending")])
+
+
 def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> None:
     """Upsert an Iceberg merge delta in ONE commit (drop-in for dlt's batched merge).
 

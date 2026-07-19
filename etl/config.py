@@ -276,6 +276,7 @@ class Settings:
     branch_id_column: str = "BRANCH_ID"
     recorded_ts_column: str = "Recorded_updated_at"   # ETL last-load time (updates every run)
     inserted_ts_column: str = "insert_at"             # ETL first-load time (preserved across updates)
+    merge_hash_column: str = "merge_hash"             # single-column merge key derived from PK+BRANCH_ID
 
     # snapshot (append-only) tables: a single per-run timestamp stamped into every
     # record of every branch (``version``), plus a derived date used purely as the
