@@ -65,10 +65,13 @@ incremental merge ─▶ _merge_iceberg_single_commit ─▶ join_cols = ["merge
 
 ## Component 1: the `merge_hash` column
 
-- **Column:** `merge_hash`, Iceberg `fixed[16]` (Arrow `binary(16)`), **NOT NULL**,
-  configured via `settings.merge_hash_column` (mirrors `branch_id_column`,
-  `inserted_ts_column`). Added to the resource `columns` hints and to the unified schema
-  as a primary-key-eligible, non-null column **only when the table is/becomes hash-ready**.
+- **Column:** `merge_hash`, Iceberg `binary` (Arrow `pa.binary()`, every value exactly 16
+  bytes), configured via `settings.merge_hash_column` (mirrors `branch_id_column`,
+  `inserted_ts_column`). Written **only when the table is/becomes hash-ready**; not declared
+  a dlt `primary_key` (the composite key stays dlt's key — the merge overrides `join_cols`
+  locally instead), so its non-null-ness is enforced in practice (always computed) rather
+  than via a hint. (Variable `binary` over `fixed[16]` avoids dlt Arrow→Iceberg
+  fixed-type mapping friction; `In`, sort, and min/max stats behave identically.)
 - **Hash function:** stdlib `hashlib.blake2b(digest_size=16)` — 128-bit, deterministic
   across processes and library versions, no new dependency. (Python's built-in `hash()` is
   per-process salted → unusable; this is the correctness crux.)
@@ -163,7 +166,8 @@ incremental merge ─▶ _merge_iceberg_single_commit ─▶ join_cols = ["merge
 ## Defaults chosen (open to change at review)
 
 - `hashlib.blake2b(digest_size=16)` (stdlib, no dep) over `xxhash` (faster C, new dep).
-- `fixed[16]` over variable-length `binary` (better stats, no length overhead).
+- Variable-length `binary` (Arrow `pa.binary()`, 16-byte values) over `fixed[16]` — avoids
+  dlt Arrow→Iceberg fixed-type mapping friction; functionally identical for `In`/sort/stats.
 
 ## Related
 
