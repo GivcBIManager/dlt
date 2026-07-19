@@ -863,6 +863,17 @@ def _sort_by_hash(tbl: pa.Table, hash_col: str) -> pa.Table:
     return tbl.sort_by([(hash_col, "ascending")])
 
 
+def _merge_join_cols(table, data, composite: list[str], hash_col: str) -> list[str]:
+    """Join on the single hash column when BOTH the stored table and the delta
+    carry it (hash-ready) -- pyiceberg then takes the fast In path. Otherwise the
+    composite key, unchanged. 128-bit width makes equal-hash <=> equal-key, so
+    match/insert and duplicate detection are semantically identical either way."""
+    stored = {f.name for f in table.schema().fields}
+    if hash_col in stored and hash_col in data.column_names:
+        return [hash_col]
+    return composite
+
+
 def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> None:
     """Upsert an Iceberg merge delta in ONE commit (drop-in for dlt's batched merge).
 
@@ -898,8 +909,12 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
     else:
         join_cols = get_columns_names_with_prop(schema, "primary_key")
 
+    normalized = ensure_iceberg_compatible_arrow_data(data)
+    from etl.config import Settings
+    join_cols = _merge_join_cols(table, normalized, join_cols, Settings().merge_hash_column)
+
     table.upsert(
-        df=ensure_iceberg_compatible_arrow_data(data),
+        df=normalized,
         join_cols=join_cols,
         when_matched_update_all=(strategy == "upsert"),
         when_not_matched_insert_all=True,
