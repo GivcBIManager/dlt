@@ -105,3 +105,34 @@ def test_not_ready_merge_falls_back_and_adds_no_hash(tmp_path):
     t.refresh()
     assert "merge_hash" not in {f.name for f in t.schema().fields}   # stayed not-ready
     assert t.scan().to_arrow().num_rows == 2
+
+
+def test_carry_forward_preserves_insert_at_via_hash(tmp_path):
+    # existing row keyed by hash with an OLD insert_at; batch re-loads same key
+    from etl.iceberg_load import _finish_batch
+    existing = _append_merge_hash(
+        pa.table({"id": pa.array([5], pa.int64()),
+                  "branch_id": pa.array([1], pa.int64())}),
+        ["id", "branch_id"], "merge_hash").append_column(
+            "insert_at", pa.array([pa.scalar("2020-01-01")], pa.string()))
+    existing = existing.select(["merge_hash", "insert_at"])
+
+    schema = pa.schema([("id", pa.int64()), ("branch_id", pa.int64()),
+                        ("insert_at", pa.string())])
+    batch = pa.table({"id": pa.array([5], pa.int64()),
+                      "branch_id": pa.array([1], pa.int64()),
+                      "insert_at": pa.array(["2026-07-19"], pa.string())})
+    out = _finish_batch(batch, schema, existing_insert_at=existing,
+                        insert_col="insert_at", write_hash=True,
+                        hash_key_cols=["id", "branch_id"], hash_col="merge_hash",
+                        carry_keys=["merge_hash"])
+    assert out.column("insert_at").to_pylist() == ["2020-01-01"]   # old value kept
+
+
+def test_join_cols_stays_composite_when_stored_table_lacks_hash(tmp_path):
+    cat = _cat(tmp_path, "jc_stored")
+    plain = _rows([1], ["a"], with_hash=False)          # stored table: no merge_hash
+    t = cat.create_table("oasis.jc_stored", schema=plain.schema)
+    t.append(plain)
+    assert _merge_join_cols(t, _rows([2], ["b"], with_hash=True),
+                            ["id", "branch_id"], "merge_hash") == ["id", "branch_id"]

@@ -322,7 +322,7 @@ def _carry_forward_insert_at(
 
 def _existing_insert_at(
     pipeline, tdef: TableDef, settings: Settings, branches: list[int],
-    unified_schema: pa.Schema,
+    unified_schema: pa.Schema, hash_ready: bool = False,
 ) -> Optional[pa.Table]:
     """Read existing rows' insert_at (+ merge key) for ``branches`` for carry-forward.
 
@@ -335,15 +335,21 @@ def _existing_insert_at(
     the load, it only means updated rows fall back to this run's load time.
 
     The scan is pruned to the branches in this run (BRANCH_ID is the partition
-    column) and projects only the key + insert_at columns, so it reads a small
-    slice of the table rather than all of it.
+    column). When ``hash_ready`` (the stored table already carries the merge
+    hash -- see ``_table_is_hash_ready``), it projects ``merge_hash`` +
+    ``insert_at`` instead of the composite key, so the carry-forward join in
+    ``_finish_batch`` can key on the single hash column.
     """
     insert_col = settings.inserted_ts_column
+    hash_col = settings.merge_hash_column
     join_keys = list(tdef.key_columns) + [settings.branch_id_column]
     try:
         from dlt.common.libs.pyiceberg import get_iceberg_tables
         from pyiceberg.expressions import In
-        tables = get_iceberg_tables(pipeline)
+        # Open ONLY this table: get_iceberg_tables(pipeline) with no name opens
+        # every table in the dataset, so a single unrelated broken/pending
+        # sibling table would make this raise for every table's carry-forward.
+        tables = get_iceberg_tables(pipeline, tdef.dataset_table_name)
     except Exception as exc:  # noqa: BLE001 - best effort
         log.warning("[%s] insert_at carry-forward unavailable: %s",
                     tdef.dataset_table_name, exc)
@@ -356,11 +362,32 @@ def _existing_insert_at(
     # dlt normalizes identifiers to lower snake; for these clean UPPER_SNAKE /
     # already-lower names that is just lower-casing.
     insert_norm = insert_col.lower()
-    key_norms = [k.lower() for k in join_keys]
     branch_norm = settings.branch_id_column.lower()
     iceberg_cols = {f.name for f in tbl.schema().fields}
-    if insert_norm not in iceberg_cols or any(k not in iceberg_cols for k in key_norms):
-        return None  # table predates insert_at (or key) -> skip
+    if insert_norm not in iceberg_cols:
+        return None  # table predates insert_at -> skip
+
+    if hash_ready:
+        if hash_col not in iceberg_cols:
+            return None
+        try:
+            existing = tbl.scan(
+                row_filter=In(branch_norm, set(branches)),
+                selected_fields=(hash_col, insert_norm),
+            ).to_arrow()
+        except Exception as exc:  # noqa: BLE001 - best effort
+            log.warning("[%s] insert_at carry-forward scan failed: %s",
+                        tdef.dataset_table_name, exc)
+            return None
+        if existing.num_rows == 0:
+            return None
+        return existing.rename_columns(
+            [insert_col if n == insert_norm else n for n in existing.column_names])
+
+    # --- composite path (unchanged from today) ---
+    key_norms = [k.lower() for k in join_keys]
+    if any(k not in iceberg_cols for k in key_norms):
+        return None  # table predates key -> skip
 
     try:
         existing = tbl.scan(
@@ -440,6 +467,7 @@ def _iceberg_resource(
     disposition: str,
     existing_insert_at: Optional[pa.Table] = None,
     write_hash: bool = False,
+    carry_keys: Optional[list[str]] = None,
 ):
     """Create a dlt Iceberg resource that streams ``paths`` under ``disposition``.
 
@@ -478,7 +506,8 @@ def _iceberg_resource(
     def _finish(tbl: pa.Table) -> pa.Table:
         return _finish_batch(
             tbl, schema, existing_insert_at, insert_col,
-            write_hash, hash_key_cols, hash_col, carry_keys=primary_key)
+            write_hash, hash_key_cols, hash_col,
+            carry_keys=carry_keys if carry_keys is not None else primary_key)
 
     # Partition by BRANCH_ID always; snapshot tables additionally partition by
     # the snapshot date (version_date) so a run/day's copy prunes to its own
@@ -1079,16 +1108,19 @@ def _load_one_table(
             # Incremental / branch-subset merge: small deltas, one run is fine.
             # Preserve each row's original insert_at across updates by carrying
             # forward the existing value for rows already in the table.
+            hash_ready = _table_is_hash_ready(pipeline, tdef, settings.merge_hash_column)
             existing = _existing_insert_at(
                 pipeline, tdef, settings,
-                [r.branch_id for r in plan.success], plan.unified_schema)
-            hash_ready = _table_is_hash_ready(pipeline, tdef, settings.merge_hash_column)
+                [r.branch_id for r in plan.success], plan.unified_schema,
+                hash_ready=hash_ready)
+            carry_keys = ([settings.merge_hash_column] if hash_ready
+                          else list(tdef.key_columns) + [settings.branch_id_column])
             _run_pipeline(
                 pipeline,
                 [_iceberg_resource(
                     plan, settings, [r.staged_path for r in plan.success],
                     plan.disposition, existing_insert_at=existing,
-                    write_hash=hash_ready)],
+                    write_hash=hash_ready, carry_keys=carry_keys)],
                 settings, f"{tdef.dataset_table_name}:{plan.disposition}")
             # Advance watermarks only for a table that actually loaded.
             for r in plan.success:
