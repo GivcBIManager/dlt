@@ -38,3 +38,29 @@ def test_finish_batch_no_hash_when_disabled():
                         hash_col="merge_hash", carry_keys=["id", "branch_id"])
     assert "merge_hash" not in out.column_names
     assert out.column_names == ["id", "branch_id", "v"]
+
+
+def test_finish_batch_hashes_then_carries_forward_then_sorts():
+    # write_hash=True AND existing rows present: hash is appended, carry-forward
+    # brings the old insert_at for the matching key, and the batch is left sorted
+    # by hash — the composition Task 6 keys on.
+    schema = pa.schema([("id", pa.int64()), ("branch_id", pa.int64()),
+                        ("insert_at", pa.string())])
+    batch = pa.table({"id": pa.array([5, 6], pa.int64()),
+                      "branch_id": pa.array([1, 1], pa.int64()),
+                      "insert_at": pa.array(["2026-07-19", "2026-07-19"])})
+    existing = pa.table({"id": pa.array([5], pa.int64()),
+                         "branch_id": pa.array([1], pa.int64()),
+                         "insert_at": pa.array(["2020-01-01"])})
+    out = _finish_batch(batch, schema, existing_insert_at=existing,
+                        insert_col="insert_at", write_hash=True,
+                        hash_key_cols=["id", "branch_id"], hash_col="merge_hash",
+                        carry_keys=["id", "branch_id"])
+    assert "merge_hash" in out.column_names            # hash survives the join
+    by_id = dict(zip(out.column("id").to_pylist(),
+                     out.column("insert_at").to_pylist()))
+    assert by_id[5] == "2020-01-01"                    # existing row: old insert_at kept
+    assert by_id[6] == "2026-07-19"                    # new row: batch insert_at
+    hashes = out.column("merge_hash").to_pylist()
+    assert hashes == sorted(hashes)                    # sorted by hash after the join
+    assert out.num_rows == 2                           # no rows lost
