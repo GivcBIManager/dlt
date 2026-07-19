@@ -29,8 +29,10 @@ The authoritative watermark store is a local JSON file (``ControlStore``); the
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import logging
+import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -39,6 +41,7 @@ from typing import Callable, Optional
 
 import dlt
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from .config import HELPER_RESERVED_COLUMNS, MODE_INITIAL, Settings, TableDef, now_local
@@ -753,6 +756,50 @@ class _PipelineHolder:
     def rebuild(self):
         self.pipeline = build_pipeline(self._settings)
         return self.pipeline
+
+
+def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
+    """Canonical, injective, run-stable byte encoding of each row's key.
+
+    Per column, per row: a 1-byte null flag; for a present value, a 4-byte
+    big-endian length prefix then the value's canonical bytes -- integers as
+    8-byte big-endian, everything else as its UTF-8 string cast. Length-prefixing
+    makes the concatenation injective across column boundaries; the null flag
+    distinguishes null from an empty string. Computed after cast_table_to_schema,
+    so the column types (hence the bytes) are identical every run.
+    """
+    col_encodings: list[list[bytes | None]] = []
+    for name in key_cols:
+        col = table.column(name)
+        if pa.types.is_integer(col.type):
+            col_encodings.append(
+                [None if v is None else struct.pack(">q", int(v)) for v in col.to_pylist()])
+        else:
+            strs = pc.cast(col, pa.string()).to_pylist()
+            col_encodings.append(
+                [None if v is None else v.encode("utf-8") for v in strs])
+    out: list[bytes] = []
+    for i in range(table.num_rows):
+        parts = bytearray()
+        for enc in col_encodings:
+            v = enc[i]
+            if v is None:
+                parts += b"\x01"
+            else:
+                parts += b"\x00" + struct.pack(">I", len(v)) + v
+        out.append(bytes(parts))
+    return out
+
+
+def _merge_hash_array(table: pa.Table, key_cols: list[str]) -> pa.Array:
+    """128-bit blake2b of each row's canonical key serialization -> pa.binary().
+
+    Deterministic across processes and library versions (unlike the salted
+    built-in hash()). Every value is exactly 16 bytes.
+    """
+    digests = [hashlib.blake2b(b, digest_size=16).digest()
+               for b in _serialize_keys(table, key_cols)]
+    return pa.array(digests, type=pa.binary())
 
 
 def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> None:
