@@ -761,32 +761,32 @@ class _PipelineHolder:
 def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
     """Canonical, injective, run-stable byte encoding of each row's key.
 
-    Per column, per row: a 1-byte null flag; for a present value, a 4-byte
-    big-endian length prefix then the value's canonical bytes -- integers as
-    8-byte big-endian, everything else as its UTF-8 string cast. Length-prefixing
-    makes the concatenation injective across column boundaries; the null flag
-    distinguishes null from an empty string. Computed after cast_table_to_schema,
-    so the column types (hence the bytes) are identical every run.
+    Each key column is rendered to its base-10 string form, then framed per row
+    as: a 1-byte null flag; for a present value, a 4-byte big-endian length
+    prefix then the UTF-8 bytes. Length-prefixing makes the concatenation
+    injective across column boundaries; the null flag distinguishes null from an
+    empty string.
+
+    Stringifying every column (rather than special-casing integers) keeps the
+    hash INVARIANT to a numeric key's Arrow representation: the same integer id
+    hashes identically whether a run materializes it as int32, int64, or
+    decimal128(p,0) -- Oracle NUMBER ids may be inferred as any of these across
+    runs. Caveat: an unconstrained NUMBER key with a *fractional* value relies on
+    a stable inferred scale across runs; real key columns are integer ids, so
+    that does not arise in practice.
     """
-    col_encodings: list[list[bytes | None]] = []
-    for name in key_cols:
-        col = table.column(name)
-        if pa.types.is_integer(col.type):
-            col_encodings.append(
-                [None if v is None else struct.pack(">q", int(v)) for v in col.to_pylist()])
-        else:
-            strs = pc.cast(col, pa.string()).to_pylist()
-            col_encodings.append(
-                [None if v is None else v.encode("utf-8") for v in strs])
+    col_strs = [pc.cast(table.column(name), pa.string()).to_pylist()
+                for name in key_cols]
     out: list[bytes] = []
     for i in range(table.num_rows):
         parts = bytearray()
-        for enc in col_encodings:
-            v = enc[i]
+        for strs in col_strs:
+            v = strs[i]
             if v is None:
                 parts += b"\x01"
             else:
-                parts += b"\x00" + struct.pack(">I", len(v)) + v
+                b = v.encode("utf-8")
+                parts += b"\x00" + struct.pack(">I", len(b)) + b
         out.append(bytes(parts))
     return out
 

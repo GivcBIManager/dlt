@@ -6,12 +6,9 @@ import pyarrow as pa
 from etl.iceberg_load import _serialize_keys, _merge_hash_array
 
 
-def _t(ids, branch, codes=None):
-    cols = {"id": pa.array(ids, pa.int64()),
-            "branch_id": pa.array(branch, pa.int64())}
-    if codes is not None:
-        cols["code"] = pa.array(codes, pa.string())
-    return pa.table(cols)
+def _t(ids, branch):
+    return pa.table({"id": pa.array(ids, pa.int64()),
+                     "branch_id": pa.array(branch, pa.int64())})
 
 
 def test_hash_is_16_byte_binary_row_aligned():
@@ -19,6 +16,7 @@ def test_hash_is_16_byte_binary_row_aligned():
     arr = _merge_hash_array(t, ["id", "branch_id"])
     assert arr.type == pa.binary()
     assert len(arr) == 3
+    assert arr.null_count == 0
     assert all(len(v.as_py()) == 16 for v in arr)
 
 
@@ -50,6 +48,32 @@ def test_hash_stable_across_a_fresh_process():
         "from etl.iceberg_load import _merge_hash_array;"
         "t=pa.table({'id':pa.array([12345],pa.int64()),"
         "'branch_id':pa.array([7],pa.int64())});"
+        "print(_merge_hash_array(t,['id','branch_id'])[0].as_py().hex())"
+    )
+    out1 = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    out2 = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out1.stdout.strip() == out2.stdout.strip()
+    assert len(out1.stdout.strip()) == 32   # 16 bytes hex
+
+
+def test_int_and_decimal_representations_of_same_key_hash_equal():
+    # Oracle NUMBER ids may be inferred as int64 on one run and decimal128 on
+    # another; the same logical key MUST hash identically regardless.
+    as_int = pa.table({"id": pa.array([123], pa.int64()),
+                       "branch_id": pa.array([7], pa.int64())})
+    as_dec = pa.table({"id": pa.array([123], pa.decimal128(18, 0)),
+                       "branch_id": pa.array([7], pa.decimal128(18, 0))})
+    assert (_merge_hash_array(as_int, ["id", "branch_id"])[0].as_py()
+            == _merge_hash_array(as_dec, ["id", "branch_id"])[0].as_py())
+
+
+def test_decimal_hash_stable_across_a_fresh_process():
+    # A decimal128 key column must be deterministic across interpreter runs too.
+    code = (
+        "import pyarrow as pa;"
+        "from etl.iceberg_load import _merge_hash_array;"
+        "t=pa.table({'id':pa.array([12345],pa.decimal128(18,0)),"
+        "'branch_id':pa.array([7],pa.decimal128(18,0))});"
         "print(_merge_hash_array(t,['id','branch_id'])[0].as_py().hex())"
     )
     out1 = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
