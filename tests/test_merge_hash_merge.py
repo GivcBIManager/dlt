@@ -29,7 +29,7 @@ def test_hash_ready_true_only_when_column_present(tmp_path, monkeypatch):
     # The function does a call-time `from dlt.common.libs.pyiceberg import
     # get_iceberg_tables`, so patch the attribute on that source module.
     monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
-                        lambda pipeline: pipeline)   # pipeline IS the {name: table} map
+                        lambda pipeline, *_names: pipeline)   # pipeline IS the {name: table} map
 
     assert _table_is_hash_ready({_Tdef.dataset_table_name: t_ready}, _Tdef, "merge_hash") is True
     assert _table_is_hash_ready({_Tdef.dataset_table_name: t_plain}, _Tdef, "merge_hash") is False

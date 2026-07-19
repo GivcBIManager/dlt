@@ -398,7 +398,11 @@ def _table_is_hash_ready(pipeline, tdef: TableDef, hash_col: str) -> bool:
     """
     try:
         from dlt.common.libs.pyiceberg import get_iceberg_tables
-        tbl = get_iceberg_tables(pipeline).get(tdef.dataset_table_name)
+        # Open ONLY this table -- get_iceberg_tables(pipeline) with no name opens
+        # every table in the dataset, so one broken/pending sibling would make this
+        # raise and silently disable the hash optimization for the whole run.
+        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
+            tdef.dataset_table_name)
     except Exception:  # noqa: BLE001 - best effort
         return False
     if tbl is None:
