@@ -390,6 +390,22 @@ def _existing_insert_at(
     return existing
 
 
+def _table_is_hash_ready(pipeline, tdef: TableDef, hash_col: str) -> bool:
+    """True iff the stored Iceberg table already carries ``hash_col`` -- i.e. a
+    prior full replace wrote it for every row. Missing table or any read error
+    -> not ready (the merge falls back to the composite key). Best-effort: never
+    fails a load.
+    """
+    try:
+        from dlt.common.libs.pyiceberg import get_iceberg_tables
+        tbl = get_iceberg_tables(pipeline).get(tdef.dataset_table_name)
+    except Exception:  # noqa: BLE001 - best effort
+        return False
+    if tbl is None:
+        return False
+    return hash_col.lower() in {f.name for f in tbl.schema().fields}
+
+
 def _finish_batch(
     tbl: pa.Table, schema: pa.Schema, existing_insert_at: Optional[pa.Table],
     insert_col: str, write_hash: bool, hash_key_cols: list[str], hash_col: str,
@@ -1047,11 +1063,13 @@ def _load_one_table(
             existing = _existing_insert_at(
                 pipeline, tdef, settings,
                 [r.branch_id for r in plan.success], plan.unified_schema)
+            hash_ready = _table_is_hash_ready(pipeline, tdef, settings.merge_hash_column)
             _run_pipeline(
                 pipeline,
                 [_iceberg_resource(
                     plan, settings, [r.staged_path for r in plan.success],
-                    plan.disposition, existing_insert_at=existing)],
+                    plan.disposition, existing_insert_at=existing,
+                    write_hash=hash_ready)],
                 settings, f"{tdef.dataset_table_name}:{plan.disposition}")
             # Advance watermarks only for a table that actually loaded.
             for r in plan.success:
