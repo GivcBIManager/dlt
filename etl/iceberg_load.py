@@ -390,12 +390,36 @@ def _existing_insert_at(
     return existing
 
 
+def _finish_batch(
+    tbl: pa.Table, schema: pa.Schema, existing_insert_at: Optional[pa.Table],
+    insert_col: str, write_hash: bool, hash_key_cols: list[str], hash_col: str,
+    carry_keys: list[str],
+) -> pa.Table:
+    """Reshape one streamed batch: cast to the unified schema, (optionally)
+    derive the merge hash, carry forward insert_at for existing rows, and
+    (when hashing) leave the batch clustered by the hash.
+
+    The hash is appended BEFORE carry-forward so the carry-forward join can key
+    on it (``carry_keys`` may be the hash column). The final sort-by-hash runs
+    after the join, since a join does not preserve row order.
+    """
+    tbl = types_map.cast_table_to_schema(tbl, schema)
+    if write_hash:
+        tbl = _append_merge_hash(tbl, hash_key_cols, hash_col)
+    if existing_insert_at is not None and tbl.num_rows:
+        tbl = _carry_forward_insert_at(tbl, existing_insert_at, carry_keys, insert_col)
+    if write_hash:
+        tbl = _sort_by_hash(tbl, hash_col)
+    return tbl
+
+
 def _iceberg_resource(
     plan: TableLoadPlan,
     settings: Settings,
     paths: list,
     disposition: str,
     existing_insert_at: Optional[pa.Table] = None,
+    write_hash: bool = False,
 ):
     """Create a dlt Iceberg resource that streams ``paths`` under ``disposition``.
 
@@ -428,13 +452,13 @@ def _iceberg_resource(
     schema = _require_non_null(plan.unified_schema, primary_key)
     batch_rows = settings.load_batch_rows
     insert_col = settings.inserted_ts_column
+    hash_col = settings.merge_hash_column
+    hash_key_cols = primary_key   # PK + BRANCH_ID, same list, original casing
 
     def _finish(tbl: pa.Table) -> pa.Table:
-        tbl = types_map.cast_table_to_schema(tbl, schema)
-        if existing_insert_at is not None and tbl.num_rows:
-            tbl = _carry_forward_insert_at(tbl, existing_insert_at,
-                                           primary_key, insert_col)
-        return tbl
+        return _finish_batch(
+            tbl, schema, existing_insert_at, insert_col,
+            write_hash, hash_key_cols, hash_col, carry_keys=primary_key)
 
     # Partition by BRANCH_ID always; snapshot tables additionally partition by
     # the snapshot date (version_date) so a run/day's copy prunes to its own
@@ -447,6 +471,8 @@ def _iceberg_resource(
     if is_snapshot:
         columns[settings.snapshot_date_column] = {"partition": True}
         columns[settings.snapshot_version_column] = _naive_ts_hint()
+    if write_hash:
+        columns[hash_col] = {"data_type": "binary"}
 
     @dlt.resource(
         name=tdef.dataset_table_name,
@@ -495,7 +521,8 @@ def _run_per_branch_rebuild(
     disposition = "replace"  # first branch truncates the prior table
     for r in plan.success:
         _run_pipeline(
-            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], disposition)],
+            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], disposition,
+                                         write_hash=not plan.tdef.is_snapshot)],
             settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:{disposition}")
         control.advance(r)
         disposition = "append"  # everything after the first adds on
