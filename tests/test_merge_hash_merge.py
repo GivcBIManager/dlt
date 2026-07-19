@@ -136,3 +136,68 @@ def test_join_cols_stays_composite_when_stored_table_lacks_hash(tmp_path):
     t.append(plain)
     assert _merge_join_cols(t, _rows([2], ["b"], with_hash=True),
                             ["id", "branch_id"], "merge_hash") == ["id", "branch_id"]
+
+
+from etl.iceberg_load import _existing_insert_at
+from etl.config import Settings
+
+
+class _TdefKeyed:
+    dataset_table_name = "eia_hash"
+    key_columns = ["id"]
+
+
+def _eia_stored_table(cat, name, with_hash=True):
+    # Physical Iceberg field names are lowercase: branch_id / merge_hash / insert_at.
+    cols = {"id": pa.array([5], pa.int64()),
+            "branch_id": pa.array([1], pa.int64())}
+    if with_hash:
+        cols["merge_hash"] = pa.array([b"h" * 16], pa.binary())
+    cols["insert_at"] = pa.array(["2020-01-01"])
+    stored = pa.table(cols)
+    t = cat.create_table(f"oasis.{name}", schema=stored.schema)
+    t.append(stored)
+    return t
+
+
+def test_existing_insert_at_hash_ready_projects_and_renames(tmp_path, monkeypatch):
+    # Directly exercises _existing_insert_at's hash_ready branch: scan -> select
+    # (merge_hash, insert_at) -> rename insert -> return.
+    t = _eia_stored_table(_cat(tmp_path, "eia_ok"), "eia_hash", with_hash=True)
+    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
+                        lambda pipeline, *_names: pipeline)   # pipeline IS the {name: table} map
+    settings = Settings()
+    unified = pa.schema([(settings.inserted_ts_column, pa.string())])
+    out = _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
+                              settings, [1], unified, hash_ready=True)
+    assert out is not None
+    assert set(out.column_names) == {"merge_hash", settings.inserted_ts_column}
+    assert out.column(settings.inserted_ts_column).to_pylist() == ["2020-01-01"]  # stored value carried
+
+
+def test_existing_insert_at_hash_ready_none_when_stored_lacks_hash(tmp_path, monkeypatch):
+    # Guards the missing-column path: hash_ready=True but the table has no merge_hash.
+    t = _eia_stored_table(_cat(tmp_path, "eia_nohash"), "eia_hash", with_hash=False)
+    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
+                        lambda pipeline, *_names: pipeline)
+    settings = Settings()
+    unified = pa.schema([(settings.inserted_ts_column, pa.string())])
+    assert _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
+                               settings, [1], unified, hash_ready=True) is None
+
+
+def test_existing_insert_at_hash_ready_normalizes_hash_col_case(tmp_path, monkeypatch):
+    # A non-lowercase merge_hash_column must still match the lowercase physical
+    # field -- guards Fix 1 (hash_norm = hash_col.lower()). Without it this
+    # returns None even though _table_is_hash_ready (which lowers too) said ready.
+    t = _eia_stored_table(_cat(tmp_path, "eia_upper"), "eia_hash", with_hash=True)
+    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
+                        lambda pipeline, *_names: pipeline)
+    settings = Settings()
+    settings.merge_hash_column = "MERGE_HASH"   # non-lowercase config
+    unified = pa.schema([(settings.inserted_ts_column, pa.string())])
+    out = _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
+                              settings, [1], unified, hash_ready=True)
+    assert out is not None
+    assert "merge_hash" in out.column_names
+    assert out.column(settings.inserted_ts_column).to_pylist() == ["2020-01-01"]

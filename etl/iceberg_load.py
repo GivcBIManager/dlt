@@ -360,20 +360,24 @@ def _existing_insert_at(
         return None  # first load of this table: nothing to preserve
 
     # dlt normalizes identifiers to lower snake; for these clean UPPER_SNAKE /
-    # already-lower names that is just lower-casing.
+    # already-lower names that is just lower-casing. Physical Iceberg field names
+    # are always lowercase, so every settings-derived name is lowered before use
+    # (matching _table_is_hash_ready, which lowers hash_col too -- a non-lowercase
+    # merge_hash_column would otherwise say ready=True yet miss the column here).
     insert_norm = insert_col.lower()
+    hash_norm = hash_col.lower()
     branch_norm = settings.branch_id_column.lower()
     iceberg_cols = {f.name for f in tbl.schema().fields}
     if insert_norm not in iceberg_cols:
         return None  # table predates insert_at -> skip
 
     if hash_ready:
-        if hash_col not in iceberg_cols:
+        if hash_norm not in iceberg_cols:
             return None
         try:
             existing = tbl.scan(
                 row_filter=In(branch_norm, set(branches)),
-                selected_fields=(hash_col, insert_norm),
+                selected_fields=(hash_norm, insert_norm),
             ).to_arrow()
         except Exception as exc:  # noqa: BLE001 - best effort
             log.warning("[%s] insert_at carry-forward scan failed: %s",
