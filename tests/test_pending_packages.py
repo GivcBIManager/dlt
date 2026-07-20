@@ -59,7 +59,7 @@ def test_clear_pending_packages_never_raises():
     iceberg_load.clear_pending_packages(BrokenPipeline(), context="test")
 
 
-def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch):
+def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch, pg_meta):
     """A table whose load fails must leave the shared pipeline clean."""
     pipeline = _pipeline(tmp_path)
     # Pre-existing pending package standing in for whatever debris the failing
@@ -90,7 +90,7 @@ def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch):
 
     plan = iceberg_load._load_one_table(
         pipeline, tdef, [result], Settings(mode=MODE_INCREMENTAL),
-        iceberg_load.ControlStore(tmp_path / "control.json"),
+        iceberg_load.ControlStore(pg_meta),
         2, 1,
         PipelineMonitor(total_units=1, total_tables=1, enabled=False),
     )
@@ -99,7 +99,7 @@ def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch):
     assert not pipeline.has_pending_data
 
 
-def test_load_and_record_starts_with_clean_pipeline(tmp_path, monkeypatch):
+def test_load_and_record_starts_with_clean_pipeline(tmp_path, monkeypatch, pg_meta):
     """Debris left by a crashed previous run is swept before any table loads."""
     pipeline = _pipeline(tmp_path)
     pipeline.extract([{"id": 1}], table_name="leftover")
@@ -117,7 +117,7 @@ def test_load_and_record_starts_with_clean_pipeline(tmp_path, monkeypatch):
         run_extraction_fn=lambda on_table_done: None,
         tables=[],
         settings=settings,
-        control=iceberg_load.ControlStore(tmp_path / "control.json"),
+        control=iceberg_load.ControlStore(pg_meta),
         run_id="test-run",
         total_branches=1,
         branches_in_run=1,

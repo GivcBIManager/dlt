@@ -330,7 +330,6 @@ class Settings:
 
     # local working state
     staging_dir: Path = field(default_factory=lambda: Path("_staging"))
-    control_state_path: Path = field(default_factory=lambda: Path("control_state.json"))
 
     self_test: bool = False
 
@@ -566,6 +565,5 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
 
     # normalize Path-typed fields that may arrive as strings
     s.staging_dir = Path(s.staging_dir)
-    s.control_state_path = Path(s.control_state_path)
     s.postgres = load_postgres_config()
     return s

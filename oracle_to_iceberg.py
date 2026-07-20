@@ -68,7 +68,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="path to Oracle Instant Client libs (thick mode)")
 
     p.add_argument("--staging-dir", help="local staging dir for extracted parquet")
-    p.add_argument("--control-state", help="path to the local control_state.json")
     p.add_argument("--no-progress", action="store_true",
                    help="disable the live progress/memory heartbeat")
     p.add_argument("--progress-interval", type=float, dest="progress_interval_s",
@@ -100,8 +99,6 @@ def build_overrides(args: argparse.Namespace) -> dict:
         overrides["progress_enabled"] = False
     if args.staging_dir:
         overrides["staging_dir"] = args.staging_dir
-    if args.control_state:
-        overrides["control_state_path"] = args.control_state
     return overrides
 
 
@@ -163,7 +160,8 @@ def main(argv: list[str]) -> int:
              run_id, settings.mode, [b.key for b in branches],
              [f"{n}({len(t)})" for n, t in phases], settings.destination_bucket_url)
 
-    control = iceberg_load.ControlStore(settings.control_state_path).load()
+    control = iceberg_load.ControlStore(
+        iceberg_load.MetaStore(settings.postgres)).load()
 
     exit_code = 0
     for phase_name, phase_tables in phases:

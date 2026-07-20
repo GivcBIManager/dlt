@@ -85,7 +85,7 @@ def _staged(tmp_path):
     return p
 
 
-def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkeypatch):
+def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkeypatch, pg_meta):
     tdef = _merge_tdef()
     result = ExtractResult(table_def=tdef, branch="b1", branch_id=1,
                            status="SUCCESS", row_count=2, staged_path=_staged(tmp_path))
@@ -99,7 +99,7 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
 
     plan = iceberg_load._load_one_table(
         _pipeline(tmp_path), tdef, [result], Settings(mode=MODE_INCREMENTAL),
-        iceberg_load.ControlStore(tmp_path / "control.json"), 2, 1,
+        iceberg_load.ControlStore(pg_meta), 2, 1,
         PipelineMonitor(total_units=1, total_tables=1, enabled=False))
 
     assert plan.load_status == "FAILED"
@@ -108,7 +108,7 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
     assert cleared == []
 
 
-def test_load_and_record_rebuilds_pipeline_after_commit_timeout(tmp_path, monkeypatch):
+def test_load_and_record_rebuilds_pipeline_after_commit_timeout(tmp_path, monkeypatch, pg_meta):
     builds = []
 
     def fake_build(settings):
@@ -132,7 +132,7 @@ def test_load_and_record_rebuilds_pipeline_after_commit_timeout(tmp_path, monkey
     summary = iceberg_load.load_and_record(
         run_extraction_fn=run_extraction, tables=[tdef],
         settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False),
-        control=iceberg_load.ControlStore(tmp_path / "c.json"),
+        control=iceberg_load.ControlStore(pg_meta),
         run_id="r", total_branches=1, branches_in_run=1)
 
     # One initial build + exactly one rebuild triggered by the timeout.

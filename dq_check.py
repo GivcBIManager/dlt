@@ -127,7 +127,8 @@ def main(argv: list[str]) -> int:
     since = _parse_date(args.since) or dt.date(year, 1, 1)
     until = _parse_date(args.until)
 
-    control = ControlStore(settings.control_state_path).load().as_dict()
+    from etl.metastore import MetaStore
+    control = ControlStore(MetaStore(settings.postgres)).load().as_dict()
     run_id = f"dq-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
 
     log.info("DQ run %s | %s | branches=%s | tables=%d | window=%s..%s | hash=%s",

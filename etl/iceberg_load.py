@@ -22,8 +22,9 @@ itself) but start eagerly, so a table is persisted the moment it is ready. Once
 everything finishes, the ``etl_control`` and ``etl_run_log`` Iceberg tables are
 written and snapshot retention is applied.
 
-The authoritative watermark store is a local JSON file (``ControlStore``); the
-``etl_control`` Iceberg table is a queryable mirror of it for observability.
+The authoritative watermark store is the Postgres ``etl_meta.control_state``
+table (``ControlStore``); the ``etl_control`` Iceberg table is a queryable
+mirror of it for observability.
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable, Optional
 
 import dlt
@@ -45,6 +45,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from .config import HELPER_RESERVED_COLUMNS, MODE_INITIAL, Settings, TableDef, now_local
+from .metastore import MetaStore
 from .oracle_extract import ExtractResult, Watermark
 from .progress import PipelineMonitor
 from . import types_map
@@ -92,15 +93,32 @@ def _wm_advance(old: Optional[dict], new: Watermark) -> Optional[dict]:
 
 
 class ControlStore:
-    """Local JSON store of per-(table, branch) CDC state."""
+    """Postgres-backed per-(table, branch) CDC state (schema etl_meta.control_state).
 
-    def __init__(self, path: Path):
-        self.path = Path(path)
+    Keeps the same public surface it had as a JSON store so the pipeline callers
+    are unchanged: an in-memory nested dict {table: {branch: {...}}} loaded on
+    ``load()``, mutated by ``advance()``, upserted whole on ``save()``.
+    """
+
+    def __init__(self, store: "MetaStore"):
+        self.store = store
         self.data: dict = {}
 
     def load(self) -> "ControlStore":
-        if self.path.exists():
-            self.data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.store.ensure_schema()
+        self.data = {}
+        for r in self.store.read_control_state():
+            tbl = self.data.setdefault(r["table_name"], {})
+            tbl[str(r["branch_id"])] = {
+                "last_cdc": ({"value": r["last_cdc_value"], "kind": r["last_cdc_kind"]}
+                             if r["last_cdc_value"] is not None else None),
+                "last_date": ({"value": r["last_date_value"], "kind": r["last_date_kind"]}
+                              if r["last_date_value"] is not None else None),
+                "status": r["status"],
+                "row_count": r["row_count"],
+                "duration_ms": r["duration_ms"],
+                "last_run_at": r["last_run_at"],
+            }
         return self
 
     def as_dict(self) -> dict:
@@ -121,8 +139,20 @@ class ControlStore:
         cur["last_run_at"] = now_local().isoformat()
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2, default=str), encoding="utf-8")
+        rows = []
+        for table, branches in self.data.items():
+            for branch, info in branches.items():
+                cdc = info.get("last_cdc") or {}
+                date = info.get("last_date") or {}
+                rows.append({
+                    "table_name": table, "branch_id": str(branch),
+                    "last_cdc_value": cdc.get("value"), "last_cdc_kind": cdc.get("kind"),
+                    "last_date_value": date.get("value"), "last_date_kind": date.get("kind"),
+                    "status": info.get("status"), "row_count": info.get("row_count"),
+                    "duration_ms": info.get("duration_ms"),
+                    "last_run_at": info.get("last_run_at"),
+                })
+        self.store.upsert_control_state(rows)
 
 
 # --------------------------------------------------------------------------- #
