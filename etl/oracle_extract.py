@@ -476,6 +476,76 @@ def _cursor_arrow_stream(cur, fetch_batch_size: int) -> Iterator[pa.Table]:
         yield pa.table(dict(zip(names, arrays)))
 
 
+# Oracle NUMBER holds up to 38 digits; decimal128(38, 0) covers the full
+# integer range and is hash-invariant with int32/int64 (same base-10 string).
+_RUN_STABLE_KEY_DECIMAL = pa.decimal128(38, 0)
+
+
+def _canonical_decimal_string(col) -> "pa.ChunkedArray":
+    """Render a decimal column as a canonical base-10 string.
+
+    Casts to string then strips trailing fractional zeros (and a bare trailing
+    dot), so ``114945.00000000000000`` and ``114945`` both become ``"114945"``
+    and ``3.185`` stays ``"3.185"``. This makes a fractional / scale-drifting
+    decimal key hash identically no matter which scale a given run or branch
+    inferred for it.
+    """
+    import pyarrow.compute as pc
+
+    s = pc.cast(col, pa.string())
+    s = pc.replace_substring_regex(s, pattern=r"(\.[0-9]*?)0+$", replacement=r"\1")
+    return pc.replace_substring_regex(s, pattern=r"\.$", replacement="")
+
+
+def _coerce_keys_run_stable(table: pa.Table, key_columns: list[str]) -> pa.Table:
+    """Make every merge-key column run-stable at extract.
+
+    The load-side hash guard (_serialize_keys) requires merge keys to be integer,
+    scale-0 decimal, or string, because a key's hash is derived from its string
+    cast and a floating / fractional-decimal representation drifts across runs
+    (-> silent duplicate rows). oracledb's native Arrow fetch renders an
+    unconstrained Oracle NUMBER as ``double``, and reports a per-branch scale for
+    others, so the same logical id can arrive as ``double`` here,
+    ``decimal128(_, 0)`` there, and ``decimal128(_, 14)`` elsewhere. Normalize:
+
+    * floating + integer values  -> ``decimal128(38, 0)`` (hashes like an int);
+    * floating + fractional values -> rejected (a float's string cast is not
+      run-stable and cannot be canonicalized);
+    * ``decimal`` with scale > 0 -> canonical string (trailing zeros stripped),
+      which is run-stable for both integral and genuinely fractional values;
+    * int / scale-0 decimal / string -> already run-stable, left untouched.
+
+    Non-key columns are never hashed, so they are left as-is regardless of type.
+    """
+    if not key_columns:
+        return table
+    import pyarrow.compute as pc
+
+    by_lower = {name.lower(): i for i, name in enumerate(table.column_names)}
+    for key in key_columns:
+        idx = by_lower.get(key.lower())
+        if idx is None:
+            continue
+        name = table.column_names[idx]
+        col = table.column(idx)
+        t = col.type
+        if pa.types.is_floating(t):
+            # A fractional value in a float key is the non-run-stable case the
+            # guard catches -- reject it loudly instead of rounding it away.
+            frac = pc.subtract(col, pc.floor(col))
+            if pc.any(pc.not_equal(frac, 0)).as_py():
+                raise ValueError(
+                    f"merge-key column {name!r} has non-integral floating values, "
+                    f"which is not run-stable (its hash would vary across runs -> "
+                    f"silent duplicate rows). Merge keys must be integer, scale-0 "
+                    f"decimal, or string."
+                )
+            table = table.set_column(idx, name, pc.cast(col, _RUN_STABLE_KEY_DECIMAL))
+        elif pa.types.is_decimal(t) and t.scale > 0:
+            table = table.set_column(idx, name, _canonical_decimal_string(col))
+    return table
+
+
 def inject_columns(
     table: pa.Table,
     branch_id: int,
@@ -500,6 +570,11 @@ def inject_columns(
     n = table.num_rows
     if now is None:
         now = now_local()
+    # Normalize merge keys to a run-stable representation (scale-0 decimal for
+    # integer ids fetched as double; canonical string for fractional / scale-
+    # drifting decimals) so the load-side hash guard accepts them and the same
+    # id hashes identically however a given run/branch typed it.
+    table = _coerce_keys_run_stable(table, tdef.key_columns)
     # A source table may itself carry a column named like an injected one (e.g.
     # OASIS.STAFF_POSTS has its own BRANCH_ID). Appending on top would leave the
     # field twice in the staged parquet and every later lookup by name would
