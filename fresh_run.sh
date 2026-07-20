@@ -2,8 +2,9 @@
 #
 # Clear every runtime artifact so the next pipeline run starts completely fresh.
 #
-# Removes:  Iceberg output, staged parquet, the local watermark store, dlt
-#           pipeline working state, and Python bytecode caches.
+# Removes:  Iceberg output, staged parquet, the Postgres app metastore
+#           (etl_meta schema) + Iceberg catalog tables, dlt pipeline working
+#           state, and Python bytecode caches.
 # Keeps:    all source code, tables.json, and .dlt/{config,secrets}.toml.
 #
 # Usage:  ./fresh_run.sh
@@ -20,8 +21,16 @@ echo "Clearing runtime artifacts for a fresh run..."
 # --- destination data + intermediate state -------------------------------- #
 rm -rf  iceberg_output
 rm -rf  _staging
-rm -f   control_state.json
 rm -f   ./*.duckdb
+
+# --- Postgres app metastore + Iceberg catalog reset ----------------------- #
+# Requires psql on PATH and $OASIS_META_DSN / $OASIS_CATALOG_DSN (libpq URLs).
+if [ -n "${OASIS_META_DSN:-}" ]; then
+  psql "${OASIS_META_DSN}" -c 'DROP SCHEMA IF EXISTS etl_meta CASCADE;' || true
+fi
+if [ -n "${OASIS_CATALOG_DSN:-}" ]; then
+  psql "${OASIS_CATALOG_DSN}" -c 'DROP TABLE IF EXISTS iceberg_tables, iceberg_namespace_properties CASCADE;' || true
+fi
 
 # --- dlt pipeline working state ------------------------------------------- #
 # dlt keeps load packages / schema state under its data dir. Clear the local

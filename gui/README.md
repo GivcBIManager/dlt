@@ -51,10 +51,10 @@ auto-starts Dagster on launch.
 
 ## Pages
 
-- **Dashboard** — workspace health from `control_state.json`, branches, `[etl]`
-  settings. The per-table/branch state table has table/branch/status dropdown
-  filters, and the `[etl]` settings cards are editable in place (writes
-  `.dlt/config.toml`, keeping a timestamped backup).
+- **Dashboard** — workspace health from the Postgres `etl_meta` tables,
+  branches, `[etl]` settings. The per-table/branch state table has
+  table/branch/status dropdown filters, and the `[etl]` settings cards are
+  editable in place (writes `.dlt/config.toml`, keeping a timestamped backup).
 - **Connections** — create / edit / delete the Oracle branch connections in
   `.dlt/secrets.toml` and test connectivity. Edits are surgical (only the
   `[oracle_branches.*]` block is rewritten; comments and other sections are
@@ -73,7 +73,7 @@ auto-starts Dagster on launch.
   `OASIS_DAGSTER_PORT` to change the Dagster UI port). Scheduling model:
   **Pipeline library → Flow (DAG) builder → Dagster scheduling**.
 - **Monitor** — tail run log files (`run_logs/`), purge logs older than a chosen
-  date, and view the Iceberg observability tables. `etl_dq_results` adds a date
+  date, and view the Postgres `etl_meta` tables. `etl_dq_results` adds a date
   filter and a branch × table summary; `etl_run_log` / `etl_control` add
   date/table/branch/status filters.
 - **Tables** — structured add/edit/delete + raw-JSON editor for `tables.json`,
@@ -87,7 +87,7 @@ auto-starts Dagster on launch.
 ## Notes
 
 - Runs execute with the working directory set to the **repo root**, so they read
-  the same `tables.json` / `.dlt` / `control_state.json` as the CLI.
+  the same `tables.json` / `.dlt` / Postgres `etl_meta` tables as the CLI.
 - The panel never exposes branch passwords from `.dlt/secrets.toml`.
 - This is an **admin tool meant for trusted/local use** (it can launch commands).
   Keep it bound to `127.0.0.1` unless you put authentication in front of it.

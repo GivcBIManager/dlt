@@ -49,6 +49,52 @@ sudo apt-get install -y libaio1
 export LD_LIBRARY_PATH=/opt/oracle/instantclient_19_24:$LD_LIBRARY_PATH
 ```
 
+### Postgres (Iceberg catalog + app metastore)
+
+Alongside ClickHouse (see **dbt → ClickHouse materialization** below),
+**Postgres is a required external prerequisite** — a running Postgres server
+that this app does not install or manage. Two separate databases are expected:
+
+- **`oasis_catalog`** — the Iceberg **SQL catalog** (pyiceberg `SqlCatalog`):
+  table/namespace metadata for every Iceberg dataset.
+- **`oasis_meta`** — the app **metastore**: CDC watermarks (`control_state`)
+  plus the observability/DQ tables (`etl_control`, `etl_run_log`,
+  `etl_dq_results`), all under the `etl_meta` schema.
+
+`psycopg2` is the driver for both — already pinned in `requirements.txt`
+(`psycopg2-binary` + `pyiceberg[sql-postgres]`), so no extra install is needed.
+
+**`.dlt/config.toml` and `.dlt/secrets.toml` are gitignored, per-host files —
+never committed** — so the operator must create these blocks by hand on every
+host that runs the pipeline:
+
+```toml
+# .dlt/config.toml  (non-secret)
+[iceberg_catalog]
+iceberg_catalog_name = "oasis"
+iceberg_catalog_type = "sql"
+```
+
+```toml
+# .dlt/secrets.toml  (secret; gitignored)
+[postgres]
+host = "..."; port = 5432; database = "oasis_meta"; username = "..."; password = "..."
+
+[iceberg_catalog.iceberg_catalog_config]
+type = "sql"
+uri = "postgresql+psycopg2://user:pass@host:5432/oasis_catalog"
+warehouse = "file:///abs/path/to/iceberg_output"
+```
+
+The `type = "sql"` key **inside** `iceberg_catalog_config` is required — dlt
+passes this dict straight through to pyiceberg's `load_catalog(**dict)`, which
+raises a validation error without it (the outer `iceberg_catalog_type` in
+`config.toml` is not sufficient by itself).
+
+**Cutover note:** the first run against a fresh `oasis_catalog` / `oasis_meta`
+pair must be a full `python oracle_to_iceberg.py --mode INITIAL` — there is no
+prior watermark state yet for an `INCREMENTAL` load to run against.
+
 ### Platform notes (how paths resolve on each OS)
 
 The same `.dlt/config.toml` works on both platforms — nothing needs editing when
@@ -235,20 +281,25 @@ Flags override the `[etl]` section in `.dlt/config.toml`.
   `snapshot_maintenance = false`) in `.dlt/config.toml`.
 
 ### 6. Observability
-- **`etl_control`** (Iceberg, merged on `table_name + branch_id`): per-table,
-  per-branch CDC state — `last_cdc_value`, `last_date_value`, status, row count,
-  duration, timestamps.
-- **`etl_run_log`** (Iceberg, append): one row per `(run, table, branch)` with
-  `pipeline_run_id`, row count, start/end, `duration_ms`, status, attempts,
-  `write_disposition`, and schema discrepancies.
-- The authoritative CDC watermark store is the local `control_state.json`
-  (fast/transactional); `etl_control` is its queryable Iceberg mirror.
+All observability/DQ state lives in the Postgres `oasis_meta` database, under
+the `etl_meta` schema (see **Postgres (Iceberg catalog + app metastore)**
+above) — not in the Iceberg lake:
+
+- **`etl_control`** (Postgres, upserted on `table_name + branch_id`):
+  per-table, per-branch CDC state — `last_cdc_value`, `last_date_value`,
+  status, row count, duration, timestamps.
+- **`etl_run_log`** (Postgres, append): one row per `(run, table, branch)`
+  with `pipeline_run_id`, row count, start/end, `duration_ms`, status,
+  attempts, `write_disposition`, and schema discrepancies.
+- The authoritative CDC watermark store is the Postgres `etl_meta.control_state`
+  table (fast/transactional); `etl_control` is its queryable twin.
 
 ## Output
 
 Each table becomes one Iceberg dataset under the destination
-(`<bucket_url>/<dataset_name>/<table>`) holding all 7 branches, alongside the
-`etl_control` and `etl_run_log` Iceberg tables in the same dataset.
+(`<bucket_url>/<dataset_name>/<table>`) holding all 7 branches. `etl_control`,
+`etl_run_log`, and `etl_dq_results` (observability/DQ) live in the Postgres
+`etl_meta` schema instead — not in the Iceberg dataset.
 
 ## dbt → ClickHouse materialization
 
@@ -281,9 +332,10 @@ querying/BI.
 ## Data-quality checks (`dq_check.py`)
 
 A standalone reconciliation app that compares the **Oracle source** against the
-**Iceberg lake**, per branch, and writes its findings back into the same dataset
-as a new Iceberg table. It runs two checks for every `(table, branch)` over **one
-shared window**, so the count delta and the hash delta describe the same row set:
+**Iceberg lake**, per branch, and writes its findings to the Postgres
+`etl_meta.etl_dq_results` table. It runs two checks for every `(table, branch)`
+over **one shared window**, so the count delta and the hash delta describe the
+same row set:
 
 1. **Row-count comparison** — windowed `COUNT(*)` on Oracle vs the number of rows
    in the Iceberg branch partition in the same window, and their delta.
@@ -295,8 +347,9 @@ shared window**, so the count delta and the hash delta describe the same row set
 ### Window: YTD → last run
 
 The window runs from `--since` (default **Jan 1 of the current year** — YTD) up to
-each `(table, branch)`'s **last-run watermark** in `control_state.json`
-(`--until` overrides it). Both checks use this same window.
+each `(table, branch)`'s **last-run watermark** in the Postgres
+`etl_meta.control_state` table (`--until` overrides it). Both checks use this
+same window.
 
 - **Master tables** (no date column) are compared in full.
 - **Helper-driven tables** whose watermark is the *helper's* column (not their own
@@ -326,7 +379,7 @@ python dq_check.py
 # Counts only (skip the heavier hash pull), scoped to branches/tables
 python dq_check.py --branch jazan,khamis --tables APPOINTMENTS --no-hash
 
-# Explicit window, also dump a CSV, and don't write the Iceberg table
+# Explicit window, also dump a CSV, and don't write the Postgres table
 python dq_check.py --since 2026-06-01 --until 2026-06-23 --csv exports --no-write
 
 # Offline smoke test: reconcile the lake against the staged parquet (no Oracle)
@@ -339,10 +392,11 @@ lists every flag.
 
 ### Result table — `etl_dq_results`
 
-Written as an **append** Iceberg table in the same dataset (next to `etl_control`
-/ `etl_run_log`). One row per `(run, table, branch)` with the window bounds, the
-count check (`oracle_row_count`, `iceberg_row_count`, `row_count_delta`), the hash
-check (`hash_matched`, `hash_only_in_oracle`, `hash_only_in_iceberg`,
+Written as an **append** row in the Postgres `etl_meta.etl_dq_results` table
+(alongside `etl_control` / `etl_run_log`). One row per `(run, table, branch)`
+with the window bounds, the count check (`oracle_row_count`,
+`iceberg_row_count`, `row_count_delta`), the hash check (`hash_matched`,
+`hash_only_in_oracle`, `hash_only_in_iceberg`,
 `hash_mismatch`, `hash_total_delta`, `hash_columns`), the `columns_only_in_*`
 drift lists, a `status` (`OK` / `MISMATCH` / `ERROR` / `SKIPPED`), and
 `error_details`. Each run is tagged with a `dq-…` `pipeline_run_id`.

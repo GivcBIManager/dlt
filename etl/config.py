@@ -339,14 +339,6 @@ class Settings:
         # merge-join, and carry-forward paths.
         self.merge_hash_column = self.merge_hash_column.lower()
 
-    @property
-    def control_table_name(self) -> str:
-        return "etl_control"
-
-    @property
-    def log_table_name(self) -> str:
-        return "etl_run_log"
-
 
 # --------------------------------------------------------------------------- #
 # Loaders

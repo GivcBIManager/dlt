@@ -3,8 +3,9 @@ REM ==========================================================================
 REM Clear every runtime artifact so the next pipeline run starts completely
 REM fresh.
 REM
-REM Removes:  Iceberg output, staged parquet, the local watermark store, dlt
-REM           pipeline working state, and Python bytecode caches.
+REM Removes:  Iceberg output, staged parquet, the Postgres app metastore
+REM           (etl_meta schema) + Iceberg catalog tables, dlt pipeline working
+REM           state, and Python bytecode caches.
 REM Keeps:    all source code, tables.json, and .dlt\{config,secrets}.toml.
 REM
 REM Usage:  fresh_run.cmd
@@ -22,8 +23,16 @@ echo Clearing runtime artifacts for a fresh run...
 REM --- destination data + intermediate state -------------------------------
 if exist "iceberg_output"     rmdir /s /q "iceberg_output"
 if exist "_staging"           rmdir /s /q "_staging"
-if exist "control_state.json" del /q "control_state.json"
 del /q *.duckdb 2>nul
+
+REM --- Postgres app metastore + Iceberg catalog reset -----------------------
+REM Requires psql on PATH and %OASIS_META_DSN% / %OASIS_CATALOG_DSN% (libpq URLs).
+if defined OASIS_META_DSN (
+  psql "%OASIS_META_DSN%" -c "DROP SCHEMA IF EXISTS etl_meta CASCADE;"
+)
+if defined OASIS_CATALOG_DSN (
+  psql "%OASIS_CATALOG_DSN%" -c "DROP TABLE IF EXISTS iceberg_tables, iceberg_namespace_properties CASCADE;"
+)
 
 REM --- dlt pipeline working state ------------------------------------------
 REM Clear the local project copy, the default (%USERPROFILE%\.dlt), and a
