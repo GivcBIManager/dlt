@@ -21,3 +21,36 @@ def state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PIPELINES_JSON", tmp_path / "pipelines.json")
     monkeypatch.setattr(config, "FLOWS_JSON", tmp_path / "flows.json")
     return tmp_path
+
+
+import os
+import uuid
+
+
+@pytest.fixture
+def pg_meta():
+    """A MetaStore pointed at a throwaway schema in the test Postgres.
+
+    Skips when OASIS_TEST_PG_DSN is unset. DSN form:
+    postgresql+psycopg2://user:pass@host:5432/dbname
+    """
+    dsn = os.environ.get("OASIS_TEST_PG_DSN")
+    if not dsn:
+        pytest.skip("OASIS_TEST_PG_DSN not set; skipping Postgres metastore test")
+    from etl import config, metastore
+    from sqlalchemy.engine import make_url
+
+    url = make_url(dsn)
+    schema = f"etl_meta_test_{uuid.uuid4().hex[:8]}"
+    cfg = config.PostgresConfig(
+        host=url.host, port=url.port or 5432, database=url.database,
+        username=url.username, password=url.password, schema=schema)
+    store = metastore.MetaStore(cfg)
+    store.ensure_schema()
+    try:
+        yield store
+    finally:
+        with store.engine.begin() as conn:
+            from sqlalchemy import text
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        store.engine.dispose()
