@@ -117,21 +117,31 @@ def test_detail_failed_rows_first():
 
 
 def test_read_run_summary_uses_scan(monkeypatch):
+    # read_run_summary now sources rows via metastore_read.read_recent_run_log
+    # (bounded to the newest N runs) instead of a full _scan_pylist("etl_run_log").
+    import metastore_read
+
     rows = [_log_row(run="r1", branch=1), _log_row(run="r1", branch=2)]
-    monkeypatch.setattr(ib, "_scan_pylist", lambda table: rows)
+    monkeypatch.setattr(metastore_read, "read_recent_run_log", lambda limit_runs: rows)
     out = ib.read_run_summary()
     assert out["runs"][0]["run_id"] == "r1"
     assert out["runs"][0]["units"] == 2
 
 
 def test_read_run_summary_missing_table(monkeypatch):
-    def boom(table):
-        raise FileNotFoundError(table)
-    monkeypatch.setattr(ib, "_scan_pylist", boom)
+    import metastore_read
+
+    def boom(limit_runs):
+        raise FileNotFoundError("etl_run_log")
+    monkeypatch.setattr(metastore_read, "read_recent_run_log", boom)
     assert ib.read_run_summary() == {"runs": []}
 
 
 def test_read_run_detail_filters_and_joins(monkeypatch):
+    # The run-id predicate is now pushed all the way into SQL (real _scan_pylist
+    # never returns other runs' rows), so this fake applies the same EqualTo
+    # filter itself rather than relying on a Python-side safety net inside
+    # read_run_detail (that redundant filter was removed).
     logs = [
         _log_row(run="r1", table="APPT", branch=1),
         _log_row(run="r2", table="APPT", branch=1),  # different run, must be excluded
@@ -139,7 +149,11 @@ def test_read_run_detail_filters_and_joins(monkeypatch):
     ctrl = [_ctrl_row(table="APPT", branch=1, cdc="777")]
 
     def fake_scan(table, row_filter=None):
-        return {"etl_run_log": logs, "etl_control": ctrl}[table]
+        data = {"etl_run_log": logs, "etl_control": ctrl}[table]
+        if row_filter is not None:
+            field, value = row_filter.term.name, row_filter.literal.value
+            data = [r for r in data if str(r.get(field)) == str(value)]
+        return data
     monkeypatch.setattr(ib, "_scan_pylist", fake_scan)
 
     out = ib.read_run_detail("r1")

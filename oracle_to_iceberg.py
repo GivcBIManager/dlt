@@ -160,6 +160,10 @@ def main(argv: list[str]) -> int:
              run_id, settings.mode, [b.key for b in branches],
              [f"{n}({len(t)})" for n, t in phases], settings.destination_bucket_url)
 
+    if settings.postgres is None:
+        raise RuntimeError(
+            "no [postgres] config found in .dlt/secrets.toml; Postgres is "
+            "required — see README")
     control = iceberg_load.ControlStore(
         iceberg_load.MetaStore(settings.postgres)).load()
 

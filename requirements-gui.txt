@@ -2,7 +2,6 @@
 # Use:  pip install -r requirements-gui.txt
 -r requirements.txt
 
-psycopg2-binary>=2.9              # metastore driver (etl/metastore.py)
 Flask>=3.0
 # Server timezone detection (IANA zone name) for the Flows scheduler default.
 tzlocal>=5.0

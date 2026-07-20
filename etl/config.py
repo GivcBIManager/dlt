@@ -548,6 +548,8 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
     )
 
+    s.postgres = load_postgres_config()
+
     for key, value in (overrides or {}).items():
         if value is None:
             continue
@@ -557,5 +559,4 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
 
     # normalize Path-typed fields that may arrive as strings
     s.staging_dir = Path(s.staging_dir)
-    s.postgres = load_postgres_config()
     return s

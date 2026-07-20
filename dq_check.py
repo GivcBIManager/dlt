@@ -12,8 +12,9 @@ table ``etl_dq_results`` in the app metastore and prints a summary:
   hash-mismatch.
 
 The window is the same for both checks: from ``--since`` (default Jan 1 of the
-current year) up to each ``(table, branch)``'s last-run watermark from
-``control_state.json`` (override with ``--until``).
+current year) up to each ``(table, branch)``'s last-run watermark from the
+Postgres ``control_state`` table (via ``ControlStore``/``MetaStore``)
+(override with ``--until``).
 
 Examples
 --------
@@ -127,6 +128,10 @@ def main(argv: list[str]) -> int:
     until = _parse_date(args.until)
 
     from etl.metastore import MetaStore
+    if settings.postgres is None:
+        raise RuntimeError(
+            "no [postgres] config found in .dlt/secrets.toml; Postgres is "
+            "required — see README")
     control = ControlStore(MetaStore(settings.postgres)).load().as_dict()
     run_id = f"dq-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
 

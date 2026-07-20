@@ -108,6 +108,13 @@ class MetaStore:
         log.info("metastore schema '%s' ready", self.cfg.schema)
 
     def _upsert(self, table: Table, rows: list[dict], key_cols: list[str]) -> None:
+        """Insert ``rows``, or update in place on a ``key_cols`` conflict.
+
+        Callers MUST pass full-column rows (every non-key column present, even
+        if unchanged): on conflict the generated ``SET`` clause covers *every*
+        non-key column with the incoming (``excluded``) value, so a column
+        omitted from a row is set to NULL rather than left as-is.
+        """
         if not rows:
             return
         with self.engine.begin() as conn:

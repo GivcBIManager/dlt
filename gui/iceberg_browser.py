@@ -410,21 +410,21 @@ def branch_counts(table: str) -> list[dict[str, Any]]:
 def read_system_table(table: str, limit: int = 200) -> dict[str, Any]:
     """Latest ``limit`` rows of a system table (etl_run_log / etl_dq_results / ...).
 
-    Reads the whole (modest) table, sorts by the best available timestamp column
-    descending, and returns the most recent rows. The three observability tables
-    now live in Postgres (etl_meta.*); everything else is read from Iceberg.
+    The three observability tables now live in Postgres (etl_meta.*); the sort,
+    limit and total count are all pushed into SQL so this never materializes the
+    whole (unbounded) table just to keep ``limit`` rows of it. Everything else is
+    read from Iceberg.
     """
     if table in SYSTEM_TABLES:
-        from metastore_read import read_table_rows
-        rows = read_table_rows(table)
-        columns = list(rows[0].keys()) if rows else []
+        from metastore_read import count_table_rows, read_table_rows, table_columns
+
+        schema_columns = table_columns(table)
         sort_col = next((c for c in ("check_time", "start_time", "recorded_at",
-                                     "updated_at", "last_run_at") if c in columns), None)
-        if sort_col:
-            rows.sort(key=lambda r: (r.get(sort_col) is not None, r.get(sort_col)),
-                      reverse=True)
-        total = len(rows)
-        rows = [{k: _jsonable(v) for k, v in r.items()} for r in rows[:limit]]
+                                     "updated_at", "last_run_at") if c in schema_columns), None)
+        rows = read_table_rows(table, order_by=sort_col, descending=True, limit=limit)
+        columns = list(rows[0].keys()) if rows else schema_columns
+        total = count_table_rows(table)
+        rows = [{k: _jsonable(v) for k, v in r.items()} for r in rows]
         return {"table": table, "columns": columns, "rows": rows, "total": total}
 
     tbl = _open_static(table)
@@ -550,27 +550,33 @@ def _scan_pylist(table: str, row_filter=None) -> list[dict]:
     """System table as a list of plain dicts (timestamps -> datetime).
 
     The three observability tables (etl_control / etl_run_log / etl_dq_results)
-    now live in Postgres, so they are read from the metastore and any predicate
-    is applied in Python. Only ``EqualTo(field, value)`` (the run-id pushdown) is
-    ever used here. Other tables still read from Iceberg with the predicate
-    pushed into the scan so non-matching partitions/files are pruned.
+    now live in Postgres, so an ``EqualTo(field, value)`` predicate (the only
+    kind ever passed here -- the run-id pushdown) is pushed into the SQL WHERE
+    clause via ``metastore_read.read_table_rows``; nothing is filtered in Python.
+    Other tables still read from Iceberg with the predicate pushed into the scan
+    so non-matching partitions/files are pruned.
     """
     if table in SYSTEM_TABLES:
         from metastore_read import read_table_rows
-        rows = read_table_rows(table)
         if row_filter is not None:  # only EqualTo(pipeline_run_id, X) is used
             field, value = row_filter.term.name, row_filter.literal.value
-            rows = [r for r in rows if str(r.get(field)) == str(value)]
-        return rows
+            return read_table_rows(table, equals=(field, value))
+        return read_table_rows(table)
     tbl = _open_static(table)
     scan = tbl.scan(row_filter=row_filter) if row_filter is not None else tbl.scan()
     return scan.to_arrow().to_pylist()
 
 
 def read_run_summary(limit_runs: int = 100) -> dict[str, Any]:
-    """Per-run rollup of etl_run_log, newest first. Empty when the table is absent."""
+    """Per-run rollup of the newest ``limit_runs`` runs, newest first.
+
+    Only those runs' rows are ever pulled from Postgres (see
+    ``metastore_read.read_recent_run_log``), so this stays cheap no matter how
+    large ``etl_run_log`` has grown. Empty when the table is absent.
+    """
+    from metastore_read import read_recent_run_log
     try:
-        rows = _scan_pylist("etl_run_log")
+        rows = read_recent_run_log(limit_runs)
     except FileNotFoundError:
         return {"runs": []}
     return {"runs": _summarize_runs(rows, limit_runs=limit_runs)}
@@ -581,14 +587,10 @@ def read_run_detail(run_id: str) -> dict[str, Any]:
     from pyiceberg.expressions import EqualTo
 
     try:
-        # Push the run-id predicate into the scan: etl_run_log grows unbounded
-        # (every table x branch, every run), so filtering server-side avoids
-        # materializing the whole table just to keep one run's rows. The Python
-        # filter is kept as a cheap safety net if the scan returns a superset.
-        log_rows = [
-            r for r in _scan_pylist("etl_run_log", EqualTo("pipeline_run_id", run_id))
-            if r.get("pipeline_run_id") == run_id
-        ]
+        # The run-id predicate is pushed all the way into SQL (see _scan_pylist /
+        # metastore_read.read_table_rows), so this never materializes more than
+        # one run's worth of etl_run_log rows.
+        log_rows = _scan_pylist("etl_run_log", EqualTo("pipeline_run_id", run_id))
     except FileNotFoundError:
         log_rows = []
     try:

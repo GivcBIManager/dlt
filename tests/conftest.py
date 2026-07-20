@@ -1,7 +1,9 @@
 """Pytest shared fixtures: import paths + isolated state dir."""
 from __future__ import annotations
 
+import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -21,10 +23,6 @@ def state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PIPELINES_JSON", tmp_path / "pipelines.json")
     monkeypatch.setattr(config, "FLOWS_JSON", tmp_path / "flows.json")
     return tmp_path
-
-
-import os
-import uuid
 
 
 @pytest.fixture
