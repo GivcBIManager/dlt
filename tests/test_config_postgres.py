@@ -11,6 +11,12 @@ def test_load_postgres_config_parses_section():
     assert pg.sqlalchemy_url() == "postgresql+psycopg2://u:p@db:5432/oasis_meta"
 
 
-def test_load_postgres_config_none_when_absent():
-    assert config.load_postgres_config(None) is None
+def test_load_postgres_config_none_when_absent(monkeypatch):
+    # Explicit empty dict -> None (pure, no ambient dependency).
     assert config.load_postgres_config({}) is None
+    # The None-arg path reads ambient dlt.secrets; force it empty so this test
+    # does not depend on the host's .dlt/secrets.toml (which has a [postgres]
+    # section on configured hosts).
+    import dlt
+    monkeypatch.setattr(dlt.secrets, "get", lambda *a, **k: None)
+    assert config.load_postgres_config(None) is None
