@@ -238,6 +238,22 @@ class BranchConfig:
         return oracledb.makedsn(self.host, self.port, service_name=self.database)
 
 
+@dataclass(frozen=True)
+class PostgresConfig:
+    """Connection details for the app metastore database (oasis_meta)."""
+
+    host: str
+    port: int
+    database: str
+    username: str
+    password: str
+    schema: str = "etl_meta"
+
+    def sqlalchemy_url(self) -> str:
+        return (f"postgresql+psycopg2://{self.username}:{self.password}"
+                f"@{self.host}:{self.port}/{self.database}")
+
+
 @dataclass
 class Settings:
     """Runtime tuning + destination configuration."""
@@ -271,6 +287,7 @@ class Settings:
     destination_bucket_url: str = ""
     dataset_name: str = "oasis"
     pipeline_name: str = "oracle_to_iceberg"
+    postgres: Optional[PostgresConfig] = None
 
     # injected business columns
     branch_id_column: str = "BRANCH_ID"
@@ -445,6 +462,22 @@ def load_branches(
     return branches
 
 
+def load_postgres_config(raw: Optional[dict] = None) -> Optional[PostgresConfig]:
+    """Build PostgresConfig from a ``[postgres]`` secrets dict (None if absent)."""
+    if raw is None:
+        raw = dlt.secrets.get("postgres")
+    if not raw:
+        return None
+    return PostgresConfig(
+        host=str(raw["host"]),
+        port=int(raw.get("port", 5432)),
+        database=str(raw["database"]),
+        username=str(raw["username"]),
+        password=str(raw["password"]),
+        schema=str(raw.get("schema", "etl_meta")),
+    )
+
+
 def _cfg(key: str, default: Any) -> Any:
     val = dlt.config.get(key)
     return default if val is None else val
@@ -534,4 +567,5 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
     # normalize Path-typed fields that may arrive as strings
     s.staging_dir = Path(s.staging_dir)
     s.control_state_path = Path(s.control_state_path)
+    s.postgres = load_postgres_config()
     return s

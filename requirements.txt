@@ -1,7 +1,6 @@
 # Oracle 11g -> Iceberg dlt pipeline
 dlt[filesystem]>=1.25.0
-pyiceberg[sql-sqlite]>=0.11.0   # [sql-sqlite] pulls SQLAlchemy, required by the
-                                # in-memory SQLite Iceberg catalog dlt's filesystem
-                                # destination uses at load time
+pyiceberg[sql-postgres]>=0.11.0   # SQL catalog on Postgres (pulls SQLAlchemy + psycopg2)
+psycopg2-binary>=2.9              # metastore driver (etl/metastore.py)
 oracledb>=2.0.0          # thick mode required for Oracle 11g (thin needs 12.1+)
 pyarrow>=14.0.0
