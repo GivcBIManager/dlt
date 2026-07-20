@@ -8,7 +8,6 @@ unlike Iceberg). All DDL is idempotent (CREATE ... IF NOT EXISTS via checkfirst)
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
 
 from sqlalchemy import (BigInteger, Column, Float, MetaData, String, Table,
                         TIMESTAMP, create_engine, text)
@@ -107,3 +106,40 @@ class MetaStore:
             conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.cfg.schema}"'))
         self.md.create_all(self.engine, checkfirst=True)
         log.info("metastore schema '%s' ready", self.cfg.schema)
+
+    def _upsert(self, table: Table, rows: list[dict], key_cols: list[str]) -> None:
+        if not rows:
+            return
+        with self.engine.begin() as conn:
+            for row in rows:
+                stmt = pg_insert(table).values(**row)
+                update_cols = {c.name: stmt.excluded[c.name]
+                               for c in table.columns
+                               if c.name not in key_cols and not c.primary_key}
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=key_cols, set_=update_cols)
+                conn.execute(stmt)
+
+    def _append(self, table: Table, rows: list[dict]) -> None:
+        if not rows:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(table.insert(), rows)
+
+    def upsert_control_state(self, rows: list[dict]) -> None:
+        self._upsert(self.control_state, rows, ["table_name", "branch_id"])
+
+    def upsert_etl_control(self, rows: list[dict]) -> None:
+        self._upsert(self.etl_control, rows, ["table_name", "branch_id"])
+
+    def append_run_log(self, rows: list[dict]) -> None:
+        self._append(self.etl_run_log, rows)
+
+    def append_dq_results(self, rows: list[dict]) -> None:
+        self._append(self.etl_dq_results, rows)
+
+    def read_control_state(self) -> list[dict]:
+        from sqlalchemy import select
+        with self.engine.connect() as conn:
+            result = conn.execute(select(self.control_state))
+            return [dict(r._mapping) for r in result]
