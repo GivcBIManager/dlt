@@ -689,47 +689,15 @@ def _log_rows(plans: list[TableLoadPlan], settings: Settings, run_id: str) -> li
     return rows
 
 
-def _write_observability(pipeline, plans, settings, run_id) -> None:
+def _write_observability(store: MetaStore, plans, settings, run_id) -> None:
+    """Upsert etl_control + append etl_run_log to Postgres for this run."""
     control_rows = _control_rows(plans, settings, run_id)
     log_rows = _log_rows(plans, settings, run_id)
-
-    # Explicit text hints: these columns are often all-null on a clean run, so
-    # without a hint dlt can't infer a type and the schema would drift run-to-run.
-    control_hints = {
-        "error_details": {"data_type": "text"},
-        "last_cdc_value": {"data_type": "text"},
-        "last_date_value": {"data_type": "text"},
-        # Keep generated time columns as naive local wall-clock (see _naive_ts_hint).
-        "updated_at": _naive_ts_hint(),
-        "start_time": _naive_ts_hint(),
-        "end_time": _naive_ts_hint(),
-    }
-    log_hints = {
-        "error_details": {"data_type": "text"},
-        "schema_discrepancy": {"data_type": "text"},
-        "recorded_at": _naive_ts_hint(),
-        "start_time": _naive_ts_hint(),
-        "end_time": _naive_ts_hint(),
-    }
-
-    @dlt.resource(name=settings.control_table_name, write_disposition="merge",
-                  primary_key=["table_name", "branch_id"], table_format="iceberg",
-                  columns=control_hints)
-    def control_res():
-        yield control_rows
-
-    @dlt.resource(name=settings.log_table_name, write_disposition="append",
-                  table_format="iceberg", columns=log_hints)
-    def log_res():
-        yield log_rows
-
-    resources = []
+    store.ensure_schema()
     if control_rows:
-        resources.append(control_res())
+        store.upsert_etl_control(control_rows)
     if log_rows:
-        resources.append(log_res())
-    if resources:
-        _run_pipeline(pipeline, resources, settings, "observability")
+        store.append_run_log(log_rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -1294,9 +1262,12 @@ def load_and_record(
     try:
         control.save()
         # Observability + retention reflect everything that completed this run.
-        # Use holder.pipeline: a mid-run commit timeout may have replaced it.
+        # Observability writes go straight to Postgres via control.store (the
+        # same MetaStore ControlStore already holds -- no second engine/pool).
+        # Retention still uses holder.pipeline: a mid-run commit timeout may
+        # have replaced it.
         monitor.set_activity("finalize")
-        _write_observability(holder.pipeline, plans, settings, run_id)
+        _write_observability(control.store, plans, settings, run_id)
         apply_snapshot_retention(holder.pipeline, settings)
     finally:
         monitor.stop()
