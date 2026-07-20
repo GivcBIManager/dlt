@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import tables_store
-from config import CONTROL_STATE, ICEBERG_ROOT, SYSTEM_TABLES
+from config import ICEBERG_ROOT, SYSTEM_TABLES
 
 _VER_RE = re.compile(r"(\d+)-")
 
@@ -411,8 +411,22 @@ def read_system_table(table: str, limit: int = 200) -> dict[str, Any]:
     """Latest ``limit`` rows of a system table (etl_run_log / etl_dq_results / ...).
 
     Reads the whole (modest) table, sorts by the best available timestamp column
-    descending, and returns the most recent rows.
+    descending, and returns the most recent rows. The three observability tables
+    now live in Postgres (etl_meta.*); everything else is read from Iceberg.
     """
+    if table in SYSTEM_TABLES:
+        from metastore_read import read_table_rows
+        rows = read_table_rows(table)
+        columns = list(rows[0].keys()) if rows else []
+        sort_col = next((c for c in ("check_time", "start_time", "recorded_at",
+                                     "updated_at", "last_run_at") if c in columns), None)
+        if sort_col:
+            rows.sort(key=lambda r: (r.get(sort_col) is not None, r.get(sort_col)),
+                      reverse=True)
+        total = len(rows)
+        rows = [{k: _jsonable(v) for k, v in r.items()} for r in rows[:limit]]
+        return {"table": table, "columns": columns, "rows": rows, "total": total}
+
     tbl = _open_static(table)
     arrow = tbl.scan().to_arrow()
     columns = [f.name for f in arrow.schema]
@@ -535,9 +549,19 @@ def _run_detail_rows(log_rows: list[dict], control_rows: list[dict]) -> list[dic
 def _scan_pylist(table: str, row_filter=None) -> list[dict]:
     """System table as a list of plain dicts (timestamps -> datetime).
 
-    ``row_filter`` (a pyiceberg predicate) is pushed into the scan so partitions
-    and files that can't match are pruned instead of read and filtered in Python.
+    The three observability tables (etl_control / etl_run_log / etl_dq_results)
+    now live in Postgres, so they are read from the metastore and any predicate
+    is applied in Python. Only ``EqualTo(field, value)`` (the run-id pushdown) is
+    ever used here. Other tables still read from Iceberg with the predicate
+    pushed into the scan so non-matching partitions/files are pruned.
     """
+    if table in SYSTEM_TABLES:
+        from metastore_read import read_table_rows
+        rows = read_table_rows(table)
+        if row_filter is not None:  # only EqualTo(pipeline_run_id, X) is used
+            field, value = row_filter.term.name, row_filter.literal.value
+            rows = [r for r in rows if str(r.get(field)) == str(value)]
+        return rows
     tbl = _open_static(table)
     scan = tbl.scan(row_filter=row_filter) if row_filter is not None else tbl.scan()
     return scan.to_arrow().to_pylist()
@@ -582,26 +606,25 @@ def read_run_detail(run_id: str) -> dict[str, Any]:
 # Deletion (per-table drop + delete-all), spec 2026-07-14-staging-table-delete
 # --------------------------------------------------------------------------- #
 def _clear_control_state(tables: list[str]) -> list[str]:
-    """Pop the tables' watermark entries from control_state.json.
+    """Delete the tables' watermark rows from Postgres ``etl_meta.control_state``.
 
-    Atomic tmp-write + replace so a crash can't truncate the store. Returns
-    the subset of ``tables`` that actually had an entry. A missing or broken
-    control_state.json clears nothing (the ETL will rebuild it).
+    Returns the subset of ``tables`` that actually had a row (so the next ETL run
+    rebuilds them from scratch). A missing ``[postgres]`` config or an
+    unreachable database clears nothing rather than raising.
     """
-    if not CONTROL_STATE.exists():
-        return []
     try:
-        state = json.loads(CONTROL_STATE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        from metastore_read import open_metastore
+        store = open_metastore()
+    except Exception:  # noqa: BLE001 - deletion must not hard-fail on metastore issues
         return []
-    cleared = [t for t in tables if t in state]
-    if not cleared:
-        return []
-    for t in cleared:
-        state.pop(t)
-    tmp = CONTROL_STATE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=1), encoding="utf-8")
-    tmp.replace(CONTROL_STATE)
+    from sqlalchemy import delete
+    cleared: list[str] = []
+    with store.engine.begin() as conn:
+        for t in tables:
+            res = conn.execute(delete(store.control_state).where(
+                store.control_state.c.table_name == t))
+            if res.rowcount:
+                cleared.append(t)
     return cleared
 
 

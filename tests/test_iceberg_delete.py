@@ -17,23 +17,34 @@ def _mk_table(root, name, rows=42, size=1000):
 
 
 @pytest.fixture
-def lake(tmp_path, monkeypatch):
+def lake(tmp_path, monkeypatch, pg_meta):
+    """A temp Iceberg root plus watermarks sourced from a throwaway Postgres.
+
+    ``_clear_control_state`` now deletes from ``etl_meta.control_state`` in
+    Postgres (not a local JSON file), so the fixture repoints
+    ``metastore_read.open_metastore`` at the ``pg_meta`` store. Monkeypatching it
+    also guarantees deletion tests can never touch the real metastore.
+    """
     import iceberg_browser as ib
+    import metastore_read
 
     root = tmp_path / "oasis"
     root.mkdir()
-    control = tmp_path / "control_state.json"
     monkeypatch.setattr(ib, "ICEBERG_ROOT", root)
-    monkeypatch.setattr(ib, "CONTROL_STATE", control)
-    return root, control
+    monkeypatch.setattr(metastore_read, "open_metastore", lambda: pg_meta)
+    return root, pg_meta
 
 
 def test_delete_table_removes_dir_and_watermark(lake):
     import iceberg_browser as ib
+    import metastore_read
 
-    root, control = lake
+    root, store = lake
     _mk_table(root, "patient_ad")
-    control.write_text(json.dumps({"patient_ad": {"x": 1}, "other": {}}), encoding="utf-8")
+    store.upsert_control_state([
+        {"table_name": "patient_ad", "branch_id": "x", "status": "SUCCESS"},
+        {"table_name": "other", "branch_id": "1", "status": "SUCCESS"},
+    ])
 
     out = ib.delete_table("patient_ad")
 
@@ -41,13 +52,14 @@ def test_delete_table_removes_dir_and_watermark(lake):
     assert out["watermarks_cleared"] == ["patient_ad"]
     assert out["rows"] == 42
     assert not (root / "patient_ad").exists()
-    assert json.loads(control.read_text(encoding="utf-8")) == {"other": {}}
+    remaining = {r["table_name"] for r in metastore_read.read_table_rows("control_state")}
+    assert remaining == {"other"}
 
 
 def test_delete_table_without_control_entry(lake):
     import iceberg_browser as ib
 
-    root, _control = lake
+    root, _store = lake
     _mk_table(root, "etl_control")
     out = ib.delete_table("etl_control")  # system tables deletable by name
     assert out["deleted"] == ["etl_control"]
@@ -75,10 +87,13 @@ def test_delete_table_unknown_is_not_found(lake):
 def test_delete_all_skips_system_unless_included(lake):
     import iceberg_browser as ib
 
-    root, control = lake
+    root, store = lake
     for n in ("patient_ad", "doc", "etl_control", "etl_run_log", "_dlt_loads"):
         _mk_table(root, n)
-    control.write_text(json.dumps({"patient_ad": {}, "doc": {}}), encoding="utf-8")
+    store.upsert_control_state([
+        {"table_name": "patient_ad", "branch_id": "1", "status": "SUCCESS"},
+        {"table_name": "doc", "branch_id": "1", "status": "SUCCESS"},
+    ])
 
     out = ib.delete_all_tables(include_system=False)
     assert sorted(out["deleted"]) == ["doc", "patient_ad"]

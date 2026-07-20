@@ -16,8 +16,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --- project artefacts the GUI reads/writes ------------------------------- #
+# (CDC watermarks + the etl_* observability tables now live in Postgres and are
+# read via gui/metastore_read.py, not a local control_state.json.)
 TABLES_JSON = REPO_ROOT / "tables.json"
-CONTROL_STATE = REPO_ROOT / "control_state.json"
 SECRETS_TOML = REPO_ROOT / ".dlt" / "secrets.toml"
 CONFIG_TOML = REPO_ROOT / ".dlt" / "config.toml"
 

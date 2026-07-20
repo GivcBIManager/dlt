@@ -1,13 +1,13 @@
 """Read-only views over the pipeline workspace.
 
 Branch list (from ``.dlt/secrets.toml`` -- *without* passwords), the CDC
-watermark store (``control_state.json``), the ``[etl]`` tuning block, and the
-log files produced by launched runs. Nothing here mutates project state.
+watermark store (Postgres ``etl_meta.control_state`` via ``metastore_read``),
+the ``[etl]`` tuning block, and the log files produced by launched runs. Nothing
+here mutates project state.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 from datetime import date, datetime
@@ -17,7 +17,6 @@ from typing import Any
 import security
 from config import (
     CONFIG_TOML,
-    CONTROL_STATE,
     LOG_DIR,
     SECRETS_TOML,
     STATE_DIR,
@@ -184,19 +183,35 @@ def update_dbt_settings(updates: dict[str, Any]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Control state (CDC watermarks)
+# Control state (CDC watermarks) -- sourced from Postgres etl_meta.control_state
 # --------------------------------------------------------------------------- #
 def load_control_state() -> dict[str, Any]:
-    if not CONTROL_STATE.exists():
-        return {}
+    """CDC watermarks as the nested ``{table: {branch: {...}}}`` dict.
+
+    Read from Postgres (``etl_meta.control_state``) and reshaped into the same
+    structure the old ``control_state.json`` used, so ``control_rows`` /
+    ``control_summary`` downstream are unchanged. Any read failure (no
+    ``[postgres]`` config, DB down) degrades to an empty dict rather than
+    breaking the dashboard.
+    """
     try:
-        return json.loads(CONTROL_STATE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        from metastore_read import read_table_rows
+        rows = read_table_rows("control_state")
+    except Exception:  # noqa: BLE001 - never let a metastore hiccup break the panel
         return {}
+    state: dict[str, Any] = {}
+    for r in rows:
+        state.setdefault(r["table_name"], {})[str(r["branch_id"])] = {
+            "status": r["status"], "row_count": r["row_count"],
+            "duration_ms": r["duration_ms"], "last_run_at": r["last_run_at"],
+            "last_cdc": {"value": r["last_cdc_value"]},
+            "last_date": {"value": r["last_date_value"]},
+        }
+    return state
 
 
 def control_rows() -> list[dict[str, Any]]:
-    """Flatten control_state.json into one row per (table, branch)."""
+    """Flatten the control-state watermarks into one row per (table, branch)."""
     state = load_control_state()
     rows: list[dict[str, Any]] = []
     for table, branches in state.items():

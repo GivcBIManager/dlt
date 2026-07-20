@@ -1,44 +1,45 @@
-"""read_run_detail should push the run-id predicate into the Iceberg scan."""
-from __future__ import annotations
+"""_scan_pylist reads the etl_* system tables from Postgres now.
 
-import pyarrow as pa
+The three observability tables (etl_control / etl_run_log / etl_dq_results) were
+moved out of Iceberg into the Postgres app metastore, so _scan_pylist sources
+their rows from ``metastore_read.read_table_rows`` and applies the (only ever
+``EqualTo``) predicate in Python. read_run_detail still pushes the run-id
+predicate down; that predicate object reaches _scan_pylist unchanged.
+"""
+from __future__ import annotations
 
 import iceberg_browser as ib
 
 
 def test_scan_pylist_forwards_row_filter(monkeypatch):
-    seen = {}
+    """With an EqualTo filter, only the matching Postgres rows are returned."""
+    from pyiceberg.expressions import EqualTo
 
-    class FakeScan:
-        def to_arrow(self):
-            return pa.table({"pipeline_run_id": ["r1"]})
+    import metastore_read
 
-    class FakeTable:
-        def scan(self, row_filter=None, **kw):
-            seen["rf"] = row_filter
-            return FakeScan()
+    all_rows = [
+        {"pipeline_run_id": "r1", "table_name": "APPT"},
+        {"pipeline_run_id": "r2", "table_name": "VISITS"},
+        {"pipeline_run_id": "r1", "table_name": "CLAIMS"},
+    ]
+    monkeypatch.setattr(metastore_read, "read_table_rows", lambda t: list(all_rows))
 
-    monkeypatch.setattr(ib, "_open_static", lambda t: FakeTable())
-    ib._scan_pylist("etl_run_log", row_filter="SENTINEL")
-    assert seen["rf"] == "SENTINEL"
+    out = ib._scan_pylist("etl_run_log", row_filter=EqualTo("pipeline_run_id", "r1"))
+    assert [r["table_name"] for r in out] == ["APPT", "CLAIMS"]
 
 
 def test_scan_pylist_without_filter_scans_all(monkeypatch):
-    seen = {"called": False}
+    """Without a filter, every Postgres row for the table is returned."""
+    import metastore_read
 
-    class FakeScan:
-        def to_arrow(self):
-            return pa.table({"x": [1]})
+    all_rows = [
+        {"table_name": "APPT", "branch_id": "1"},
+        {"table_name": "VISITS", "branch_id": "2"},
+    ]
+    monkeypatch.setattr(metastore_read, "read_table_rows", lambda t: list(all_rows))
 
-    class FakeTable:
-        def scan(self, row_filter=None, **kw):
-            seen["called"] = True
-            seen["rf"] = row_filter
-            return FakeScan()
-
-    monkeypatch.setattr(ib, "_open_static", lambda t: FakeTable())
-    ib._scan_pylist("etl_control")
-    assert seen["called"] and seen["rf"] is None
+    out = ib._scan_pylist("etl_control")
+    assert out == all_rows
 
 
 def test_read_run_detail_pushes_run_id_filter(monkeypatch):
