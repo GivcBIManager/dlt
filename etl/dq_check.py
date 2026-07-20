@@ -1056,23 +1056,16 @@ _DQ_HINTS = {
 }
 
 
-def write_results_iceberg(results: list[DqResult], settings: Settings, run_id: str) -> str:
-    """Append the DQ results to the ``etl_dq_results`` Iceberg table in the dataset."""
-    import dlt
-
-    from .iceberg_load import build_pipeline
+def write_results_postgres(results: list[DqResult], settings: Settings, run_id: str, store=None) -> str:
+    """Append the DQ results to the Postgres ``etl_dq_results`` table."""
+    from .metastore import MetaStore
 
     rows = _result_rows(results, settings, run_id)
     if not rows:
         return _TABLE_NAME
-
-    @dlt.resource(name=_TABLE_NAME, write_disposition="append",
-                  table_format="iceberg", columns=_DQ_HINTS)
-    def dq_res():
-        yield rows
-
-    pipeline = build_pipeline(settings)
-    pipeline.run([dq_res()])
+    store = store or MetaStore(settings.postgres)
+    store.ensure_schema()
+    store.append_dq_results(rows)
     return _TABLE_NAME
 
 

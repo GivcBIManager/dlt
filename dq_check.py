@@ -2,9 +2,8 @@
 """Data-quality check: Oracle (source) vs Iceberg (lake) reconciliation per branch.
 
 Runs two checks for every ``(table, branch)`` over one shared window
-(**YTD .. last run** by default), then writes the results to the Iceberg table
-``etl_dq_results`` in the same dataset as the pipeline output and prints a
-summary:
+(**YTD .. last run** by default), then writes the results to the Postgres
+table ``etl_dq_results`` in the app metastore and prints a summary:
 
 * **row-count comparison** -- windowed ``COUNT(*)`` on Oracle vs the Iceberg
   branch partition, and their delta.
@@ -24,7 +23,7 @@ Examples
     # scope to branches/tables, counts only (skip the hash pull)
     python dq_check.py --branch jazan,khamis --tables APPOINTMENTS --no-hash
 
-    # explicit window, also dump a CSV, don't write the Iceberg table
+    # explicit window, also dump a CSV, don't write the Postgres table
     python dq_check.py --since 2026-06-01 --until 2026-06-23 --csv exports --no-write
 
     # offline: reconcile the lake against the staged parquet (no Oracle)
@@ -77,7 +76,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="suppress DQ progress heartbeat lines")
 
     p.add_argument("--no-write", action="store_true",
-                   help="don't write the etl_dq_results Iceberg table (print only)")
+                   help="don't write the etl_dq_results Postgres table (print only)")
     p.add_argument("--csv", metavar="DIR", help="also write the full results as CSV into DIR")
     p.add_argument("--max-workers", type=int, help="parallel branch workers (default: etl setting)")
 
@@ -149,9 +148,9 @@ def main(argv: list[str]) -> int:
         print(f"\n-> wrote CSV {out}")
 
     if not args.no_write:
-        name = dq_check.write_results_iceberg(results, settings, run_id)
-        print(f"-> wrote {len(results)} row(s) to Iceberg table "
-              f"'{settings.dataset_name}.{name}'")
+        name = dq_check.write_results_postgres(results, settings, run_id)
+        print(f"-> wrote {len(results)} row(s) to Postgres table "
+              f"'{settings.postgres.schema}.{name}'")
 
     # A MISMATCH is a *successful* check that found drift -- it's recorded in
     # etl_dq_results and the summary, not a run failure, so it still exits 0.
