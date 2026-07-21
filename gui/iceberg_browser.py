@@ -12,11 +12,12 @@ import datetime as dt
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
 import tables_store
-from config import ICEBERG_ROOT, SYSTEM_TABLES
+from config import ICEBERG_DATASET, ICEBERG_ROOT, REPO_ROOT, SYSTEM_TABLES
 
 _VER_RE = re.compile(r"(\d+)-")
 
@@ -643,16 +644,50 @@ def _deletable_dir(table: str) -> Path:
     return ICEBERG_ROOT / safe
 
 
+def _drop_from_catalog(tables: list[str]) -> list[str]:
+    """Best-effort purge of each table from the Postgres Iceberg catalog --
+    deletes its data/metadata files AND removes its catalog registration, so a
+    deleted staging table leaves no dangling ``iceberg_tables`` row. Never
+    hard-fails: a missing ``[iceberg_catalog]`` config or unreachable catalog
+    drops nothing. Returns the tables actually dropped from the catalog.
+
+    The GUI runs with only gui/ on sys.path, so the repo root is added before
+    importing the dlt catalog helpers (mirrors gui/iceberg_maintenance.py).
+    """
+    if not tables:
+        return []
+    try:
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from dlt.common.libs.pyiceberg import get_catalog, drop_iceberg_table
+        catalog = get_catalog()
+    except Exception:  # noqa: BLE001 - deletion must not hard-fail on catalog issues
+        return []
+    dropped: list[str] = []
+    for t in tables:
+        try:
+            if drop_iceberg_table(catalog, f"{ICEBERG_DATASET}.{t}", purge=True):
+                dropped.append(t)
+        except Exception:  # noqa: BLE001 - best effort per table
+            pass
+    return dropped
+
+
 def delete_table(table: str) -> dict[str, Any]:
-    """Drop one staging table: its folder AND its control_state watermarks."""
+    """Drop one staging table: purge it from the Postgres Iceberg catalog (files
+    + registration), clear its control_state watermarks, and remove any residual
+    on-disk folder the catalog purge left behind."""
     tdir = _deletable_dir(table)
     if not (tdir / "metadata").is_dir():
         raise FileNotFoundError(table)
     meta = _load_metadata(table)
     summary = (_current_snapshot(meta) or {}).get("summary", {}) if meta else {}
-    shutil.rmtree(tdir)
+    catalog_dropped = _drop_from_catalog([table])
+    if tdir.exists():                      # cleanup: empty dir post-purge, or a non-registered folder
+        shutil.rmtree(tdir, ignore_errors=True)
     return {
         "deleted": [table],
+        "catalog_dropped": catalog_dropped,
         "watermarks_cleared": _clear_control_state([table]),
         "rows": int(summary.get("total-records", 0) or 0),
         "size_bytes": int(summary.get("total-files-size", 0) or 0),
@@ -661,13 +696,10 @@ def delete_table(table: str) -> dict[str, Any]:
 
 
 def delete_all_tables(include_system: bool = False) -> dict[str, Any]:
-    """Drop every staging table (system tables only when ``include_system``).
-
-    ``_dlt*`` folders are always kept. Per-table failures (e.g. a file locked
-    on Windows) are collected in ``errors`` instead of aborting the sweep.
-    """
-    deleted: list[str] = []
-    errors: dict[str, str] = {}
+    """Drop every staging table (system tables only when ``include_system``):
+    purge each from the Postgres Iceberg catalog, then remove any residual
+    folder. ``_dlt*`` folders are always kept; per-folder OS errors are collected."""
+    names: list[str] = []
     if ICEBERG_ROOT.is_dir():
         for child in sorted(ICEBERG_ROOT.iterdir()):
             name = child.name
@@ -675,13 +707,22 @@ def delete_all_tables(include_system: bool = False) -> dict[str, Any]:
                 continue
             if name in SYSTEM_TABLES and not include_system:
                 continue
+            names.append(name)
+    catalog_dropped = _drop_from_catalog(names)
+    deleted: list[str] = []
+    errors: dict[str, str] = {}
+    for name in names:
+        tdir = ICEBERG_ROOT / name
+        if tdir.exists():
             try:
-                shutil.rmtree(child)
-                deleted.append(name)
+                shutil.rmtree(tdir)
             except OSError as exc:
                 errors[name] = str(exc)
+                continue
+        deleted.append(name)
     return {
         "deleted": deleted,
+        "catalog_dropped": catalog_dropped,
         "watermarks_cleared": _clear_control_state(deleted),
         "errors": errors,
     }

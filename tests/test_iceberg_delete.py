@@ -24,6 +24,11 @@ def lake(tmp_path, monkeypatch, pg_meta):
     Postgres (not a local JSON file), so the fixture repoints
     ``metastore_read.open_metastore`` at the ``pg_meta`` store. Monkeypatching it
     also guarantees deletion tests can never touch the real metastore.
+
+    ``_drop_from_catalog`` is also monkeypatched to a recorder: the real
+    implementation opens the production Postgres Iceberg catalog, which these
+    tests must never touch. Its own behavior is covered separately (and safely,
+    via mocks) in ``tests/test_catalog_drop.py``.
     """
     import iceberg_browser as ib
     import metastore_read
@@ -32,14 +37,23 @@ def lake(tmp_path, monkeypatch, pg_meta):
     root.mkdir()
     monkeypatch.setattr(ib, "ICEBERG_ROOT", root)
     monkeypatch.setattr(metastore_read, "open_metastore", lambda: pg_meta)
-    return root, pg_meta
+
+    catalog_calls: list[list[str]] = []
+
+    def fake_drop_from_catalog(names: list[str]) -> list[str]:
+        dropped = list(names)
+        catalog_calls.append(dropped)
+        return dropped
+
+    monkeypatch.setattr(ib, "_drop_from_catalog", fake_drop_from_catalog)
+    return root, pg_meta, catalog_calls
 
 
 def test_delete_table_removes_dir_and_watermark(lake):
     import iceberg_browser as ib
     import metastore_read
 
-    root, store = lake
+    root, store, catalog_calls = lake
     _mk_table(root, "patient_ad")
     store.upsert_control_state([
         {"table_name": "patient_ad", "branch_id": "x", "status": "SUCCESS"},
@@ -49,6 +63,8 @@ def test_delete_table_removes_dir_and_watermark(lake):
     out = ib.delete_table("patient_ad")
 
     assert out["deleted"] == ["patient_ad"]
+    assert catalog_calls == [["patient_ad"]]  # _drop_from_catalog invoked with the deleted table
+    assert out["catalog_dropped"] == ["patient_ad"]  # == the recorder's return value
     assert out["watermarks_cleared"] == ["patient_ad"]
     assert out["rows"] == 42
     assert not (root / "patient_ad").exists()
@@ -59,10 +75,12 @@ def test_delete_table_removes_dir_and_watermark(lake):
 def test_delete_table_without_control_entry(lake):
     import iceberg_browser as ib
 
-    root, _store = lake
+    root, _store, catalog_calls = lake
     _mk_table(root, "etl_control")
     out = ib.delete_table("etl_control")  # system tables deletable by name
     assert out["deleted"] == ["etl_control"]
+    assert catalog_calls == [["etl_control"]]
+    assert out["catalog_dropped"] == ["etl_control"]
     assert out["watermarks_cleared"] == []
 
 
@@ -70,7 +88,7 @@ def test_delete_table_without_control_entry(lake):
 def test_delete_table_rejects_protected_and_unsafe_names(lake, bad):
     import iceberg_browser as ib
 
-    root, _ = lake
+    root, _, _catalog_calls = lake
     _mk_table(root, "_dlt_loads")
     with pytest.raises(ValueError):
         ib.delete_table(bad)
@@ -87,7 +105,7 @@ def test_delete_table_unknown_is_not_found(lake):
 def test_delete_all_skips_system_unless_included(lake):
     import iceberg_browser as ib
 
-    root, store = lake
+    root, store, catalog_calls = lake
     for n in ("patient_ad", "doc", "etl_control", "etl_run_log", "_dlt_loads"):
         _mk_table(root, n)
     store.upsert_control_state([
@@ -97,10 +115,14 @@ def test_delete_all_skips_system_unless_included(lake):
 
     out = ib.delete_all_tables(include_system=False)
     assert sorted(out["deleted"]) == ["doc", "patient_ad"]
+    assert catalog_calls == [["doc", "patient_ad"]]  # single _drop_from_catalog call for the whole sweep
+    assert sorted(out["catalog_dropped"]) == ["doc", "patient_ad"]
     assert (root / "etl_control").exists()
     assert (root / "_dlt_loads").exists()
     assert sorted(out["watermarks_cleared"]) == ["doc", "patient_ad"]
 
     out2 = ib.delete_all_tables(include_system=True)
     assert sorted(out2["deleted"]) == ["etl_control", "etl_run_log"]
+    assert catalog_calls[-1] == ["etl_control", "etl_run_log"]
+    assert sorted(out2["catalog_dropped"]) == ["etl_control", "etl_run_log"]
     assert (root / "_dlt_loads").exists()  # never deletable
