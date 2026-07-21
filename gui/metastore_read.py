@@ -9,9 +9,20 @@ catalog (see ``iceberg_browser``), unchanged.
 from __future__ import annotations
 
 import functools
+import sys
+from pathlib import Path
 
-from etl import config
-from etl.metastore import MetaStore
+# The GUI runs as `python gui/app.py`, which puts ONLY the gui/ directory on
+# sys.path (gui/app.py), not the repo root. This module imports the ``etl``
+# package (at the repo root), so ensure the repo root is importable first --
+# mirrors gui/iceberg_maintenance.py. Without this, the Postgres-backed
+# /api/iceberg/system/* endpoints 500 with "No module named 'etl'".
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from etl import config  # noqa: E402
+from etl.metastore import MetaStore  # noqa: E402
 
 
 @functools.lru_cache(maxsize=1)
