@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import dlt
 
@@ -250,7 +251,11 @@ class PostgresConfig:
     schema: str = "etl_meta"
 
     def sqlalchemy_url(self) -> str:
-        return (f"postgresql+psycopg2://{self.username}:{self.password}"
+        # username/password may contain URL-reserved chars (e.g. an ``@`` in the
+        # password) - encode them so they don't corrupt the netloc parsing.
+        user = quote(self.username, safe="")
+        pwd = quote(self.password, safe="")
+        return (f"postgresql+psycopg2://{user}:{pwd}"
                 f"@{self.host}:{self.port}/{self.database}")
 
 
