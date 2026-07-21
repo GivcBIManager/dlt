@@ -683,15 +683,20 @@ def delete_table(table: str) -> dict[str, Any]:
     meta = _load_metadata(table)
     summary = (_current_snapshot(meta) or {}).get("summary", {}) if meta else {}
     catalog_dropped = _drop_from_catalog([table])
+    errors: dict[str, str] = {}
     if tdir.exists():                      # cleanup: empty dir post-purge, or a non-registered folder
-        shutil.rmtree(tdir, ignore_errors=True)
+        try:
+            shutil.rmtree(tdir)
+        except OSError as exc:
+            errors[table] = str(exc)
+    deleted = [table] if not errors else []
     return {
-        "deleted": [table],
+        "deleted": deleted,
         "catalog_dropped": catalog_dropped,
-        "watermarks_cleared": _clear_control_state([table]),
+        "watermarks_cleared": _clear_control_state(deleted),
         "rows": int(summary.get("total-records", 0) or 0),
         "size_bytes": int(summary.get("total-files-size", 0) or 0),
-        "errors": {},
+        "errors": errors,
     }
 
 

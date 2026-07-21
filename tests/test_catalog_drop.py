@@ -27,7 +27,7 @@ def fake_pyiceberg(monkeypatch):
     def fake_get_catalog(*args, **kwargs):
         return sentinel
 
-    def fake_drop_iceberg_table(catalog, table_id, purge=True):
+    def fake_drop_iceberg_table(catalog, table_id, purge):
         calls.append((catalog, table_id, purge))
         # "bar" simulates NoSuchTableError -> drop_iceberg_table returns False
         return not table_id.endswith(".bar")
@@ -72,3 +72,27 @@ def test_drop_from_catalog_get_catalog_failure_is_best_effort(monkeypatch):
     monkeypatch.setattr(real_pyiceberg, "get_catalog", raising_get_catalog)
 
     assert ib._drop_from_catalog(["foo"]) == []
+
+
+def test_drop_from_catalog_isolates_per_table_failure(monkeypatch):
+    """One table's ``drop_iceberg_table`` raising must not abort the others --
+    the loop's ``try/except Exception: pass`` should skip it and keep going."""
+    import dlt.common.libs.pyiceberg as real_pyiceberg
+    import iceberg_browser as ib
+
+    sentinel = object()
+
+    def fake_get_catalog(*args, **kwargs):
+        return sentinel
+
+    def fake_drop_iceberg_table(catalog, table_id, purge):
+        if table_id.endswith(".raising"):
+            raise RuntimeError("boom")
+        return True
+
+    monkeypatch.setattr(real_pyiceberg, "get_catalog", fake_get_catalog)
+    monkeypatch.setattr(real_pyiceberg, "drop_iceberg_table", fake_drop_iceberg_table)
+
+    result = ib._drop_from_catalog(["raising", "ok"])
+
+    assert result == ["ok"]
