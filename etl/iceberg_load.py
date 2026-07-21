@@ -323,6 +323,79 @@ def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Sch
     return coerced
 
 
+def _read_destination_arrow_types(pipeline, tdef: TableDef) -> dict:
+    """Best-effort ``{column-name-lower: Arrow type}`` for the stored Iceberg table.
+
+    Empty dict when the table does not exist yet or cannot be read. Opens ONLY
+    the target table -- ``get_iceberg_tables(pipeline)`` with no name opens every
+    table in the dataset, so one broken sibling would make this raise (see
+    ``_coerce_unified_nulls`` and test_coerce_nulls_isolation).
+    """
+    try:
+        from dlt.common.libs.pyiceberg import get_iceberg_tables
+        from pyiceberg.io.pyarrow import schema_to_pyarrow
+        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
+            tdef.dataset_table_name)
+        if tbl is None:
+            return {}
+        return {f.name.lower(): f.type for f in schema_to_pyarrow(tbl.schema())}
+    except Exception as exc:  # noqa: BLE001 - best effort; no widening is safe
+        log.warning("[%s] could not read destination types for merge schema "
+                    "widening: %s", tdef.dataset_table_name, exc)
+        return {}
+
+
+def _widen_schema_to_destination(
+    pipeline, tdef: TableDef, schema: pa.Schema
+) -> pa.Schema:
+    """Widen a merge run's unified schema by the destination table's stored types.
+
+    ``unify_schemas`` only sees the branches present in THIS run, so a merge-key
+    column that the all-branches INITIAL load widened to ``string`` (a fractional
+    branch wins -- ``_coerce_keys_run_stable`` renders a fractional/scale-drifting
+    key as a canonical decimal string, an integer-valued one as ``decimal(38, 0)``)
+    is re-inferred as ``decimal(38, 0)`` by an incremental run whose branch subset
+    happens to be integer-only. The load then dies with
+    ``Cannot change column type: rule_ios: string -> decimal(38, 0)`` -- Iceberg
+    does not allow ``string -> decimal``.
+
+    The destination table already holds the type the initial load crystallised
+    across every branch, so fold it back in: for each column present in both,
+    widen the run type by the stored type (``widen_types`` -- string wins, decimals
+    widen precision/scale). The batch is then cast to the widened type by
+    ``cast_table_to_schema`` exactly as the initial load cast that same branch, so
+    the merge-key hash is identical (``_finish_batch`` casts before hashing) and
+    Iceberg is asked for no type change.
+
+    Only columns already in ``schema`` are touched -- a column that exists solely
+    in the destination is never pulled into the batch (that would null it out for
+    updated rows on merge). Best effort: any read failure leaves ``schema`` as-is.
+    """
+    dest = _read_destination_arrow_types(pipeline, tdef)
+    if not dest:
+        return schema
+    fields = []
+    changed = False
+    for f in schema:
+        stored = dest.get(f.name.lower())
+        if stored is not None and not stored.equals(f.type):
+            widened = types_map.widen_types(f.type, stored)
+            if not widened.equals(f.type):
+                fields.append(pa.field(f.name, widened, nullable=f.nullable,
+                                       metadata=f.metadata))
+                changed = True
+                continue
+        fields.append(f)
+    if not changed:
+        return schema
+    out = pa.schema(fields)
+    log.info("[%s] widened merge schema to destination types: %s",
+             tdef.dataset_table_name,
+             {f.name: str(f.type) for f in out
+              if not f.type.equals(schema.field(f.name).type)})
+    return out
+
+
 def _carry_forward_insert_at(
     batch: pa.Table, existing: pa.Table, join_keys: list[str], insert_col: str
 ) -> pa.Table:
@@ -1096,6 +1169,17 @@ def _load_one_table(
     # Arrow ``null`` type; coerce it to a concrete type so the load never asks
     # pyiceberg to cast an existing column to ``null``.
     plan.unified_schema = _coerce_unified_nulls(pipeline, tdef, plan.unified_schema)
+
+    # A merge only unifies THIS run's branches, so a key column the all-branches
+    # INITIAL load widened to string (e.g. RULE_IOS -- fractional on some branch)
+    # is re-inferred as decimal by an integer-only incremental subset and dies at
+    # load with "Cannot change column type: <col>: string -> decimal". Fold the
+    # destination's stored types back in so the merge conforms to what the initial
+    # load wrote -- no reload, no disallowed Iceberg type change. (replace/append
+    # rebuild the table this run, so they must NOT adopt the old type.)
+    if plan.disposition == "merge":
+        plan.unified_schema = _widen_schema_to_destination(
+            pipeline, tdef, plan.unified_schema)
 
     # Snapshot ids present before this run's commits: per-branch loading (and
     # chunked merge) commits several snapshots; after a successful load every
