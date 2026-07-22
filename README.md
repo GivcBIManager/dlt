@@ -129,6 +129,10 @@ python oracle_to_iceberg.py --mode INCREMENTAL --category transactions
 
 # Exercise the entire pipeline offline with synthetic data (no Oracle needed)
 python oracle_to_iceberg.py --mode INITIAL --self-test
+
+# Keep each table's _staging parquet after load (default: delete it to reclaim
+# disk) — e.g. to reconcile the lake against it with `dq_check.py --self-test`
+python oracle_to_iceberg.py --mode INCREMENTAL --keep-staging
 ```
 
 `--help` lists every flag (worker counts, pool size, retry policy, DSN mode, …).

@@ -68,6 +68,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="path to Oracle Instant Client libs (thick mode)")
 
     p.add_argument("--staging-dir", help="local staging dir for extracted parquet")
+    p.add_argument("--keep-staging", action="store_true",
+                   help="keep staged parquet after load (default: delete it to "
+                        "reclaim disk; keep it to run dq_check --self-test)")
     p.add_argument("--no-progress", action="store_true",
                    help="disable the live progress/memory heartbeat")
     p.add_argument("--progress-interval", type=float, dest="progress_interval_s",
@@ -99,6 +102,8 @@ def build_overrides(args: argparse.Namespace) -> dict:
         overrides["progress_enabled"] = False
     if args.staging_dir:
         overrides["staging_dir"] = args.staging_dir
+    if args.keep_staging:
+        overrides["cleanup_staging_after_load"] = False
     return overrides
 
 

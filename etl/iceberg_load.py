@@ -652,6 +652,33 @@ def _iceberg_resource(
     return _resource()
 
 
+def _cleanup_staged(result: ExtractResult, settings: Settings) -> None:
+    """Delete a branch's staged parquet once its rows are durably in Iceberg.
+
+    The staged parquet exists only to feed the load; after the branch's
+    watermark advances it is dead weight, so we reclaim the disk. Best-effort:
+    a failed unlink is logged and never fails the load (mirrors _cleanup_tmp).
+    No-op when cleanup is disabled -- e.g. to run ``dq_check --self-test``
+    against the staged files afterward.
+    """
+    if not settings.cleanup_staging_after_load:
+        return
+    path = result.staged_path
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+        # Drop the now-empty table dir when this was the last branch; an OSError
+        # just means other branches' files remain (or it's already gone) -- leave it.
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+    except OSError as exc:
+        log.warning("[%s] could not delete staged parquet %s: %s",
+                    result.table, path, exc)
+
+
 def _run_per_branch_rebuild(
     pipeline,
     plan: TableLoadPlan,
@@ -681,6 +708,7 @@ def _run_per_branch_rebuild(
                                          write_hash=not plan.tdef.is_snapshot)],
             settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:{disposition}")
         control.advance(r)
+        _cleanup_staged(r, settings)
         disposition = "append"  # everything after the first adds on
 
 
@@ -703,6 +731,7 @@ def _run_per_branch_append(
             pipeline, [_iceberg_resource(plan, settings, [r.staged_path], "append")],
             settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:append")
         control.advance(r)
+        _cleanup_staged(r, settings)
 
 
 # --------------------------------------------------------------------------- #
@@ -1156,6 +1185,7 @@ def _load_one_table(
     if sum(r.row_count for r in plan.success) == 0:
         for r in plan.success:
             control.advance(r)
+            _cleanup_staged(r, settings)
         control.save()
         plan.load_status = "SUCCESS"
         log.info("[%s] no rows; load skipped (disp=%s ok=%d fail=%d)",
@@ -1222,6 +1252,7 @@ def _load_one_table(
             # Advance watermarks only for a table that actually loaded.
             for r in plan.success:
                 control.advance(r)
+                _cleanup_staged(r, settings)
         control.save()
         if settings.snapshot_maintenance:
             _squash_table_run_snapshots(pipeline, tdef.dataset_table_name, before_ids)

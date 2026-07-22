@@ -336,6 +336,11 @@ class Settings:
     # local working state
     staging_dir: Path = field(default_factory=lambda: Path("_staging"))
 
+    # Delete a branch's staged parquet once its rows are committed to Iceberg,
+    # to reclaim local disk. Turn off (--keep-staging) to retain the files for
+    # an offline `dq_check --self-test` reconciliation afterward.
+    cleanup_staging_after_load: bool = True
+
     self_test: bool = False
 
     def __post_init__(self):
@@ -551,6 +556,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),
         load_commit_timeout_s=int(_cfg("etl.load_commit_timeout_s", 900)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
+        cleanup_staging_after_load=bool(_cfg("etl.cleanup_staging_after_load", True)),
     )
 
     s.postgres = load_postgres_config()
