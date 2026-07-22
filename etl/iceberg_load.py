@@ -708,6 +708,7 @@ def _run_per_branch_rebuild(
                                          write_hash=not plan.tdef.is_snapshot)],
             settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:{disposition}")
         control.advance(r)
+        _cleanup_staged(r, settings)
         disposition = "append"  # everything after the first adds on
 
 
@@ -730,6 +731,7 @@ def _run_per_branch_append(
             pipeline, [_iceberg_resource(plan, settings, [r.staged_path], "append")],
             settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:append")
         control.advance(r)
+        _cleanup_staged(r, settings)
 
 
 # --------------------------------------------------------------------------- #
@@ -1183,6 +1185,7 @@ def _load_one_table(
     if sum(r.row_count for r in plan.success) == 0:
         for r in plan.success:
             control.advance(r)
+            _cleanup_staged(r, settings)
         control.save()
         plan.load_status = "SUCCESS"
         log.info("[%s] no rows; load skipped (disp=%s ok=%d fail=%d)",
@@ -1249,6 +1252,7 @@ def _load_one_table(
             # Advance watermarks only for a table that actually loaded.
             for r in plan.success:
                 control.advance(r)
+                _cleanup_staged(r, settings)
         control.save()
         if settings.snapshot_maintenance:
             _squash_table_run_snapshots(pipeline, tdef.dataset_table_name, before_ids)
