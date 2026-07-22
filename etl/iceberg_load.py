@@ -652,6 +652,33 @@ def _iceberg_resource(
     return _resource()
 
 
+def _cleanup_staged(result: ExtractResult, settings: Settings) -> None:
+    """Delete a branch's staged parquet once its rows are durably in Iceberg.
+
+    The staged parquet exists only to feed the load; after the branch's
+    watermark advances it is dead weight, so we reclaim the disk. Best-effort:
+    a failed unlink is logged and never fails the load (mirrors _cleanup_tmp).
+    No-op when cleanup is disabled -- e.g. to run ``dq_check --self-test``
+    against the staged files afterward.
+    """
+    if not settings.cleanup_staging_after_load:
+        return
+    path = result.staged_path
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+        # Drop the now-empty table dir when this was the last branch; an OSError
+        # just means other branches' files remain (or it's already gone) -- leave it.
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+    except OSError as exc:
+        log.warning("[%s] could not delete staged parquet %s: %s",
+                    result.table, path, exc)
+
+
 def _run_per_branch_rebuild(
     pipeline,
     plan: TableLoadPlan,
