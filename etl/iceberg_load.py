@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 import struct
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -908,13 +909,18 @@ def apply_snapshot_retention(pipeline, settings: Settings) -> None:
             log.warning("[%s] snapshot retention failed: %s", name, exc)
 
 
-def build_pipeline(settings: Settings):
+def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None):
+    # pipelines_dir is dlt's LOCAL bookkeeping (schema/state/load packages), not
+    # the destination. None keeps dlt's default (~/.dlt/pipelines); a rebuild
+    # after a commit timeout passes a fresh dir so it can't re-adopt a poisoned
+    # pipeline's still-open load package (see _PipelineHolder.rebuild).
     return dlt.pipeline(
         pipeline_name=settings.pipeline_name,
         destination=dlt.destinations.filesystem(
             bucket_url=settings.destination_bucket_url
         ),
         dataset_name=settings.dataset_name,
+        pipelines_dir=pipelines_dir,
     )
 
 
@@ -934,7 +940,20 @@ class _PipelineHolder:
         self.pipeline = build_pipeline(settings)
 
     def rebuild(self):
-        self.pipeline = build_pipeline(self._settings)
+        # A timed-out commit leaves a daemon worker still driving the OLD
+        # pipeline's started `.reference` package against the shared Iceberg
+        # catalog; that native pyiceberg call cannot be killed. Rebuilding to the
+        # SAME pipeline_name + pipelines_dir would re-adopt that still-open
+        # package on disk, so the new pipeline and the abandoned worker would
+        # drive the SAME commit against the same table `main` ref and livelock on
+        # optimistic-concurrency ("branch main has changed") -- the run wedges.
+        # Give the rebuild a FRESH pipelines_dir so it starts from clean local
+        # state and cannot re-drive the zombie's package. Only dlt's local
+        # working dir changes; the destination (bucket + Iceberg catalog) is
+        # untouched, so the run continues writing to the same tables.
+        fresh_dir = tempfile.mkdtemp(
+            prefix=f"{self._settings.pipeline_name}-rebuild-")
+        self.pipeline = build_pipeline(self._settings, pipelines_dir=fresh_dir)
         return self.pipeline
 
 

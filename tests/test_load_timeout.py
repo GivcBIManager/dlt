@@ -108,10 +108,35 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
     assert cleared == []
 
 
+def test_rebuild_uses_a_fresh_pipelines_dir_so_it_cannot_readopt_the_zombie(monkeypatch):
+    # A timed-out commit leaves a daemon worker still driving the OLD pipeline's
+    # started `.reference` package against the shared Iceberg catalog; it can't be
+    # killed. If the rebuild reuses the same pipeline name + pipelines_dir it
+    # re-adopts that in-flight package, so the new pipeline and the zombie drive
+    # the SAME commit against the same table `main` ref and livelock on
+    # optimistic-concurrency ("branch main has changed"). So each rebuild MUST get
+    # a fresh, distinct pipelines_dir; the initial build keeps the default (None).
+    calls: list = []
+
+    def spy(settings, pipelines_dir=None):
+        calls.append(pipelines_dir)
+        return object()  # a dummy pipeline; we only assert how it was built
+
+    monkeypatch.setattr(iceberg_load, "build_pipeline", spy)
+    holder = iceberg_load._PipelineHolder(Settings())
+    holder.rebuild()
+    holder.rebuild()
+
+    assert calls[0] is None, "initial build must use the default pipelines_dir"
+    assert calls[1] is not None, "rebuild must NOT reuse the poisoned pipeline's dir"
+    assert calls[2] is not None
+    assert calls[1] != calls[2], "each rebuild must be isolated from the previous one"
+
+
 def test_load_and_record_rebuilds_pipeline_after_commit_timeout(tmp_path, monkeypatch, pg_meta):
     builds = []
 
-    def fake_build(settings):
+    def fake_build(settings, pipelines_dir=None):
         p = _pipeline(tmp_path / f"p{len(builds)}")
         builds.append(p)
         return p
