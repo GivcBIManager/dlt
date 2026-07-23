@@ -50,15 +50,48 @@ def test_slow_polls_never_overlap_or_duplicate(page):
       poller.start();
       await new Promise(r => setTimeout(r, 500));
       poller.stop();
-      // stop() only cancels the pending timer -- a fetch already in flight
-      // (up to 60ms long here) still resolves and still delivers its chunk.
-      // Give it room to land before reading the arrays below.
+      // stop() cancels the pending timer AND marks the fetch already in
+      // flight (up to 60ms long here) as stale, so its chunk is dropped when
+      // it lands rather than delivered. Give it room to land (and confirm it
+      // does NOT arrive) before reading the arrays below.
       await new Promise(r => setTimeout(r, 100));
       return { maxConcurrent, offsets, chunkCount: chunks.length };
     }""")
     assert res["maxConcurrent"] == 1
     assert res["offsets"] == sorted(set(res["offsets"]))       # never re-fetched
-    assert res["chunkCount"] == len(res["offsets"])            # never re-delivered
+    # Every completed-before-stop fetch delivered exactly once; the one still
+    # in flight at stop() time is discarded, not re-delivered -- so exactly
+    # one fewer chunk than fetches started, never more, never a duplicate.
+    assert res["chunkCount"] == len(res["offsets"]) - 1
+
+
+def test_stop_discards_a_response_already_in_flight(page):
+    """stop() must make the poller fully inert: a fetch already in flight when
+    stop() is called must not fire onChunk/onStatus/onDone/onError once it
+    lands, even though the fetch itself still runs to completion."""
+    res = page.evaluate("""async () => {
+      let calls = 0;
+      const events = [];
+      const poller = createTailPoller({
+        fast: 10, slow: 20,
+        fetchChunk: async (offset) => {
+          calls++;
+          await new Promise(r => setTimeout(r, 150));   // well past the poll interval
+          return { offset: offset + 5, chunk: "abcde", status: "running" };
+        },
+        onChunk: () => events.push("chunk"),
+        onStatus: () => events.push("status"),
+        onDone: () => events.push("done"),
+        onError: () => events.push("error"),
+      });
+      poller.start();
+      await new Promise(r => setTimeout(r, 30));   // the first fetch is now in flight
+      poller.stop();
+      await new Promise(r => setTimeout(r, 200));  // let the in-flight fetch resolve
+      return { calls, events };
+    }""")
+    assert res["calls"] == 1          # the in-flight fetch still ran to completion
+    assert res["events"] == []        # but nothing it produced was ever delivered
 
 
 def test_cadence_backs_off_when_quiet_and_snaps_back_on_data(page):

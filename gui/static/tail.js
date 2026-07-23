@@ -8,6 +8,10 @@
  * log is quiet -- so an active run feels ~3x fresher than the old fixed 1300ms
  * while an idle one costs fewer requests than before.
  *
+ * stop() makes the instance fully inert: it cancels the pending timer AND
+ * marks any fetch already in flight as stale, so that response's onChunk /
+ * onStatus / onDone / onError never fire once it lands.
+ *
  * Touches no DOM and reads no globals beyond the injected fetchChunk, so the
  * cadence and guard logic are testable headlessly (tests/test_tail_poller.py).
  */
@@ -31,7 +35,10 @@ function createTailPoller(opts = {}) {
 
   let offset = 0, delay = fast, fails = 0;
   let timer = null, running = false, inFlight = false, watching = false;
-  let currentPoll = null;
+  let currentPoll = null, currentPollGen = -1;
+  // Bumped by stop()/halt() so a fetchChunk already in flight at that moment
+  // can tell, once it resolves, that its result is stale and must be dropped.
+  let gen = 0;
 
   function disarm() {
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -41,7 +48,7 @@ function createTailPoller(opts = {}) {
     if (typeof document !== "undefined" && document.hidden) return;
     timer = setTimeout(() => { timer = null; poll(); }, delay);
   }
-  function halt() { running = false; disarm(); unwatch(); }
+  function halt() { running = false; gen++; disarm(); unwatch(); }
 
   // Pause while the tab is hidden; on return, poll immediately rather than
   // waiting out the current delay (which would show a stale-then-burst jump).
@@ -64,15 +71,29 @@ function createTailPoller(opts = {}) {
   // Callers must never see a promise that resolves without a poll having
   // been applied -- if one is already running, join it instead of no-oping.
   function poll() {
-    if (inFlight) return currentPoll;
+    if (inFlight) {
+      if (currentPollGen === gen) return currentPoll;
+      // The outstanding fetch belongs to a generation stop() already
+      // invalidated -- its result will be dropped when it lands (below).
+      // Preserve single-flight (no second concurrent fetchChunk) by waiting
+      // for it to settle, then run a genuine poll under the current
+      // generation instead of handing back a promise that would resolve
+      // without ever applying a live result.
+      currentPollGen = gen;
+      currentPoll = currentPoll.then(poll);
+      return currentPoll;
+    }
+    currentPollGen = gen;
     currentPoll = runPoll();
     return currentPoll;
   }
 
   async function runPoll() {
+    const myGen = gen;
     inFlight = true;
     try {
       const res = await fetchChunk(offset);
+      if (myGen !== gen) return;   // stopped while this fetch was in flight
       fails = 0;
       if (typeof res.offset === "number") offset = res.offset;
       if (res.chunk) { delay = fast; onChunk(res.chunk, res); }
@@ -82,6 +103,9 @@ function createTailPoller(opts = {}) {
         halt();
         // The server reads the log's size BEFORE the run status, so bytes
         // written between those two reads would be lost. Fetch once more.
+        // halt() just bumped gen, but the check above already passed for
+        // this poll -- that bump must not suppress this poll's own final
+        // delivery, so nothing below re-checks gen.
         try {
           const last = await fetchChunk(offset);
           if (typeof last.offset === "number") offset = last.offset;
@@ -91,6 +115,7 @@ function createTailPoller(opts = {}) {
         return;
       }
     } catch (exc) {
+      if (myGen !== gen) return;   // stopped while this fetch was in flight
       fails++;
       onError(fails, maxFails, exc);
       if (fails >= maxFails) { halt(); return; }
@@ -108,7 +133,8 @@ function createTailPoller(opts = {}) {
       running = true; fails = 0; delay = fast;
       watch(); disarm(); poll();
     },
-    /* Stop polling. An already in-flight response still delivers. */
+    /* Stop polling. Fully inert: a fetch already in flight is discarded when
+     * it lands -- none of onChunk/onStatus/onDone/onError fire for it. */
     stop() { halt(); },
     /* Poll once now; resolves when that poll has been applied. If a poll is
      * already in flight, joins it instead of no-oping -- the caller still
