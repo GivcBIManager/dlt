@@ -81,22 +81,15 @@ function coalesce(fn) {
 }
 
 // Render a run-status pill, plus an rc=N suffix once the process has exited.
-// Shared by the Run and Models pages. The write is skipped when (status,
-// returncode) is unchanged from the last render: this is called on every
-// poll, and the polls are now ~3x more frequent, so an unconditional
-// innerHTML write would rebuild the pill node for nothing on the vast
-// majority of ticks. The last-rendered key is tracked on `box.dataset`
-// rather than by diffing `box.innerHTML` against a freshly-computed string --
-// the child node's live markup can drift from what we last wrote (e.g. a
-// browser-added attribute), which would make a naive string comparison
-// mistake "unchanged" for "changed" and rebuild the node anyway.
+// Shared by the Run and Models pages. The write is skipped when the markup is
+// unchanged: this is called on every poll, and the polls are now ~3x more
+// frequent, so an unconditional innerHTML write would rebuild the pill node
+// for nothing on the vast majority of ticks.
 function setStatusPill(box, status, returncode) {
   if (!box) return;
-  const key = JSON.stringify([status, returncode]);
-  if (box.dataset.pillKey === key) return;
-  box.dataset.pillKey = key;
-  box.innerHTML = pill(status) +
+  const label = pill(status) +
     (returncode != null ? ` <small>rc=${returncode}</small>` : "");
+  if (box.innerHTML !== label) box.innerHTML = label;
 }
 
 // Build an HTML table from columns + array-of-objects rows.

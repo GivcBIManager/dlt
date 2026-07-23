@@ -131,13 +131,15 @@ def test_set_status_pill_omits_returncode_while_running(page):
 
 def test_set_status_pill_skips_redundant_writes(page):
     """onStatus fires on every poll, so rewriting identical innerHTML would
-    discard and rebuild the pill node ~150x/min during an active run."""
+    discard and rebuild the pill node ~150x/min during an active run. Checked by
+    node identity: tagging the node instead would itself change box.innerHTML
+    and defeat the very guard under test."""
     kept = page.evaluate("""() => {
       const box = document.createElement("div");
       setStatusPill(box, "running", null);
-      box.firstElementChild.dataset.marker = "kept";
+      const firstNode = box.firstElementChild;
       setStatusPill(box, "running", null);   // identical -> must not rebuild
-      return box.firstElementChild.dataset.marker === "kept";
+      return box.firstElementChild === firstNode;
     }""")
     assert kept is True
 
