@@ -92,3 +92,8 @@ auto-starts Dagster on launch.
 - This is an **admin tool meant for trusted/local use** (it can launch commands).
   Keep it bound to `127.0.0.1` unless you put authentication in front of it.
 - Generated artefacts (`run_logs/`, `gui/state/`) are git-ignored.
+- Live log views (Run, Monitor, Models) share one adaptive tailer,
+  `gui/static/tail.js`. It polls fast (~400 ms) while a log is producing output
+  and backs off to ~2 s when quiet, pauses while the browser tab is hidden, and
+  chains its requests so two polls can never race on a stale byte offset. Tune
+  the cadence via the `fast` / `slow` options in `createTailPoller`.
