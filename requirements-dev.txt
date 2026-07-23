@@ -1,3 +1,8 @@
 # Dev/test-only dependencies.
 -r requirements-gui.txt
 pytest>=8.0
+
+# Headless-browser tests for gui/static/*.js (tests/test_tail_poller.py).
+# Needs a one-time browser download:  playwright install chromium
+# Tests skip themselves when it or the browser is unavailable.
+playwright>=1.40
