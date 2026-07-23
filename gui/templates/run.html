@@ -142,8 +142,7 @@
 <script>
 let BRANCHES = [], TABLES_BY_CAT = { masters: [], transactions: [], snapshots: [] };
 const selBranches = new Set(), selTables = new Set();
-let curRun = null, tailOffset = 0, tailTimer = null, tailFails = 0;
-const TAIL_MAX_FAILS = 10;
+let curRun = null, tailPoller = null;
 
 // Tasks offered in the builder. fresh_run / snapshot_diff were removed from the
 // UI on purpose; the backend still runs them for previously saved pipelines.
@@ -153,20 +152,22 @@ const SCRIPT_DESC = {
   custom: "custom — raw command, runs verbatim in the repo root",
 };
 
+// A no-op when the text is unchanged: the poller calls this on every tick and
+// the polls are now ~3x more frequent, so an unconditional innerHTML write
+// would be pure churn.
 function setTailBanner(html) {
   const b = el("tail-banner");
-  if (!b) return;
+  if (!b || b.innerHTML === html) return;
   b.innerHTML = html;
   b.hidden = !html;
   b.className = "banner " + (/Connection lost/.test(html) ? "error" : "warn");
 }
+// start() resumes from the current offset, so a reconnect picks up exactly
+// where the failed poll left off rather than re-downloading the whole log.
 function reconnectTail() {
-  if (!curRun) return;
-  tailFails = 0;
+  if (!tailPoller) return;
   setTailBanner("Reconnecting…");
-  clearInterval(tailTimer);
-  pollTail();
-  tailTimer = setInterval(pollTail, 1300);
+  tailPoller.start();
 }
 
 // Extra args: each is a flag, optionally taking a value picked from a dropdown
@@ -435,46 +436,38 @@ async function startRun() {
   el("run-btn").disabled = false;
 }
 
+// One layout pass per frame no matter how many polls land in it: render()
+// rebuilds the branch strip, the per-table tbody and the issues list.
+const renderLiveDash = coalesce(() => liveDash.render());
+
 function viewRun(id) {
-  curRun = id; tailOffset = 0; tailFails = 0;
+  curRun = id;
   setTailBanner("");
   el("cur-run").textContent = id;
   el("console").textContent = "";
   liveDash.reset();
-  clearInterval(tailTimer);
-  pollTail();
-  tailTimer = setInterval(pollTail, 1300);
-}
-
-async function pollTail() {
-  if (!curRun) return;
-  try {
-    const r = await apiGet(`/api/runs/${curRun}/tail?offset=${tailOffset}`);
-    if (tailFails) { tailFails = 0; setTailBanner(""); }  // recovered
-    if (r.chunk) {
-      const c = el("console");
-      const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-      c.textContent += r.chunk;
-      if (atBottom) c.scrollTop = c.scrollHeight;
-      liveDash.feed(r.chunk);
-    }
-    tailOffset = r.offset;
-    el("cur-status").innerHTML = pill(r.status) + (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
-    const running = r.status === "running" || r.status === "detached";
-    el("stop-btn").hidden = !running;
-    if (!running) { clearInterval(tailTimer); tailTimer = null; liveDash.flush(); loadRuns(); }
-    liveDash.render();
-  } catch (e) {
-    // Don't die on a single failed poll (Flask restart, laptop sleep, blip):
-    // keep retrying on the interval and surface the state instead of freezing.
-    tailFails++;
-    if (tailFails >= TAIL_MAX_FAILS) {
-      clearInterval(tailTimer); tailTimer = null;
-      setTailBanner("Connection lost. <a href='#' onclick='reconnectTail();return false;'>Reconnect</a>");
-    } else {
-      setTailBanner(`Reconnecting… (${tailFails}/${TAIL_MAX_FAILS})`);
-    }
-  }
+  if (tailPoller) tailPoller.stop();
+  tailPoller = createTailPoller({
+    fetchChunk: (offset) => apiGet(`/api/runs/${id}/tail?offset=${offset}`),
+    isTerminal: (r) => r.status !== "running" && r.status !== "detached",
+    onChunk: (chunk) => {
+      appendConsole(el("console"), chunk);
+      liveDash.feed(chunk);
+      renderLiveDash();
+    },
+    onStatus: (r) => {
+      setStatusPill(el("cur-status"), r.status, r.returncode);
+      el("stop-btn").hidden = !(r.status === "running" || r.status === "detached");
+      setTailBanner("");
+    },
+    onDone: () => { liveDash.flush(); liveDash.render(); loadRuns(); },
+    onError: (fails, max) => {
+      setTailBanner(fails >= max
+        ? "Connection lost. <a href='#' onclick='reconnectTail();return false;'>Reconnect</a>"
+        : `Reconnecting… (${fails}/${max})`);
+    },
+  });
+  tailPoller.start();
 }
 
 async function stopRun() {
