@@ -58,6 +58,47 @@ function pill(status) {
   return `<span class="pill ${esc(s)}">${esc(status || "—")}</span>`;
 }
 
+// Append log text to a <pre>-style console. Uses a text node rather than
+// `node.textContent += text`, which reads back and re-serializes the entire
+// console on every append -- cost that grows with the log and showed up as
+// increasingly laggy tailing. Stays pinned to the bottom only if the view
+// already was, so a user who scrolled up to read something is left alone.
+function appendConsole(node, text) {
+  const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 30;
+  node.append(document.createTextNode(text));
+  if (atBottom) node.scrollTop = node.scrollHeight;
+}
+
+// Collapse repeated calls into one invocation per animation frame, so a burst
+// of fast polls costs a single layout pass instead of one per poll.
+function coalesce(fn) {
+  let pending = false;
+  return function () {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; fn(); });
+  };
+}
+
+// Render a run-status pill, plus an rc=N suffix once the process has exited.
+// Shared by the Run and Models pages. The write is skipped when (status,
+// returncode) is unchanged from the last render: this is called on every
+// poll, and the polls are now ~3x more frequent, so an unconditional
+// innerHTML write would rebuild the pill node for nothing on the vast
+// majority of ticks. The last-rendered key is tracked on `box.dataset`
+// rather than by diffing `box.innerHTML` against a freshly-computed string --
+// the child node's live markup can drift from what we last wrote (e.g. a
+// browser-added attribute), which would make a naive string comparison
+// mistake "unchanged" for "changed" and rebuild the node anyway.
+function setStatusPill(box, status, returncode) {
+  if (!box) return;
+  const key = JSON.stringify([status, returncode]);
+  if (box.dataset.pillKey === key) return;
+  box.dataset.pillKey = key;
+  box.innerHTML = pill(status) +
+    (returncode != null ? ` <small>rc=${returncode}</small>` : "");
+}
+
 // Build an HTML table from columns + array-of-objects rows.
 // opts.pillCols: column names rendered as status pills.
 // opts.numCols: column names right-aligned as numbers.
