@@ -94,6 +94,39 @@ def test_stop_discards_a_response_already_in_flight(page):
     assert res["events"] == []        # but nothing it produced was ever delivered
 
 
+def test_stop_then_restart_with_a_fetch_in_flight_resumes_polling(page):
+    """Unticking then reticking Monitor's auto-refresh checkbox stops and
+    restarts the SAME poller instance while a fetch may still be in flight.
+    The stale fetch's result must still be dropped (per the test above), but
+    the poller must genuinely resume afterwards -- keep fetching and
+    delivering chunks under the new generation -- rather than going silently
+    dead forever with no fetch ever scheduled again."""
+    res = page.evaluate("""async () => {
+      let calls = 0;
+      const chunks = [];
+      const poller = createTailPoller({
+        fast: 10, slow: 20,
+        fetchChunk: async (offset) => {
+          calls++;
+          await new Promise(r => setTimeout(r, 150));   // well past the poll interval
+          return { offset: offset + 5, chunk: "abcde" };
+        },
+        onChunk: (c) => chunks.push(c),
+      });
+      poller.start();
+      await new Promise(r => setTimeout(r, 30));   // the first fetch is now in flight
+      poller.stop();
+      poller.start();                              // restarted immediately, same instance
+      // Long enough for the stale fetch to settle (and be dropped) plus a
+      // fresh fetch under the new generation to complete and deliver.
+      await new Promise(r => setTimeout(r, 420));
+      poller.stop();
+      return { calls, chunkCount: chunks.length };
+    }""")
+    assert res["calls"] >= 2          # the stale fetch, plus a genuine new one
+    assert res["chunkCount"] >= 1     # and the new one's chunk was actually delivered
+
+
 def test_cadence_backs_off_when_quiet_and_snaps_back_on_data(page):
     gaps = page.evaluate("""async () => {
       const stamps = [];
