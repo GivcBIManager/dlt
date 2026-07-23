@@ -400,17 +400,18 @@ git commit -m "feat(gui): shared adaptive log tailer (createTailPoller)"
 
 ---
 
-### Task 2: `appendConsole` and `coalesce` DOM helpers
+### Task 2: `appendConsole`, `coalesce` and `setStatusPill` DOM helpers
 
 **Files:**
 - Modify: `gui/static/app.js` (append after `pill()`, around line 59)
 - Test: `tests/test_console_helpers.py`
 
 **Interfaces:**
-- Consumes: nothing.
-- Produces: two globals used by Tasks 3-5.
+- Consumes: `pill()`, already defined in `app.js` directly above the insertion point.
+- Produces: three globals used by Tasks 3-5.
   - `appendConsole(node: HTMLElement, text: string) -> void` — appends a text node, keeping the view pinned to the bottom only if it already was.
   - `coalesce(fn: () => void) -> () => void` — returns a wrapper that collapses repeated calls into one `requestAnimationFrame` callback.
+  - `setStatusPill(box: HTMLElement, status: string, returncode: number|null|undefined) -> void` — renders a status pill plus an `rc=N` suffix once the process has exited, skipping the write when the markup is unchanged. Shared by the Run and Models pages, which both render the same run-status indicator.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -526,13 +527,57 @@ def test_coalesce_allows_a_later_call_after_the_frame(page):
       return calls;
     }""")
     assert calls == 2
+
+
+def test_set_status_pill_renders_pill_and_returncode(page):
+    html = page.evaluate("""() => {
+      const box = document.createElement("div");
+      setStatusPill(box, "failed", 2);
+      return box.innerHTML;
+    }""")
+    assert 'class="pill failed"' in html
+    assert "rc=2" in html
+
+
+def test_set_status_pill_omits_returncode_while_running(page):
+    html = page.evaluate("""() => {
+      const box = document.createElement("div");
+      setStatusPill(box, "running", null);
+      return box.innerHTML;
+    }""")
+    assert 'class="pill running"' in html
+    assert "rc=" not in html
+
+
+def test_set_status_pill_skips_redundant_writes(page):
+    """onStatus fires on every poll, so rewriting identical innerHTML would
+    discard and rebuild the pill node ~150x/min during an active run."""
+    kept = page.evaluate("""() => {
+      const box = document.createElement("div");
+      setStatusPill(box, "running", null);
+      box.firstElementChild.dataset.marker = "kept";
+      setStatusPill(box, "running", null);   // identical -> must not rebuild
+      return box.firstElementChild.dataset.marker === "kept";
+    }""")
+    assert kept is True
+
+
+def test_set_status_pill_rewrites_when_status_changes(page):
+    html = page.evaluate("""() => {
+      const box = document.createElement("div");
+      setStatusPill(box, "running", null);
+      setStatusPill(box, "finished", 0);
+      return box.innerHTML;
+    }""")
+    assert 'class="pill finished"' in html
+    assert "rc=0" in html
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_console_helpers.py -v`
 
-Expected: 6 failed with `ReferenceError: appendConsole is not defined` / `coalesce is not defined`.
+Expected: 10 failed with `ReferenceError: appendConsole is not defined` / `coalesce is not defined` / `setStatusPill is not defined`.
 
 - [ ] **Step 3: Add the helpers to `gui/static/app.js`**
 
@@ -560,19 +605,31 @@ function coalesce(fn) {
     requestAnimationFrame(() => { pending = false; fn(); });
   };
 }
+
+// Render a run-status pill, plus an rc=N suffix once the process has exited.
+// Shared by the Run and Models pages. The write is skipped when the markup is
+// unchanged: this is called on every poll, and the polls are now ~3x more
+// frequent, so an unconditional innerHTML write would rebuild the pill node
+// for nothing on the vast majority of ticks.
+function setStatusPill(box, status, returncode) {
+  if (!box) return;
+  const label = pill(status) +
+    (returncode != null ? ` <small>rc=${returncode}</small>` : "");
+  if (box.innerHTML !== label) box.innerHTML = label;
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/Scripts/python.exe -m pytest tests/test_console_helpers.py -v`
 
-Expected: 6 passed.
+Expected: 10 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add gui/static/app.js tests/test_console_helpers.py
-git commit -m "feat(gui): appendConsole + coalesce console helpers"
+git commit -m "feat(gui): appendConsole, coalesce and setStatusPill helpers"
 ```
 
 ---
@@ -584,7 +641,7 @@ git commit -m "feat(gui): appendConsole + coalesce console helpers"
 - Test: `tests/test_run_page_tailer.py`
 
 **Interfaces:**
-- Consumes: `createTailPoller` (Task 1), `appendConsole` + `coalesce` (Task 2).
+- Consumes: `createTailPoller` (Task 1), `appendConsole` + `coalesce` + `setStatusPill` (Task 2).
 - Produces: nothing consumed by later tasks. `reconnectTail()` stays a global because the banner's inline `onclick` calls it.
 
 - [ ] **Step 1: Write the failing structural test**
@@ -743,10 +800,7 @@ function viewRun(id) {
       renderLiveDash();
     },
     onStatus: (r) => {
-      const label = pill(r.status) +
-        (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
-      const box = el("cur-status");
-      if (box.innerHTML !== label) box.innerHTML = label;
+      setStatusPill(el("cur-status"), r.status, r.returncode);
       el("stop-btn").hidden = !(r.status === "running" || r.status === "detached");
       setTailBanner("");
     },
@@ -967,7 +1021,7 @@ git commit -m "perf(gui): tail the Monitor page through the shared adaptive poll
 - Test: `tests/test_dbt_page_tailer.py`
 
 **Interfaces:**
-- Consumes: `createTailPoller` (Task 1), `appendConsole` (Task 2).
+- Consumes: `createTailPoller` (Task 1), `appendConsole` + `setStatusPill` (Task 2).
 - Produces: nothing.
 
 - [ ] **Step 1: Write the failing structural test**
@@ -1054,10 +1108,7 @@ function tailRun(id) {
     isTerminal: (r) => r.status !== "running" && r.status !== "detached",
     onChunk: (chunk) => appendConsole(el("dbt-console"), chunk),
     onStatus: (r) => {
-      const label = pill(r.status) +
-        (r.returncode != null ? ` <small>rc=${r.returncode}</small>` : "");
-      const box = el("run-status");
-      if (box.innerHTML !== label) box.innerHTML = label;
+      setStatusPill(el("run-status"), r.status, r.returncode);
       setDbtBanner("");
     },
     onDone: () => setDbtBusy(false),
