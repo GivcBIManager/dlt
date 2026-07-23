@@ -182,3 +182,33 @@ def test_pollnow_resolves_after_applying_one_poll(page):
       return { chunks: chunks.slice() };   // already applied when the await returns
     }""")
     assert res["chunks"] == ["abcd"]
+
+
+def test_pollnow_joins_an_in_flight_poll_instead_of_no_oping(page):
+    """pollNow() called mid-fetch must not resolve until that poll actually
+    lands -- a naive `if (inFlight) return;` guard in poll() would let it
+    resolve immediately with nothing delivered, breaking Monitor's openFile()
+    which lays out the panel right after `await filePoller.pollNow()`."""
+    res = page.evaluate("""async () => {
+      const chunks = [];
+      let calls = 0;
+      const poller = createTailPoller({
+        fast: 10, slow: 20,
+        fetchChunk: async (offset) => {
+          calls++;
+          await new Promise(r => setTimeout(r, 150));   // well over the fast interval
+          return { offset: offset + 5, chunk: "abcde" };
+        },
+        onChunk: (c) => chunks.push(c),
+      });
+      poller.start();
+      await new Promise(r => setTimeout(r, 30));   // start()'s first poll is mid-flight
+      const before = performance.now();
+      await poller.pollNow();
+      const elapsed = performance.now() - before;
+      poller.stop();
+      return { calls, chunksAtResolve: chunks.length, elapsed };
+    }""")
+    assert res["calls"] == 1                    # joined, not a second concurrent fetch
+    assert res["chunksAtResolve"] == 1           # resolved only after the chunk landed
+    assert res["elapsed"] > 80                   # didn't resolve early on the in-flight poll

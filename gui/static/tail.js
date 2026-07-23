@@ -31,6 +31,7 @@ function createTailPoller(opts = {}) {
 
   let offset = 0, delay = fast, fails = 0;
   let timer = null, running = false, inFlight = false, watching = false;
+  let currentPoll = null;
 
   function disarm() {
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -60,8 +61,15 @@ function createTailPoller(opts = {}) {
     watching = false;
   }
 
-  async function poll() {
-    if (inFlight) return;
+  // Callers must never see a promise that resolves without a poll having
+  // been applied -- if one is already running, join it instead of no-oping.
+  function poll() {
+    if (inFlight) return currentPoll;
+    currentPoll = runPoll();
+    return currentPoll;
+  }
+
+  async function runPoll() {
     inFlight = true;
     try {
       const res = await fetchChunk(offset);
@@ -102,7 +110,9 @@ function createTailPoller(opts = {}) {
     },
     /* Stop polling. An already in-flight response still delivers. */
     stop() { halt(); },
-    /* Poll once now; resolves when that poll has been applied. */
+    /* Poll once now; resolves when that poll has been applied. If a poll is
+     * already in flight, joins it instead of no-oping -- the caller still
+     * gets a promise that only resolves once a poll has actually landed. */
     async pollNow() { disarm(); delay = fast; await poll(); },
   };
 }
