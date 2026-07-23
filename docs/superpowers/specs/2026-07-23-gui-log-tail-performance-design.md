@@ -80,10 +80,21 @@ logic are testable against a fake fetcher.
 
 **API:** `start()` (begin, or resume from the current offset after a failure —
 this is the reconnect path, and it must *not* re-read from 0 or the console
-would show the log twice), `stop()` (cancel any pending timer; a response
-already in flight still delivers), and `pollNow()` (poll once immediately,
-resolving when that poll has been applied — `openFile()` needs the first read
-applied before it can decide how to lay out the panel).
+would show the log twice), `stop()` (make the poller inert: cancel any pending
+timer *and* discard a response already in flight), and `pollNow()` (poll once
+immediately, resolving when that poll has been applied — `openFile()` needs the
+first read applied before it can decide how to lay out the panel; if a poll is
+already in flight it joins that one rather than no-opping).
+
+`stop()` must discard the in-flight response, not deliver it. An earlier draft
+of this design had it deliver — on the reasoning that those bytes were asked
+for — which is wrong here because the callbacks write into DOM that a log
+switch has already reassigned. Concretely: `openFile("b.log")` stops the poller
+and clears `#file-content`, then `a.log`'s outstanding response lands and
+appends `a.log`'s bytes into the console now showing `b.log`, and feeds those
+lines into the shared `fileDash` parser. `viewRun()` has the same shape when
+switching runs. Implemented with a generation counter bumped on stop and
+re-checked after every `await` that can span one.
 
 There is deliberately no `restart()`. Every call site that needs a fresh read
 (`viewRun`, `openFile`, `tailRun`) builds a new poller, which has to capture the
@@ -192,8 +203,14 @@ unit-testable directly:
   and a chunk returned by that final poll is still delivered;
 - consecutive throws increment `onError` and stop at `maxFails`; a success in
   between resets the counter;
-- `stop()` cancels a pending timer and no further `fetchChunk` occurs. (A
-  response already in flight still delivers — those bytes were asked for.)
+- `stop()` cancels a pending timer, no further `fetchChunk` occurs, and a
+  response already in flight is discarded rather than delivered — no `onChunk`,
+  `onStatus`, `onDone` or `onError` fires for it.
+- `stop()` followed immediately by `start()` on the same instance, with a fetch
+  still outstanding, resumes cleanly. The stale in-flight promise must not be
+  handed to the restarted poller, or it resolves under the old generation, the
+  re-arm is skipped, and the poller goes permanently dead. This is reachable
+  from the Monitor page's auto-refresh checkbox.
 
 DOM wiring (append path, render coalescing, scroll anchoring, visibility pause)
 is verified by tailing a real `oracle_to_iceberg` run from the Run page and a
