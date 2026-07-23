@@ -78,8 +78,16 @@ logic are testable against a fake fetcher.
 | `isTerminal(res)` | defaults to `() => false` — see below |
 | `fast`, `slow`, `maxFails` | cadence + retry knobs (defaults below) |
 
-**API:** `start()`, `stop()`, `restart()` (reset offset + failures, poll now),
-`kick()` (poll now, keep offset).
+**API:** `start()` (begin, or resume from the current offset after a failure —
+this is the reconnect path, and it must *not* re-read from 0 or the console
+would show the log twice), `stop()` (cancel any pending timer; a response
+already in flight still delivers), and `pollNow()` (poll once immediately,
+resolving when that poll has been applied — `openFile()` needs the first read
+applied before it can decide how to lay out the panel).
+
+There is deliberately no `restart()`. Every call site that needs a fresh read
+(`viewRun`, `openFile`, `tailRun`) builds a new poller, which has to capture the
+new run/file id in its `fetchChunk` closure anyway.
 
 `isTerminal` **must default to never-terminal**, not to a status check. Only
 `/api/runs/<id>/tail` returns a `status` field; `/api/logs/<name>` returns
@@ -104,7 +112,7 @@ Cadence:
 - `SLOW = 2000` ms — ceiling.
 - Quiet backoff: `delay = min(delay * 1.5, SLOW)` after each empty chunk.
 - Any non-empty chunk snaps the delay back to `FAST`.
-- `start()`, `restart()`, `kick()` and refocus poll immediately at `FAST`.
+- `start()`, `pollNow()` and refocus poll immediately at `FAST`.
 
 `fast` and `slow` are named constants exposed as options so they can be retuned
 without editing the loop.
@@ -147,12 +155,14 @@ effect on refocus.
 ### 6. Call-site migration
 
 - **`run.html`** — keeps `liveDash`, `setTailBanner()` and the stop-button
-  wiring; `viewRun()` builds a poller, `reconnectTail()` calls `restart()`.
-  `onDone` flushes the dash and refreshes the run list, as today.
+  wiring; `viewRun()` builds a poller, `reconnectTail()` calls `start()` to
+  resume from where the failed poll left off. `onDone` flushes the dash and
+  refreshes the run list, as today.
 - **`logs.html`** — `refreshFile()` becomes the poller's `onChunk`; the
-  `fileOffset === 0` "fresh file" branch maps to `restart()` from `openFile()`.
-  `loadFiles()` moves **off** the tail cadence onto its own 15 s timer, since
-  the file list (name, size, mtime) does not need re-fetching every 3 s.
+  `fileOffset === 0` "fresh file" branch becomes a new poller plus an awaited
+  `pollNow()` in `openFile()`. `loadFiles()` moves **off** the tail cadence onto
+  its own 15 s timer, since the file list (name, size, mtime) does not need
+  re-fetching every 3 s.
 - **`dbt.html`** — drops its duplicate loop; `tailRun()` builds a poller and
   keeps `setDbtBusy()` / `setDbtBanner()` in the callbacks.
 
@@ -182,7 +192,8 @@ unit-testable directly:
   and a chunk returned by that final poll is still delivered;
 - consecutive throws increment `onError` and stop at `maxFails`; a success in
   between resets the counter;
-- `stop()` cancels a pending timer and no callback fires afterwards.
+- `stop()` cancels a pending timer and no further `fetchChunk` occurs. (A
+  response already in flight still delivers — those bytes were asked for.)
 
 DOM wiring (append path, render coalescing, scroll anchoring, visibility pause)
 is verified by tailing a real `oracle_to_iceberg` run from the Run page and a
