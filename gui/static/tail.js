@@ -103,14 +103,23 @@ function createTailPoller(opts = {}) {
         halt();
         // The server reads the log's size BEFORE the run status, so bytes
         // written between those two reads would be lost. Fetch once more.
-        // halt() just bumped gen, but the check above already passed for
-        // this poll -- that bump must not suppress this poll's own final
-        // delivery, so nothing below re-checks gen.
+        // halt() just bumped gen -- that bump ALONE must not suppress this
+        // poll's own final delivery (a run ending with no later stop() must
+        // still show its last bytes and fire onDone: the happy path). Only a
+        // SUBSEQUENT external stop()/restart landing while this final fetch
+        // is in flight should suppress it, so snapshot the post-halt
+        // generation and compare against that, not against myGen.
+        const finalGen = gen;
         try {
           const last = await fetchChunk(offset);
+          if (finalGen !== gen) return;   // stop()/restart landed during this fetch
           if (typeof last.offset === "number") offset = last.offset;
           if (last.chunk) onChunk(last.chunk, last);
-        } catch (exc) { /* best effort: the run is already over */ }
+        } catch (exc) {
+          if (finalGen !== gen) return;
+          /* best effort otherwise: the run is already over */
+        }
+        if (finalGen !== gen) return;    // guard onDone too
         onDone(res);
         return;
       }

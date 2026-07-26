@@ -176,6 +176,42 @@ def test_terminal_status_triggers_one_final_poll(page):
     assert res["done"] == ["finished"]             # onDone fired exactly once
 
 
+def test_terminal_final_poll_honors_a_later_stop(page):
+    """The "one extra final poll" after a terminal status must still respect
+    a stop() that arrives while that final fetch is in flight. halt()'s own
+    gen bump must NOT suppress the normal terminal delivery (covered by
+    test_terminal_status_triggers_one_final_poll above) -- but a SUBSEQUENT
+    external stop() during that same in-flight fetch must discard both the
+    final chunk and onDone."""
+    res = page.evaluate("""async () => {
+      let n = 0;
+      const chunks = [], done = [];
+      const poller = createTailPoller({
+        fast: 10,
+        fetchChunk: async (offset) => {
+          n++;
+          if (n === 1) return { offset: 5, chunk: "aaaaa", status: "running" };
+          if (n === 2) return { offset: 5, chunk: "",      status: "finished" };
+          await new Promise(r => setTimeout(r, 100));   // final poll is slow
+          return { offset: 9, chunk: "STALE-TAIL", status: "finished" };
+        },
+        onChunk: (c) => chunks.push(c),
+        onDone: (r) => done.push(r.status),
+        isTerminal: (r) => r.status !== "running" && r.status !== "detached",
+      });
+      poller.start();
+      // By 40ms the terminal status (poll 2) has landed and the final poll
+      // (call 3, ~100ms) is in flight -- stop() while it's still pending.
+      await new Promise(r => setTimeout(r, 40));
+      poller.stop();
+      await new Promise(r => setTimeout(r, 300));   // let the slow final fetch land
+      return { calls: n, chunks, done };
+    }""")
+    assert res["calls"] == 3          # the in-flight final fetch still ran to completion
+    assert res["chunks"] == ["aaaaa"] # but its stale chunk was NOT delivered
+    assert res["done"] == []          # nor was onDone
+
+
 def test_default_is_never_terminal(page):
     """Monitor's /api/logs/<name> has no status field; a status-based default
     would see undefined, call it terminal and stop after one poll."""
