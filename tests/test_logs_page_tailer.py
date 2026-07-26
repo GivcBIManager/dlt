@@ -38,3 +38,20 @@ def test_logs_console_appends_without_reserializing(logs_html):
 def test_flow_run_tailer_is_left_alone(logs_html):
     # frTail already guards with frBusy and is cursor-based, not offset-based.
     assert "frBusy" in logs_html
+
+
+def test_reconnect_file_tail_is_defined(logs_html):
+    """Monitor must match Run/Models: a dead poller needs a reconnect path,
+    not silent freezing behind a still-ticked auto-refresh checkbox."""
+    assert "function reconnectFileTail(" in logs_html
+
+
+def test_file_tail_failure_shows_a_reconnect_link(logs_html):
+    # Scoped to the file tailer's own onError -- must wire the same
+    # onclick='reconnectFileTail();return false;' pattern run.html uses for
+    # #tail-banner, not just define the function unused.
+    assert "onclick='reconnectFileTail();return false;'" in logs_html
+
+
+def test_file_tail_uses_a_banner_helper(logs_html):
+    assert "setFileBanner(" in logs_html

@@ -27,6 +27,7 @@
     <!-- parsed progress dashboard (built from the selected log file) -->
     {% include "_dash.html" %}
 
+    <div id="file-tail-banner" class="banner warn" role="status" hidden></div>
     <div id="file-content" class="console">—</div>
   </div>
 
@@ -121,6 +122,24 @@ let curFile = null, filePoller = null, filesTimer = null;
 // contents, so it no longer rides the tail cadence.
 const FILES_REFRESH_MS = 15000;
 const renderFileDash = coalesce(() => fileDash.render());
+
+// A no-op when the text is unchanged: the poller calls this on every tick and
+// the polls are now ~3x more frequent, so an unconditional innerHTML write
+// would be pure churn. Mirrors run.html's setTailBanner.
+function setFileBanner(html) {
+  const b = el("file-tail-banner");
+  if (!b || b.innerHTML === html) return;
+  b.innerHTML = html;
+  b.hidden = !html;
+  b.className = "banner " + (/Connection lost/.test(html) ? "error" : "warn");
+}
+// start() resumes from the current offset, so a reconnect picks up exactly
+// where the failed poll left off rather than re-downloading the whole file.
+function reconnectFileTail() {
+  if (!filePoller) return;
+  setFileBanner("Reconnecting…");
+  filePoller.start();
+}
 
 // Parse the selected log file into the same progress dashboard as the Run page.
 const fileDash = createLogDash();
@@ -272,6 +291,7 @@ async function loadFiles() {
 }
 async function openFile(name) {
   curFile = name;
+  setFileBanner("");
   el("file-title").textContent = name;
   $$("#files-table tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.f === name));
   if (filePoller) filePoller.stop();
@@ -288,7 +308,12 @@ async function openFile(name) {
       fileDash.feed(chunk);
       renderFileDash();
     },
-    onError: (fails, max) => { if (fails === 1) err("Log refresh failed — retrying"); },
+    onStatus: () => setFileBanner(""),
+    onError: (fails, max) => {
+      setFileBanner(fails >= max
+        ? "Connection lost. <a href='#' onclick='reconnectFileTail();return false;'>Reconnect</a>"
+        : `Reconnecting… (${fails}/${max})`);
+    },
   });
   // Await the first read: the panel layout below depends on whether the parsed
   // summary produced anything.
