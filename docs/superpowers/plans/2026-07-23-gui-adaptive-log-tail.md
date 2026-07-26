@@ -38,7 +38,7 @@
   - `opts.onError(fails: number, max: number, err: Error) -> void` — called on each throw.
   - `opts.isTerminal(res: object) -> boolean` — defaults to `() => false`.
   - `opts.fast`, `opts.slow`, `opts.maxFails` — numbers, defaulting to 400 / 2000 / 10.
-  - `start()` begins polling, or resumes from the current offset after a failure — this is the reconnect path, and it must not re-read from 0 or the console would show the log twice. `pollNow()` returns a Promise that resolves once a single immediate poll has been applied. `stop()` cancels any pending timer; a response already in flight still delivers.
+  - `start()` begins polling, or resumes from the current offset after a failure — this is the reconnect path, and it must not re-read from 0 or the console would show the log twice. `pollNow()` returns a Promise that resolves once a single immediate poll has been applied. `stop()` makes the poller fully inert: it cancels any pending timer *and* discards a response already in flight (implemented mid-branch via a generation counter — see the amended spec; this line originally said the in-flight response still delivers, which caused a cross-log splice on file/run switch).
   - There is deliberately no `restart()`: every call site that needs a fresh read (`viewRun`, `openFile`, `tailRun`) builds a new poller, which captures the new run/file id in its `fetchChunk` closure anyway.
 
 - [ ] **Step 1: Add Playwright to the dev requirements**
@@ -352,7 +352,8 @@ function createTailPoller(opts = {}) {
       running = true; fails = 0; delay = fast;
       watch(); disarm(); poll();
     },
-    /* Stop polling. An already in-flight response still delivers. */
+    /* Stop polling and go inert: an in-flight response is discarded, not delivered.
+       (Implemented mid-branch with a generation counter; see the amended spec.) */
     stop() { halt(); },
     /* Poll once now; resolves when that poll has been applied. */
     async pollNow() { disarm(); delay = fast; await poll(); },
