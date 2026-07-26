@@ -27,6 +27,7 @@
     <!-- parsed progress dashboard (built from the selected log file) -->
     {% include "_dash.html" %}
 
+    <div id="file-tail-banner" class="banner warn" role="status" hidden></div>
     <div id="file-content" class="console">—</div>
   </div>
 
@@ -116,7 +117,29 @@
 
 {% block scripts %}
 <script>
-let curFile = null, autoTimer = null, fileOffset = 0;
+let curFile = null, filePoller = null, filesTimer = null;
+// The file list (name, size, mtime) changes far more slowly than a log's
+// contents, so it no longer rides the tail cadence.
+const FILES_REFRESH_MS = 15000;
+const renderFileDash = coalesce(() => fileDash.render());
+
+// A no-op when the text is unchanged: the poller calls this on every tick and
+// the polls are now ~3x more frequent, so an unconditional innerHTML write
+// would be pure churn. Mirrors run.html's setTailBanner.
+function setFileBanner(html) {
+  const b = el("file-tail-banner");
+  if (!b || b.innerHTML === html) return;
+  b.innerHTML = html;
+  b.hidden = !html;
+  b.className = "banner " + (/Connection lost/.test(html) ? "error" : "warn");
+}
+// start() resumes from the current offset, so a reconnect picks up exactly
+// where the failed poll left off rather than re-downloading the whole file.
+function reconnectFileTail() {
+  if (!filePoller) return;
+  setFileBanner("Reconnecting…");
+  filePoller.start();
+}
 
 // Parse the selected log file into the same progress dashboard as the Run page.
 const fileDash = createLogDash();
@@ -268,35 +291,40 @@ async function loadFiles() {
 }
 async function openFile(name) {
   curFile = name;
-  fileOffset = 0;  // fresh file -> re-read from the start on the next refresh
+  setFileBanner("");
   el("file-title").textContent = name;
   $$("#files-table tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.f === name));
-  await refreshFile();
+  if (filePoller) filePoller.stop();
+  el("file-content").textContent = "";
+  fileDash.reset();
+  filePoller = createTailPoller({
+    // /api/logs/<name> returns no status field, so isTerminal is left at its
+    // never-terminal default -- the auto-refresh checkbox stops this loop.
+    fetchChunk: (offset) => apiGet(`/api/logs/${encodeURIComponent(name)}?offset=${offset}`),
+    onChunk: (chunk) => {
+      const c = el("file-content");
+      if (c.textContent === "(empty)") c.textContent = "";
+      appendConsole(c, chunk);
+      fileDash.feed(chunk);
+      renderFileDash();
+    },
+    onStatus: () => setFileBanner(""),
+    onError: (fails, max) => {
+      setFileBanner(fails >= max
+        ? "Connection lost. <a href='#' onclick='reconnectFileTail();return false;'>Reconnect</a>"
+        : `Reconnecting… (${fails}/${max})`);
+    },
+  });
+  // Await the first read: the panel layout below depends on whether the parsed
+  // summary produced anything.
+  await filePoller.pollNow();
+  fileDash.flush();
+  fileDash.render();
+  if (!el("file-content").textContent) el("file-content").textContent = "(empty)";
   // Summary-first: when a parsed summary is available, collapse the raw log by
   // default (the "Raw log" button reveals it). Fall back to raw when there's none.
   el("file-panel").classList.toggle("raw-hidden", !el("run-dash").hidden);
-}
-async function refreshFile() {
-  if (!curFile) return;
-  try {
-    // Offset-based tail: only transfer + parse bytes appended since last poll.
-    const fresh = fileOffset === 0;
-    const r = await apiGet(`/api/logs/${encodeURIComponent(curFile)}?offset=${fileOffset}`);
-    const c = el("file-content");
-    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-    if (fresh) {
-      c.textContent = r.chunk || "(empty)";
-      fileDash.reset();
-      if (r.chunk) { fileDash.feed(r.chunk); fileDash.flush(); }
-    } else if (r.chunk) {
-      if (c.textContent === "(empty)") c.textContent = "";
-      c.textContent += r.chunk;
-      fileDash.feed(r.chunk);
-    }
-    fileOffset = r.offset;
-    fileDash.render();
-    if (atBottom) c.scrollTop = c.scrollHeight;
-  } catch (e) { err(e.message); }
+  if (el("auto").checked) filePoller.start();
 }
 async function purgeLogs() {
   const before = el("purge-date").value;
@@ -486,8 +514,13 @@ el("refresh-dq").onclick = () => dqView.load();
 el("refresh-runlog").onclick = () => runlogView.load();
 el("refresh-control").onclick = () => controlView.load();
 el("auto").onchange = (e) => {
-  clearInterval(autoTimer);
-  if (e.target.checked) autoTimer = setInterval(() => { refreshFile(); loadFiles(); }, 3000);
+  clearInterval(filesTimer); filesTimer = null;
+  if (e.target.checked) {
+    if (filePoller) filePoller.start();
+    filesTimer = setInterval(loadFiles, FILES_REFRESH_MS);
+  } else if (filePoller) {
+    filePoller.stop();
+  }
 };
 loadFiles();
 </script>

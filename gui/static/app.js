@@ -58,6 +58,40 @@ function pill(status) {
   return `<span class="pill ${esc(s)}">${esc(status || "—")}</span>`;
 }
 
+// Append log text to a <pre>-style console. Uses a text node rather than
+// `node.textContent += text`, which reads back and re-serializes the entire
+// console on every append -- cost that grows with the log and showed up as
+// increasingly laggy tailing. Stays pinned to the bottom only if the view
+// already was, so a user who scrolled up to read something is left alone.
+function appendConsole(node, text) {
+  const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 30;
+  node.append(document.createTextNode(text));
+  if (atBottom) node.scrollTop = node.scrollHeight;
+}
+
+// Collapse repeated calls into one invocation per animation frame, so a burst
+// of fast polls costs a single layout pass instead of one per poll.
+function coalesce(fn) {
+  let pending = false;
+  return function () {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; fn(); });
+  };
+}
+
+// Render a run-status pill, plus an rc=N suffix once the process has exited.
+// Shared by the Run and Models pages. The write is skipped when the markup is
+// unchanged: this is called on every poll, and the polls are now ~3x more
+// frequent, so an unconditional innerHTML write would rebuild the pill node
+// for nothing on the vast majority of ticks.
+function setStatusPill(box, status, returncode) {
+  if (!box) return;
+  const label = pill(status) +
+    (returncode != null ? ` <small>rc=${returncode}</small>` : "");
+  if (box.innerHTML !== label) box.innerHTML = label;
+}
+
 // Build an HTML table from columns + array-of-objects rows.
 // opts.pillCols: column names rendered as status pills.
 // opts.numCols: column names right-aligned as numbers.
