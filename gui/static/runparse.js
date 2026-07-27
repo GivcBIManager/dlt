@@ -150,7 +150,10 @@ function makePipelineView(opts = {}) {
       dash.rows = +m[8].replace(/,/g, "");
       dash.rss = m[9]; dash.rssPeak = m[10]; dash.arrow = m[11];
       if (dash.tablesTotal && dash.unitsTotal) dash.branchesTotal = Math.round(dash.unitsTotal / dash.tablesTotal);
-      if (dash.stage.startsWith("load:")) { const t = dash.tables.get(dash.stage.slice(5)); if (t && t.load === "pending") t.load = "loading"; }
+      if (dash.stage.startsWith("load[")) {
+        const names = dash.stage.slice(dash.stage.indexOf(":") + 1).split(",");
+        for (const name of names) { const t = dash.tables.get(name); if (t && t.load === "pending") t.load = "loading"; }
+      }
       return;
     }
     if ((m = RE.unit.exec(line))) { dash.started = true; const t = tdef(m[2]); t.ok++; t.branches.add(m[1]); t.rows += +m[3].replace(/,/g, ""); bdef(m[1]).ok++; return; }
@@ -172,7 +175,7 @@ function makePipelineView(opts = {}) {
   }
   function stageClass(stage) {
     if (!stage) return "";
-    if (stage.startsWith("load:") || stage.startsWith("draining")) return "st-load";
+    if (stage.startsWith("load[") || stage.startsWith("draining")) return "st-load";
     if (stage === "finalize" || stage === "done") return "st-final";
     return "";
   }
