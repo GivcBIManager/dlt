@@ -274,6 +274,38 @@ def _plan_table(
     return plan
 
 
+def _open_dest_table(settings: Settings, table_name: str):
+    """Open ``<dataset>.<table>`` from the configured Iceberg catalog, or None.
+
+    Destination READS go through the persistent catalog (``[iceberg_catalog]``
+    config), NOT a dlt pipeline's local schema: a per-table pipeline's schema
+    is empty until its first successful run, so a schema-based read
+    (``get_iceberg_tables``) would silently degrade every destination-dependent
+    helper on that table's first run under a fresh pipeline -- lost insert_at
+    carry-forward, a squash that treats prior history as this run's snapshots.
+    The catalog knows every table ever loaded regardless of local state. The
+    dlt WRITE path is untouched.
+
+    Best-effort by contract and NEVER raises: a missing table (normal first
+    load) returns None silently; any other failure logs a warning and returns
+    None so the caller degrades exactly as before.
+    """
+    try:
+        from dlt.common.libs.pyiceberg import get_catalog
+        from pyiceberg.exceptions import NoSuchTableError
+    except ImportError as exc:
+        log.warning("pyiceberg catalog access unavailable: %s", exc)
+        return None
+    try:
+        return get_catalog().load_table(f"{settings.dataset_name}.{table_name}")
+    except NoSuchTableError:
+        return None  # first load: the table does not exist yet
+    except Exception as exc:  # noqa: BLE001 - best effort by contract
+        log.warning("[%s] could not open destination table via catalog: %s",
+                    table_name, exc)
+        return None
+
+
 def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Schema:
     """Replace ``null``-typed columns in the unified schema with concrete types.
 
