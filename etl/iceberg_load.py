@@ -1032,13 +1032,28 @@ def apply_snapshot_retention(settings: Settings) -> None:
             log.warning("[%s] snapshot retention failed: %s", name, exc)
 
 
-def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None):
+def _table_pipeline_name(settings: Settings, tdef: TableDef) -> str:
+    """Stable per-table dlt pipeline name: ``<pipeline_name>__<table>``.
+
+    Deterministic (no assignment state) and stable across runs, so a table's
+    local schema/state/pending packages persist in its own working dir under
+    dlt's pipelines_dir. ``dataset_table_name`` is already normalized
+    lowercase, so the result is a valid pipeline/directory name.
+    """
+    return f"{settings.pipeline_name}__{tdef.dataset_table_name}"
+
+
+def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None,
+                   pipeline_name: Optional[str] = None):
     # pipelines_dir is dlt's LOCAL bookkeeping (schema/state/load packages), not
     # the destination. None keeps dlt's default (~/.dlt/pipelines); a rebuild
     # after a commit timeout passes a fresh dir so it can't re-adopt a poisoned
     # pipeline's still-open load package (see _PipelineHolder.rebuild).
+    # pipeline_name overrides the settings-level name for per-table load
+    # pipelines (see _table_pipeline_name); None keeps the shared name for
+    # GUI/maintenance callers. Neither affects where data lands.
     return dlt.pipeline(
-        pipeline_name=settings.pipeline_name,
+        pipeline_name=pipeline_name or settings.pipeline_name,
         destination=dlt.destinations.filesystem(
             bucket_url=settings.destination_bucket_url
         ),
