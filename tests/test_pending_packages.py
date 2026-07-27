@@ -99,7 +99,12 @@ def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch, pg_meta
     assert not pipeline.has_pending_data
 
 
-def test_each_table_sweeps_its_own_pending_debris_before_loading(tmp_path, monkeypatch, pg_meta):
+class _FakeStore:
+    def upsert_control_state(self, rows):
+        pass
+
+
+def test_each_table_sweeps_its_own_pending_debris_before_loading(tmp_path, monkeypatch):
     """Crash debris in a table's own pipeline is swept just before that table
     loads (the per-table replacement for the old startup sweep)."""
     pipeline = _pipeline(tmp_path)
@@ -131,7 +136,7 @@ def test_each_table_sweeps_its_own_pending_debris_before_loading(tmp_path, monke
         run_extraction_fn=run_extraction, tables=[tdef],
         settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False,
                           snapshot_maintenance=False),
-        control=iceberg_load.ControlStore(pg_meta), run_id="test-run",
+        control=iceberg_load.ControlStore(_FakeStore()), run_id="test-run",
         total_branches=1, branches_in_run=1)
 
     assert built == ["oracle_to_iceberg__foo"]

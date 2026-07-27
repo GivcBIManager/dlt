@@ -110,7 +110,12 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
     assert cleared == []
 
 
-def test_load_and_record_continues_past_a_timed_out_table(tmp_path, monkeypatch, pg_meta):
+class _FakeStore:
+    def upsert_control_state(self, rows):
+        pass
+
+
+def test_load_and_record_continues_past_a_timed_out_table(tmp_path, monkeypatch):
     """Table A's hung commit must not stop table B: each table has its own
     pipeline, so A is FAILED+timed-out and simply abandoned, B succeeds."""
     built = []
@@ -152,7 +157,7 @@ def test_load_and_record_continues_past_a_timed_out_table(tmp_path, monkeypatch,
         run_extraction_fn=run_extraction, tables=[t_hang, t_ok],
         settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False,
                           snapshot_maintenance=False, load_workers=1),
-        control=iceberg_load.ControlStore(pg_meta),
+        control=iceberg_load.ControlStore(_FakeStore()),
         run_id="r", total_branches=2, branches_in_run=1)
 
     by_name = {p.tdef.dataset_table_name: p for p in summary.plans}

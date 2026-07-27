@@ -1050,8 +1050,8 @@ def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None,
     # the destination. None keeps dlt's default (~/.dlt/pipelines); callers
     # (mainly tests) may point it at an isolated dir. pipeline_name overrides
     # the settings-level name for per-table load pipelines (see
-    # _table_pipeline_name); None keeps the shared name for GUI/maintenance
-    # callers. Neither affects where data lands.
+    # _table_pipeline_name); None keeps the settings-level shared name (used
+    # by tests/tooling). Neither affects where data lands.
     return dlt.pipeline(
         pipeline_name=pipeline_name or settings.pipeline_name,
         destination=dlt.destinations.filesystem(
@@ -1283,11 +1283,11 @@ def clear_pending_packages(pipeline, context: str) -> None:
     """Drop any pending (extracted/normalized) load packages left on the pipeline.
 
     Every ``pipeline.run`` first retries pending packages before touching new
-    data, and all tables share one pipeline -- so one poisoned package (e.g. a
-    bad unique_key failing at normalize) would block every later table's run
-    with the same load_id. Watermarks only advance on successful commits, so a
-    dropped table simply re-extracts next run. Best-effort: cleanup must never
-    mask the failure that triggered it.
+    data. Each table now has its own pipeline, so a poisoned package (e.g. a
+    bad unique_key failing at normalize) can only ever block that table's own
+    next run -- it is swept here just before the table's load. Watermarks only
+    advance on successful commits, so a dropped table simply re-extracts next
+    run. Best-effort: cleanup must never mask the failure that triggered it.
     """
     try:
         if pipeline.has_pending_data:
@@ -1473,8 +1473,9 @@ def _load_one_table(
         # The commit hung past the watchdog: a daemon worker is still stuck
         # inside this pipeline and cannot be killed, so we must NOT touch it
         # (clear_pending_packages / reuse would race the zombie). Flag the plan
-        # so the orchestrator abandons and rebuilds the pipeline. Watermarks for
-        # any branch that committed before the hang were already advanced.
+        # so the orchestrator simply abandons this pipeline -- nothing else
+        # uses it this run, and there is no rebuild. Watermarks for any branch
+        # that committed before the hang were already advanced.
         plan.load_status = "FAILED"
         plan.load_timed_out = True
         plan.load_error = f"{type(exc).__name__}: {exc}"
@@ -1486,8 +1487,8 @@ def _load_one_table(
         plan.load_error = f"{type(exc).__name__}: {exc}"
         log.error("[%s] load failed: %s", tdef.dataset_table_name, exc)
         # Drop this table's stuck package: pipeline.run retries pending
-        # packages before new data, so leaving it would fail every later
-        # table's run (and observability) with the same load_id.
+        # packages before new data, so leaving it would fail this table's own
+        # next run (observability no longer runs through this pipeline).
         clear_pending_packages(pipeline, tdef.dataset_table_name)
         # Persist any per-branch watermarks that committed before the failure.
         control.save()
@@ -1538,18 +1539,32 @@ def load_and_record(
     ).start()
 
     def _load_task(tdef: TableDef, batch: list[ExtractResult]) -> TableLoadPlan:
-        # Each table loads through its OWN dlt pipeline, built on the worker
-        # thread that runs it (dlt contexts are thread-affine, so concurrent
-        # pipelines must live on separate threads). The name is stable across
-        # runs, so pending debris from a crashed/failed earlier run can only
-        # ever belong to this table -- swept here instead of once at startup.
-        # A commit timeout poisons only this pipeline; nothing else touches it
-        # this run, so it is simply abandoned (the old shared-pipeline holder's
-        # rebuild machinery is gone). The zombie's leftover package is dropped
-        # by this same sweep on the table's next run.
-        pipeline = build_pipeline(
-            settings, pipeline_name=_table_pipeline_name(settings, tdef))
-        clear_pending_packages(pipeline, f"{tdef.dataset_table_name}:pre-load")
+        # Each table gets its OWN pipeline object with its own local working
+        # dir; pipeline.run is called on this explicit object rather than
+        # resolved from dlt's (thread-affine) global context, and the commit
+        # itself runs on an ephemeral commit:<label> watchdog thread, not here.
+        # The name is stable across runs, so pending debris from a crashed/
+        # failed earlier run can only ever belong to this table -- swept here
+        # instead of once at startup. A commit timeout poisons only this
+        # pipeline; nothing else touches it this run, so it is simply
+        # abandoned. The zombie's leftover package is dropped by this same
+        # sweep on the table's next run.
+        try:
+            pipeline = build_pipeline(
+                settings, pipeline_name=_table_pipeline_name(settings, tdef))
+            clear_pending_packages(pipeline, f"{tdef.dataset_table_name}:pre-load")
+        except Exception as exc:  # noqa: BLE001 - isolate per-table setup failures
+            # A build/sweep failure must still produce a plan so this table's
+            # results flow through finalize (observability + retention) like
+            # every other table -- an uncaught exception here would instead
+            # propagate through f.result() outside the finalize try/finally,
+            # silently dropping observability for tables that DID load.
+            log.error("[%s] pipeline build failed: %s", tdef.dataset_table_name, exc)
+            plan = TableLoadPlan(tdef=tdef, success=[], failed=list(batch))
+            plan.load_status = "FAILED"
+            plan.load_error = f"{type(exc).__name__}: {exc}"
+            monitor.record_table_loaded("FAILED")
+            return plan
         plan = _load_one_table(pipeline, tdef, batch, settings, control,
                                total_branches, branches_in_run, monitor)
         if plan.load_timed_out:

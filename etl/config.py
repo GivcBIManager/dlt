@@ -593,6 +593,12 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
             raise AttributeError(f"Unknown setting override: {key}")
         setattr(s, key, value)
 
+    # Overrides are applied via setattr AFTER __init__ already ran
+    # __post_init__ once, so an override (e.g. --load-workers 0) would
+    # otherwise bypass the load_workers clamp / merge_hash_column lowercasing.
+    # Re-running it is idempotent and restores both invariants.
+    s.__post_init__()
+
     # normalize Path-typed fields that may arrive as strings
     s.staging_dir = Path(s.staging_dir)
     return s
