@@ -1,6 +1,7 @@
 """load_workers: parallel load slots, default 2, never below 1."""
 from __future__ import annotations
 
+from etl import config
 from etl.config import Settings
 
 
@@ -18,5 +19,4 @@ def test_load_workers_accepts_higher_values():
 
 
 def test_load_workers_override_is_clamped_via_load_settings():
-    from etl import config
     assert config.load_settings({"load_workers": 0}).load_workers == 1

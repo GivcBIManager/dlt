@@ -24,6 +24,7 @@ UI_EDITABLE = {
     "snapshot_maintenance", "snapshot_expire_days", "snapshot_min_to_keep",
     "progress_enabled", "progress_interval_s",
     "load_batch_rows", "load_group_max_bytes", "load_commit_timeout_s",
+    "load_workers",
     "cleanup_staging_after_load", "dq_hash_delta_tolerance_pct",
 }
 
@@ -44,6 +45,7 @@ def test_settings_page_declares_every_editable_key():
 def test_settings_page_curates_new_load_keys():
     # New keys must have curated rows (k: "...") -- not fall into "Other".
     for key in ("load_group_max_bytes", "load_batch_rows", "load_commit_timeout_s",
+                "load_workers",
                 "cleanup_staging_after_load", "progress_enabled",
                 "progress_interval_s", "pool_backoff_base_s", "pool_backoff_cap_s"):
         assert f'k: "{key}"' in SETTINGS_HTML, f"{key} has no curated row"
