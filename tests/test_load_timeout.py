@@ -96,6 +96,7 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
     cleared = []
     monkeypatch.setattr(iceberg_load, "clear_pending_packages",
                         lambda *a, **k: cleared.append(a))
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda *a, **k: None)
 
     plan = iceberg_load._load_one_table(
         _pipeline(tmp_path), tdef, [result], Settings(mode=MODE_INCREMENTAL),

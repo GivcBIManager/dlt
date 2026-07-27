@@ -87,6 +87,7 @@ def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch, pg_meta
     # INCREMENTAL + branch subset -> merge path, which enters the load via
     # _existing_insert_at; failing there exercises the except handler.
     monkeypatch.setattr(iceberg_load, "_existing_insert_at", boom)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda *a, **k: None)
 
     plan = iceberg_load._load_one_table(
         pipeline, tdef, [result], Settings(mode=MODE_INCREMENTAL),

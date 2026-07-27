@@ -61,3 +61,16 @@ def test_open_dest_table_asks_for_dataset_qualified_identifier(tmp_path, monkeyp
 
     assert iceberg_load._open_dest_table(Settings(), "bar") is not None
     assert asked == ["oasis.bar"]
+
+
+def test_snapshot_ids_come_from_catalog_not_pipeline(tmp_path, monkeypatch):
+    cat = _cat(tmp_path)
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    tbl = cat.create_table("oasis.hist", schema=rows.schema)
+    tbl.append(rows)
+    tbl.append(rows)          # 2 snapshots of prior-run history
+    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_catalog", lambda: cat)
+
+    ids = iceberg_load._table_snapshot_ids(Settings(), "hist")
+
+    assert len(ids) == 2      # a fresh per-table pipeline still sees history

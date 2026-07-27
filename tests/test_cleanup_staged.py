@@ -163,6 +163,7 @@ def test_load_one_table_merge_deletes_staged(tmp_path, monkeypatch):
     monkeypatch.setattr(iceberg_load, "_existing_insert_at", lambda *a, **k: None)
     monkeypatch.setattr(iceberg_load, "_iceberg_resource", lambda *a, **k: None)
     monkeypatch.setattr(iceberg_load, "_run_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda *a, **k: None)
     tdef = _merge_tdef()
     staged = _staged_parquet(tmp_path, tdef, "b1")
     result = _extract_result(tdef, "b1", 1, staged)

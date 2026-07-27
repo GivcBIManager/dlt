@@ -1,6 +1,7 @@
 from __future__ import annotations
 import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
+from etl import iceberg_load
 from etl.iceberg_load import _table_is_hash_ready
 
 
@@ -25,15 +26,14 @@ def test_hash_ready_true_only_when_column_present(tmp_path, monkeypatch):
     t_ready.append(with_hash)
     t_plain = cat.create_table("oasis.plain", schema=without.schema)
     t_plain.append(without)
+    from etl.config import Settings
 
-    # The function does a call-time `from dlt.common.libs.pyiceberg import
-    # get_iceberg_tables`, so patch the attribute on that source module.
-    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
-                        lambda pipeline, *_names: pipeline)   # pipeline IS the {name: table} map
-
-    assert _table_is_hash_ready({_Tdef.dataset_table_name: t_ready}, _Tdef, "merge_hash") is True
-    assert _table_is_hash_ready({_Tdef.dataset_table_name: t_plain}, _Tdef, "merge_hash") is False
-    assert _table_is_hash_ready({}, _Tdef, "merge_hash") is False   # table missing
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t_ready)
+    assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is True
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t_plain)
+    assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is False
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: None)
+    assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is False
 
 
 import pyarrow.compute as pc
@@ -164,12 +164,10 @@ def test_existing_insert_at_hash_ready_projects_and_renames(tmp_path, monkeypatc
     # Directly exercises _existing_insert_at's hash_ready branch: scan -> select
     # (merge_hash, insert_at) -> rename insert -> return.
     t = _eia_stored_table(_cat(tmp_path, "eia_ok"), "eia_hash", with_hash=True)
-    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
-                        lambda pipeline, *_names: pipeline)   # pipeline IS the {name: table} map
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t)
     settings = Settings()
     unified = pa.schema([(settings.inserted_ts_column, pa.string())])
-    out = _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
-                              settings, [1], unified, hash_ready=True)
+    out = _existing_insert_at(settings, _TdefKeyed, [1], unified, hash_ready=True)
     assert out is not None
     assert set(out.column_names) == {"merge_hash", settings.inserted_ts_column}
     assert out.column(settings.inserted_ts_column).to_pylist() == ["2020-01-01"]  # stored value carried
@@ -178,12 +176,10 @@ def test_existing_insert_at_hash_ready_projects_and_renames(tmp_path, monkeypatc
 def test_existing_insert_at_hash_ready_none_when_stored_lacks_hash(tmp_path, monkeypatch):
     # Guards the missing-column path: hash_ready=True but the table has no merge_hash.
     t = _eia_stored_table(_cat(tmp_path, "eia_nohash"), "eia_hash", with_hash=False)
-    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
-                        lambda pipeline, *_names: pipeline)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t)
     settings = Settings()
     unified = pa.schema([(settings.inserted_ts_column, pa.string())])
-    assert _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
-                               settings, [1], unified, hash_ready=True) is None
+    assert _existing_insert_at(settings, _TdefKeyed, [1], unified, hash_ready=True) is None
 
 
 def test_existing_insert_at_hash_ready_normalizes_hash_col_case(tmp_path, monkeypatch):
@@ -191,13 +187,11 @@ def test_existing_insert_at_hash_ready_normalizes_hash_col_case(tmp_path, monkey
     # field -- guards Fix 1 (hash_norm = hash_col.lower()). Without it this
     # returns None even though _table_is_hash_ready (which lowers too) said ready.
     t = _eia_stored_table(_cat(tmp_path, "eia_upper"), "eia_hash", with_hash=True)
-    monkeypatch.setattr("dlt.common.libs.pyiceberg.get_iceberg_tables",
-                        lambda pipeline, *_names: pipeline)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t)
     settings = Settings()
     settings.merge_hash_column = "MERGE_HASH"   # non-lowercase config
     unified = pa.schema([(settings.inserted_ts_column, pa.string())])
-    out = _existing_insert_at({_TdefKeyed.dataset_table_name: t}, _TdefKeyed,
-                              settings, [1], unified, hash_ready=True)
+    out = _existing_insert_at(settings, _TdefKeyed, [1], unified, hash_ready=True)
     assert out is not None
     assert "merge_hash" in out.column_names
     assert out.column(settings.inserted_ts_column).to_pylist() == ["2020-01-01"]

@@ -23,7 +23,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField, StringType
 
 from etl import iceberg_load
-from etl.config import CATEGORY_TRANSACTION, TableDef
+from etl.config import CATEGORY_TRANSACTION, Settings, TableDef
 
 
 def _tdef() -> TableDef:
@@ -54,32 +54,24 @@ def _run_schema() -> pa.Schema:
 
 
 def test_merge_widens_key_to_destination_string(monkeypatch):
-    import dlt.common.libs.pyiceberg as ice
+    requested = []
 
-    calls = []
+    def fake_open(settings, name):
+        requested.append(name)
+        return _StoredTable()
 
-    def fake_get_iceberg_tables(pipeline, *names):
-        calls.append(names)
-        # No name => open ALL tables => a single broken sibling would raise.
-        if not names:
-            raise RuntimeError("broken sibling table")
-        return {names[0]: _StoredTable()}
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", fake_open)
 
-    monkeypatch.setattr(ice, "get_iceberg_tables", fake_get_iceberg_tables)
-
-    out = iceberg_load._widen_schema_to_destination(object(), _tdef(), _run_schema())
+    out = iceberg_load._widen_schema_to_destination(Settings(), _tdef(), _run_schema())
 
     # The drifting key adopts the on-disk string; other columns are untouched.
     assert out.field("rule_ios").type == pa.string()
     assert out.field("contract_no").type == pa.int64()
     assert out.field("branch_id").type == pa.int64()
-    # Only the target table was opened, never the whole dataset.
-    assert calls and all(names == ("contract_rules",) for names in calls)
+    assert requested == ["contract_rules"]
 
 
 def test_merge_widen_noop_when_types_already_match(monkeypatch):
-    import dlt.common.libs.pyiceberg as ice
-
     class _MatchingStored:
         def schema(self) -> Schema:
             return Schema(
@@ -88,39 +80,33 @@ def test_merge_widen_noop_when_types_already_match(monkeypatch):
                 NestedField(3, "branch_id", LongType(), required=False),
             )
 
-    monkeypatch.setattr(
-        ice, "get_iceberg_tables",
-        lambda pipeline, *names: {names[0]: _MatchingStored()} if names else {})
-
+    monkeypatch.setattr(iceberg_load, "_open_dest_table",
+                        lambda s, n: _MatchingStored())
     run = pa.schema([
         ("contract_no", pa.int64()),
         ("rule_ios", pa.string()),
         ("branch_id", pa.int64()),
     ])
-    out = iceberg_load._widen_schema_to_destination(object(), _tdef(), run)
+    out = iceberg_load._widen_schema_to_destination(Settings(), _tdef(), run)
     assert out.equals(run)
 
 
 def test_merge_widen_returns_schema_when_table_absent(monkeypatch):
-    import dlt.common.libs.pyiceberg as ice
-
-    # First incremental of a table that does not exist yet, or an unreadable one:
-    # nothing to widen against -> return the run schema unchanged (best effort).
-    monkeypatch.setattr(
-        ice, "get_iceberg_tables", lambda pipeline, *names: {})
+    # First incremental of a table that does not exist yet: nothing to widen
+    # against -> return the run schema unchanged (best effort).
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: None)
     run = _run_schema()
-    out = iceberg_load._widen_schema_to_destination(object(), _tdef(), run)
+    out = iceberg_load._widen_schema_to_destination(Settings(), _tdef(), run)
     assert out.equals(run)
 
 
 def test_merge_widen_survives_read_error(monkeypatch):
-    import dlt.common.libs.pyiceberg as ice
+    class _Boom:
+        def schema(self):
+            raise RuntimeError("schema unreadable")
 
-    def boom(pipeline, *names):
-        raise RuntimeError("catalog unreachable")
-
-    monkeypatch.setattr(ice, "get_iceberg_tables", boom)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: _Boom())
     run = _run_schema()
-    out = iceberg_load._widen_schema_to_destination(object(), _tdef(), run)
+    out = iceberg_load._widen_schema_to_destination(Settings(), _tdef(), run)
     # Best effort: a dest read failure must never fail the load.
     assert out.equals(run)

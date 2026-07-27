@@ -306,7 +306,7 @@ def _open_dest_table(settings: Settings, table_name: str):
         return None
 
 
-def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Schema:
+def _coerce_unified_nulls(settings: Settings, tdef: TableDef, schema: pa.Schema) -> pa.Schema:
     """Replace ``null``-typed columns in the unified schema with concrete types.
 
     pyarrow infers the ``null`` type for a column that is entirely null across
@@ -317,9 +317,10 @@ def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Sch
     ``Unsupported cast from <type> to null using function cast_null``.
 
     Prefer the destination's existing Arrow type for each null column (read
-    best-effort from the Iceberg table) so a merge sees identical types and is a
-    no-op; fall back to string for a column the destination doesn't have yet.
-    Returns ``schema`` unchanged when it has no null columns.
+    best-effort through the persistent catalog -- see ``_open_dest_table``) so a
+    merge sees identical types and is a no-op; fall back to string for a column
+    the destination doesn't have yet. Returns ``schema`` unchanged when it has
+    no null columns.
     """
     null_names = [f.name for f in schema if pa.types.is_null(f.type)]
     if not null_names:
@@ -327,16 +328,8 @@ def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Sch
 
     overrides: dict[str, pa.DataType] = {}
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
         from pyiceberg.io.pyarrow import schema_to_pyarrow
-        # Open ONLY this table: get_iceberg_tables(pipeline) with no name opens
-        # every table in the dataset, so a single unrelated broken table (e.g. a
-        # pending/malformed one) makes this read raise -- and the except below
-        # would then fall back to `string`, which fails dlt's schema evolution
-        # for any all-null column the destination stores as a non-string type
-        # ("Cannot promote string to double").
-        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
-            tdef.dataset_table_name)
+        tbl = _open_dest_table(settings, tdef.dataset_table_name)
         if tbl is not None:
             # dlt normalizes identifiers to lower snake; for these clean
             # UPPER_SNAKE / already-lower names that is just lower-casing.
@@ -356,19 +349,15 @@ def _coerce_unified_nulls(pipeline, tdef: TableDef, schema: pa.Schema) -> pa.Sch
     return coerced
 
 
-def _read_destination_arrow_types(pipeline, tdef: TableDef) -> dict:
+def _read_destination_arrow_types(settings: Settings, tdef: TableDef) -> dict:
     """Best-effort ``{column-name-lower: Arrow type}`` for the stored Iceberg table.
 
-    Empty dict when the table does not exist yet or cannot be read. Opens ONLY
-    the target table -- ``get_iceberg_tables(pipeline)`` with no name opens every
-    table in the dataset, so one broken sibling would make this raise (see
-    ``_coerce_unified_nulls`` and test_coerce_nulls_isolation).
+    Empty dict when the table does not exist yet or cannot be read. Reads
+    through the persistent catalog (``_open_dest_table``).
     """
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
         from pyiceberg.io.pyarrow import schema_to_pyarrow
-        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
-            tdef.dataset_table_name)
+        tbl = _open_dest_table(settings, tdef.dataset_table_name)
         if tbl is None:
             return {}
         return {f.name.lower(): f.type for f in schema_to_pyarrow(tbl.schema())}
@@ -379,7 +368,7 @@ def _read_destination_arrow_types(pipeline, tdef: TableDef) -> dict:
 
 
 def _widen_schema_to_destination(
-    pipeline, tdef: TableDef, schema: pa.Schema
+    settings: Settings, tdef: TableDef, schema: pa.Schema
 ) -> pa.Schema:
     """Widen a merge run's unified schema by the destination table's stored types.
 
@@ -404,7 +393,7 @@ def _widen_schema_to_destination(
     in the destination is never pulled into the batch (that would null it out for
     updated rows on merge). Best effort: any read failure leaves ``schema`` as-is.
     """
-    dest = _read_destination_arrow_types(pipeline, tdef)
+    dest = _read_destination_arrow_types(settings, tdef)
     if not dest:
         return schema
     fields = []
@@ -457,7 +446,7 @@ def _carry_forward_insert_at(
 
 
 def _existing_insert_at(
-    pipeline, tdef: TableDef, settings: Settings, branches: list[int],
+    settings: Settings, tdef: TableDef, branches: list[int],
     unified_schema: pa.Schema, hash_ready: bool = False,
 ) -> Optional[pa.Table]:
     """Read existing rows' insert_at (+ merge key) for ``branches`` for carry-forward.
@@ -480,18 +469,13 @@ def _existing_insert_at(
     hash_col = settings.merge_hash_column
     join_keys = list(tdef.key_columns) + [settings.branch_id_column]
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
         from pyiceberg.expressions import In
-        # Open ONLY this table: get_iceberg_tables(pipeline) with no name opens
-        # every table in the dataset, so a single unrelated broken/pending
-        # sibling table would make this raise for every table's carry-forward.
-        tables = get_iceberg_tables(pipeline, tdef.dataset_table_name)
-    except Exception as exc:  # noqa: BLE001 - best effort
+    except ImportError as exc:
         log.warning("[%s] insert_at carry-forward unavailable: %s",
                     tdef.dataset_table_name, exc)
         return None
 
-    tbl = tables.get(tdef.dataset_table_name)
+    tbl = _open_dest_table(settings, tdef.dataset_table_name)
     if tbl is None:
         return None  # first load of this table: nothing to preserve
 
@@ -588,24 +572,19 @@ def _staged_delta_hashes(
         return None
 
 
-def _table_is_hash_ready(pipeline, tdef: TableDef, hash_col: str) -> bool:
+def _table_is_hash_ready(settings: Settings, tdef: TableDef, hash_col: str) -> bool:
     """True iff the stored Iceberg table already carries ``hash_col`` -- i.e. a
     prior full replace wrote it for every row. Missing table or any read error
     -> not ready (the merge falls back to the composite key). Best-effort: never
     fails a load.
     """
-    try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
-        # Open ONLY this table -- get_iceberg_tables(pipeline) with no name opens
-        # every table in the dataset, so one broken/pending sibling would make this
-        # raise and silently disable the hash optimization for the whole run.
-        tbl = get_iceberg_tables(pipeline, tdef.dataset_table_name).get(
-            tdef.dataset_table_name)
-    except Exception:  # noqa: BLE001 - best effort
-        return False
+    tbl = _open_dest_table(settings, tdef.dataset_table_name)
     if tbl is None:
         return False
-    return hash_col.lower() in {f.name for f in tbl.schema().fields}
+    try:
+        return hash_col.lower() in {f.name for f in tbl.schema().fields}
+    except Exception:  # noqa: BLE001 - best effort
+        return False
 
 
 def _finish_batch(
@@ -932,12 +911,12 @@ class LoadSummary:
         return "\n".join(lines)
 
 
-def _table_snapshot_ids(pipeline, table_name: str) -> set[int]:
+def _table_snapshot_ids(settings: Settings, table_name: str) -> set[int]:
     """Snapshot ids currently in the table's metadata (empty if it doesn't exist)."""
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
-
-        tbl = get_iceberg_tables(pipeline, table_name)[table_name]
+        tbl = _open_dest_table(settings, table_name)
+        if tbl is None:
+            return set()
         return {s.snapshot_id for s in tbl.metadata.snapshots}
     except Exception:  # noqa: BLE001 - first run: table not created yet
         return set()
@@ -963,12 +942,12 @@ def _squash_run_snapshots(tbl, before_ids: set[int]) -> int:
     return len(ids)
 
 
-def _squash_table_run_snapshots(pipeline, table_name: str, before_ids: set[int]) -> None:
+def _squash_table_run_snapshots(settings: Settings, table_name: str, before_ids: set[int]) -> None:
     """Best-effort squash of the snapshots this run just committed to a table."""
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
-
-        tbl = get_iceberg_tables(pipeline, table_name)[table_name]
+        tbl = _open_dest_table(settings, table_name)
+        if tbl is None:
+            return
         expired = _squash_run_snapshots(tbl, before_ids)
         if expired:
             log.info("[%s] squashed %d intra-run snapshot(s); 1 kept for this run",
@@ -1414,7 +1393,7 @@ def _load_one_table(
     # unconstrained NUMBER with only null values) is likewise inferred as the
     # Arrow ``null`` type; coerce it to a concrete type so the load never asks
     # pyiceberg to cast an existing column to ``null``.
-    plan.unified_schema = _coerce_unified_nulls(pipeline, tdef, plan.unified_schema)
+    plan.unified_schema = _coerce_unified_nulls(settings, tdef, plan.unified_schema)
 
     # A merge only unifies THIS run's branches, so a key column the all-branches
     # INITIAL load widened to string (e.g. RULE_IOS -- fractional on some branch)
@@ -1425,13 +1404,13 @@ def _load_one_table(
     # rebuild the table this run, so they must NOT adopt the old type.)
     if plan.disposition == "merge":
         plan.unified_schema = _widen_schema_to_destination(
-            pipeline, tdef, plan.unified_schema)
+            settings, tdef, plan.unified_schema)
 
     # Snapshot ids present before this run's commits: per-branch loading (and
     # chunked merge) commits several snapshots; after a successful load every
     # snapshot newer than these is squashed down to the final one so history
     # keeps exactly 1 snapshot per run instead of 1 per branch per run.
-    before_ids = (_table_snapshot_ids(pipeline, tdef.dataset_table_name)
+    before_ids = (_table_snapshot_ids(settings, tdef.dataset_table_name)
                   if settings.snapshot_maintenance else set())
 
     # Label the peak-memory window: this is where the staged parquet is read
@@ -1452,9 +1431,9 @@ def _load_one_table(
             # Incremental / branch-subset merge: small deltas, one run is fine.
             # Preserve each row's original insert_at across updates by carrying
             # forward the existing value for rows already in the table.
-            hash_ready = _table_is_hash_ready(pipeline, tdef, settings.merge_hash_column)
+            hash_ready = _table_is_hash_ready(settings, tdef, settings.merge_hash_column)
             existing = _existing_insert_at(
-                pipeline, tdef, settings,
+                settings, tdef,
                 [r.branch_id for r in plan.success], plan.unified_schema,
                 hash_ready=hash_ready)
             if hash_ready and existing is not None:
@@ -1487,7 +1466,7 @@ def _load_one_table(
                 _cleanup_staged(r, settings)
         control.save()
         if settings.snapshot_maintenance:
-            _squash_table_run_snapshots(pipeline, tdef.dataset_table_name, before_ids)
+            _squash_table_run_snapshots(settings, tdef.dataset_table_name, before_ids)
         plan.load_status = "SUCCESS"
         log.info("[%s] loaded: disp=%s ok=%d fail=%d rows=%d",
                  tdef.dataset_table_name, plan.disposition, len(plan.success),

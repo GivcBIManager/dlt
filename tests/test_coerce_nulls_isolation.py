@@ -6,7 +6,8 @@ name -> every table in the dataset. One broken table (e.g.
 ``api_pre_approval_req_details``) made that read raise, so all-null columns fell
 back to ``string``. A column stored as ``double`` then failed dlt's
 ``evolve_table`` with "Cannot promote string to double", failing the whole load.
-Opening only the target table isolates the broken sibling.
+Reads now go through the persistent catalog, which opens exactly one
+identifier — the isolation is structural.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField
 
 from etl import iceberg_load
-from etl.config import CATEGORY_MASTER, TableDef
+from etl.config import CATEGORY_MASTER, Settings, TableDef
 
 
 def _tdef() -> TableDef:
@@ -33,25 +34,27 @@ class _StoredTable:
         )
 
 
-def test_coerce_nulls_uses_target_type_despite_broken_sibling(monkeypatch):
-    import dlt.common.libs.pyiceberg as ice
+def test_coerce_nulls_uses_target_type_via_catalog(monkeypatch):
+    requested = []
 
-    calls = []
+    def fake_open(settings, name):
+        requested.append(name)
+        return _StoredTable()
 
-    def fake_get_iceberg_tables(pipeline, *names):
-        calls.append(names)
-        # No name => open ALL tables => trips over the broken sibling and raises.
-        if not names:
-            raise RuntimeError("api_pre_approval_req_details")
-        return {names[0]: _StoredTable()}
-
-    monkeypatch.setattr(ice, "get_iceberg_tables", fake_get_iceberg_tables)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", fake_open)
 
     # DEFAULT_DUAL_CODE is all-null this run but stored as double.
     schema = pa.schema([("ios", pa.int64()), ("DEFAULT_DUAL_CODE", pa.null())])
-    out = iceberg_load._coerce_unified_nulls(object(), _tdef(), schema)
+    out = iceberg_load._coerce_unified_nulls(Settings(), _tdef(), schema)
 
     # Coerced to the stored double, NOT the unsafe string fallback.
     assert out.field("DEFAULT_DUAL_CODE").type == pa.float64()
-    # And it asked only for the target table, never for the whole dataset.
-    assert calls and all(names == ("lab_ios",) for names in calls)
+    # Exactly the target table was requested.
+    assert requested == ["lab_ios"]
+
+
+def test_coerce_nulls_falls_back_to_string_when_table_absent(monkeypatch):
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: None)
+    schema = pa.schema([("ios", pa.int64()), ("X", pa.null())])
+    out = iceberg_load._coerce_unified_nulls(Settings(), _tdef(), schema)
+    assert out.field("X").type == pa.string()
