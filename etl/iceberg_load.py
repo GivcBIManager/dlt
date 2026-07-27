@@ -935,6 +935,12 @@ def apply_snapshot_retention(pipeline, settings: Settings) -> None:
     props = {
         "history.expire.max-snapshot-age-ms": str(max_age_ms),
         "history.expire.min-snapshots-to-keep": str(settings.snapshot_min_to_keep),
+        # Every commit rewrites table metadata and keeps the previous
+        # metadata.json around; without a cap the metadata dir grows forever
+        # and each commit's metadata-log grows with it. Both keys are
+        # honored by pyiceberg (TableProperties, 0.11.1).
+        "write.metadata.delete-after-commit.enabled": "true",
+        "write.metadata.previous-versions-max": "25",
     }
 
     try:
@@ -945,11 +951,25 @@ def apply_snapshot_retention(pipeline, settings: Settings) -> None:
 
     for name, tbl in tables.items():
         try:
-            with tbl.transaction() as txn:
-                txn.set_properties(props)
-            tbl.maintenance.expire_snapshots().older_than(cutoff).commit()
-            log.info("[%s] retention applied: keep %dd, %d snapshot(s) remain",
-                     name, settings.snapshot_expire_days, len(list(tbl.snapshots())))
+            # Property writes and no-op expiry are real catalog commits (a new
+            # metadata.json per table per run) -- pyiceberg's set_properties
+            # commits even when the values are unchanged. Guard both so a
+            # steady-state run makes ZERO maintenance commits.
+            current = tbl.properties
+            if any(current.get(k) != v for k, v in props.items()):
+                with tbl.transaction() as txn:
+                    txn.set_properties(props)
+            cutoff_ms = int(cutoff.timestamp() * 1000)
+            protected = {ref.snapshot_id for ref in tbl.metadata.refs.values()}
+            expirable = [
+                s for s in tbl.metadata.snapshots
+                if s.timestamp_ms < cutoff_ms and s.snapshot_id not in protected
+            ]
+            if expirable:
+                tbl.maintenance.expire_snapshots().older_than(cutoff).commit()
+                log.info("[%s] retention applied: keep %dd, %d snapshot(s) remain",
+                         name, settings.snapshot_expire_days,
+                         len(list(tbl.snapshots())))
         except Exception as exc:  # noqa: BLE001
             log.warning("[%s] snapshot retention failed: %s", name, exc)
 
