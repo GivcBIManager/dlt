@@ -1022,6 +1022,25 @@ class _PipelineHolder:
         return self.pipeline
 
 
+def _reject_unstable_key_types(table: pa.Table, key_cols: list[str]) -> None:
+    """Refuse float / fractional-decimal merge-key columns.
+
+    Their string cast can drift across runs, so hashing them risks silent
+    duplicate rows. Shared by the reference serializer and the fast hasher so
+    both reject identically.
+    """
+    for name in key_cols:
+        t = table.column(name).type
+        if pa.types.is_floating(t) or (pa.types.is_decimal(t) and t.scale > 0):
+            raise ValueError(
+                f"merge-key column {name!r} has type {t}, which is not "
+                f"run-stable: hashing a floating or fractional-decimal key is "
+                f"not run-stable across runs (its string cast can vary -> "
+                f"silent duplicate rows). Merge keys must be integer, "
+                f"scale-0 decimal, or string."
+            )
+
+
 def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
     """Canonical, injective, run-stable byte encoding of each row's key.
 
@@ -1039,16 +1058,7 @@ def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
     run-stable this way (its string cast can drift across runs -> silent
     duplicate rows), so such columns are rejected up front rather than hashed.
     """
-    for name in key_cols:
-        t = table.column(name).type
-        if pa.types.is_floating(t) or (pa.types.is_decimal(t) and t.scale > 0):
-            raise ValueError(
-                f"merge-key column {name!r} has type {t}, which is not "
-                f"run-stable: hashing a floating or fractional-decimal key is "
-                f"not run-stable across runs (its string cast can vary -> "
-                f"silent duplicate rows). Merge keys must be integer, "
-                f"scale-0 decimal, or string."
-            )
+    _reject_unstable_key_types(table, key_cols)
 
     col_strs = [pc.cast(table.column(name), pa.string()).to_pylist()
                 for name in key_cols]
@@ -1066,15 +1076,74 @@ def _serialize_keys(table: pa.Table, key_cols: list[str]) -> list[bytes]:
     return out
 
 
+# Cached ``b"\x00" + 4-byte big-endian length`` frames for short values --
+# stringified numeric keys are almost always < 128 bytes, so the per-value
+# prefix is a list lookup instead of a struct.pack call.
+_LEN_PREFIX = [b"\x00" + struct.pack(">I", n) for n in range(128)]
+
+
+def _key_column_view(col) -> "tuple[memoryview, memoryview, Optional[list]]":
+    """Zero-copy per-row view of one stringified key column.
+
+    Returns ``(payload, offsets, valid)``: ``payload[offsets[i]:offsets[i+1]]``
+    is row i's UTF-8 bytes straight from the Arrow data buffer (no Python
+    string is ever materialized), ``offsets`` is the int64 offsets buffer, and
+    ``valid`` is a per-row validity list or ``None`` when no row is null.
+    Raises when the cast/combine yields a non-zero array offset -- the caller
+    falls back to the reference serializer.
+    """
+    arr = pc.cast(col, pa.large_string())
+    if isinstance(arr, pa.ChunkedArray):
+        arr = arr.combine_chunks()
+    if isinstance(arr, pa.ChunkedArray):  # older pyarrow: still chunked
+        arr = arr.chunk(0) if arr.num_chunks else pa.array([], pa.large_string())
+    if arr.offset != 0:
+        raise ValueError("expected offset-0 array after cast/combine")
+    if len(arr) == 0:
+        return memoryview(b""), memoryview(struct.pack("q", 0)).cast("q"), None
+    offsets = memoryview(arr.buffers()[1]).cast("q")  # int64 offsets, zero-copy
+    payload_buf = arr.buffers()[2]
+    payload = memoryview(payload_buf) if payload_buf is not None else memoryview(b"")
+    valid = None if arr.null_count == 0 else arr.is_valid().to_pylist()
+    return payload, offsets, valid
+
+
 def _merge_hash_array(table: pa.Table, key_cols: list[str]) -> pa.Array:
     """128-bit blake2b of each row's canonical key serialization -> pa.binary().
 
     Deterministic across processes and library versions (unlike the salted
-    built-in hash()). Every value is exactly 16 bytes.
+    built-in hash()). Every value is exactly 16 bytes. Fast path: instead of
+    materializing every key value as a Python string (``_serialize_keys``),
+    each column is cast to ``large_string`` once and rows are fed to blake2b
+    as slices of the Arrow data buffer -- byte-identical framing (null flag /
+    ``\\x00`` + 4-byte BE length + UTF-8), no per-row Python objects. Any
+    input the fast path cannot view falls back to the reference serializer,
+    which stays the canonical definition of the hash bytes.
     """
-    digests = [hashlib.blake2b(b, digest_size=16).digest()
-               for b in _serialize_keys(table, key_cols)]
-    return pa.array(digests, type=pa.binary())
+    _reject_unstable_key_types(table, key_cols)
+    try:
+        views = [_key_column_view(table.column(name)) for name in key_cols]
+    except Exception as exc:  # noqa: BLE001 - reference path is always correct
+        log.warning("fast merge-hash framing unavailable (%s); "
+                    "using reference serializer", exc)
+        digests = [hashlib.blake2b(b, digest_size=16).digest()
+                   for b in _serialize_keys(table, key_cols)]
+        return pa.array(digests, type=pa.binary())
+
+    out = []
+    for i in range(table.num_rows):
+        h = hashlib.blake2b(digest_size=16)
+        for payload, offsets, valid in views:
+            if valid is not None and not valid[i]:
+                h.update(b"\x01")
+                continue
+            a, b = offsets[i], offsets[i + 1]
+            ln = b - a
+            h.update(_LEN_PREFIX[ln] if ln < 128 else
+                     b"\x00" + struct.pack(">I", ln))
+            h.update(payload[a:b])
+        out.append(h.digest())
+    return pa.array(out, type=pa.binary())
 
 
 def _append_merge_hash(tbl: pa.Table, key_cols: list[str], hash_col: str) -> pa.Table:
