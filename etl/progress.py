@@ -12,7 +12,7 @@ Two jobs, both designed to cost ~nothing on the hot path:
   they come from OS/Arrow high-water counters (Windows ``PeakWorkingSetSize`` and
   the pyarrow memory pool's ``max_memory``), not from the samples. Sampling (1s)
   only attributes each new high-water mark to whatever ``activity`` label is set,
-  so the summary can say e.g. the peak landed during ``load:appointments`` (the
+  so the summary can say e.g. the peak landed during ``load[1]:appointments`` (the
   whole-file ``pq.read_table`` + cast) rather than during ``extract`` (per-branch
   fetch buffers / the cursor fallback). That attribution is what tells us which of
   the suspected contributors actually dominates on real data.
@@ -171,7 +171,7 @@ class MonitorReport:
         arrow_share = self.arrow_peak / self.rss_peak if self.rss_peak else 0.0
         act = self.arrow_peak_activity or self.rss_peak_activity
         if self.arrow_peak > 0 and arrow_share >= 0.6:
-            if act.startswith("load:"):
+            if act.startswith("load["):
                 return (f"Arrow buffers during {act} -- the whole-file "
                         f"pq.read_table + cast in the load resource "
                         f"({arrow_share:.0%} of peak RSS is Arrow)")

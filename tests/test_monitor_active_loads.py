@@ -1,7 +1,7 @@
 """Peak/heartbeat labels track the SET of in-flight table loads."""
 from __future__ import annotations
 
-from etl.progress import PipelineMonitor
+from etl.progress import MonitorReport, PipelineMonitor
 
 
 def _mon():
@@ -38,3 +38,15 @@ def test_peak_attribution_names_the_inflight_load():
     m._refresh_peaks()
     report = m.stop()
     assert "big_table" in (report.rss_peak_activity or "")
+
+
+def test_verdict_keeps_load_attribution_for_load_bracket_label():
+    # arrow_share >= 0.6 with an active-load label must still hit the
+    # load-specific branch, not fall through to "native fetch batches".
+    report = MonitorReport(
+        duration_s=1.0, units_done=1, units_total=1, units_failed=0, rows=1,
+        tables_loaded=1, tables_total=1, tables_failed=0,
+        rss_peak=100, rss_peak_activity="load[1]:appointments",
+        arrow_peak=80, arrow_peak_activity="load[1]:appointments",
+    )
+    assert "load resource" in report.verdict()
