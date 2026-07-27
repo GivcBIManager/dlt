@@ -338,6 +338,15 @@ class Settings:
     # (even minutes-long) large-branch commit never trips it. 0 disables it.
     load_commit_timeout_s: int = 900
 
+    # Parallel load slots: how many tables may load into Iceberg concurrently,
+    # each through its own per-table dlt pipeline (same bucket + dataset; see
+    # iceberg_load._table_pipeline_name). Peak load RSS scales roughly
+    # linearly -- every in-flight table can materialize up to
+    # load_group_max_bytes of staged parquet (x3-6 once decoded to Arrow) --
+    # so when raising this, lower load_group_max_bytes to compensate.
+    # 1 = the pre-parallel strictly-serial behavior.
+    load_workers: int = 2
+
     # DQ: tolerate row-hash drift up to this percent of a (table, branch)'s
     # Oracle hashed rows before flagging MISMATCH; at or below it the status is
     # WITHIN_TOLERANCE. Row-count drift is always a hard MISMATCH.
@@ -358,6 +367,10 @@ class Settings:
         # always matches dlt's normalized Iceberg field across the write, readiness,
         # merge-join, and carry-forward paths.
         self.merge_hash_column = self.merge_hash_column.lower()
+
+        # A worker pool needs at least one worker; clamp here so every entry
+        # point (config file, CLI, direct construction) gets the same floor.
+        self.load_workers = max(1, int(self.load_workers))
 
 
 # --------------------------------------------------------------------------- #
@@ -566,6 +579,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),
         load_group_max_bytes=int(_cfg("etl.load_group_max_bytes", 256 * 1024 * 1024)),
         load_commit_timeout_s=int(_cfg("etl.load_commit_timeout_s", 900)),
+        load_workers=int(_cfg("etl.load_workers", 2)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
         cleanup_staging_after_load=bool(_cfg("etl.cleanup_staging_after_load", True)),
     )

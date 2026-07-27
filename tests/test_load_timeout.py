@@ -51,7 +51,8 @@ def test_zero_timeout_runs_inline_without_watchdog():
 
 # --------------------------------------------------------------------------- #
 # Timeout recovery: a hung commit poisons the pipeline; the orchestrator must
-# abandon (rebuild) it rather than clear/reuse it (a zombie is stuck inside).
+# abandon it (per-table pipelines: nothing rebuilds, nothing else uses it)
+# rather than clear/reuse it (a zombie is stuck inside).
 # --------------------------------------------------------------------------- #
 import dlt  # noqa: E402
 import pyarrow as pa  # noqa: E402
@@ -109,58 +110,53 @@ def test_timed_out_commit_marks_plan_poisoned_and_skips_cleanup(tmp_path, monkey
     assert cleared == []
 
 
-def test_rebuild_uses_a_fresh_pipelines_dir_so_it_cannot_readopt_the_zombie(monkeypatch):
-    # A timed-out commit leaves a daemon worker still driving the OLD pipeline's
-    # started `.reference` package against the shared Iceberg catalog; it can't be
-    # killed. If the rebuild reuses the same pipeline name + pipelines_dir it
-    # re-adopts that in-flight package, so the new pipeline and the zombie drive
-    # the SAME commit against the same table `main` ref and livelock on
-    # optimistic-concurrency ("branch main has changed"). So each rebuild MUST get
-    # a fresh, distinct pipelines_dir; the initial build keeps the default (None).
-    calls: list = []
+def test_load_and_record_continues_past_a_timed_out_table(tmp_path, monkeypatch, pg_meta):
+    """Table A's hung commit must not stop table B: each table has its own
+    pipeline, so A is FAILED+timed-out and simply abandoned, B succeeds."""
+    built = []
 
-    def spy(settings, pipelines_dir=None):
-        calls.append(pipelines_dir)
-        return object()  # a dummy pipeline; we only assert how it was built
-
-    monkeypatch.setattr(iceberg_load, "build_pipeline", spy)
-    holder = iceberg_load._PipelineHolder(Settings())
-    holder.rebuild()
-    holder.rebuild()
-
-    assert calls[0] is None, "initial build must use the default pipelines_dir"
-    assert calls[1] is not None, "rebuild must NOT reuse the poisoned pipeline's dir"
-    assert calls[2] is not None
-    assert calls[1] != calls[2], "each rebuild must be isolated from the previous one"
-
-
-def test_load_and_record_rebuilds_pipeline_after_commit_timeout(tmp_path, monkeypatch, pg_meta):
-    builds = []
-
-    def fake_build(settings, pipelines_dir=None):
-        p = _pipeline(tmp_path / f"p{len(builds)}")
-        builds.append(p)
-        return p
+    def fake_build(settings, pipelines_dir=None, pipeline_name=None):
+        built.append(pipeline_name)
+        return _pipeline(tmp_path / (pipeline_name or "p"))
 
     monkeypatch.setattr(iceberg_load, "build_pipeline", fake_build)
     monkeypatch.setattr(iceberg_load, "_write_observability", lambda *a, **k: None)
     monkeypatch.setattr(iceberg_load, "apply_snapshot_retention", lambda *a, **k: None)
-    monkeypatch.setattr(iceberg_load, "_existing_insert_at",
-                        lambda *a, **k: (_ for _ in ()).throw(TimeoutError("hung")))
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda *a, **k: None)
+    monkeypatch.setattr(iceberg_load, "_coerce_unified_nulls", lambda s, t, sc: sc)
+    monkeypatch.setattr(iceberg_load, "_widen_schema_to_destination",
+                        lambda s, t, sc: sc)
+    monkeypatch.setattr(iceberg_load, "_table_is_hash_ready", lambda *a, **k: False)
+    monkeypatch.setattr(iceberg_load, "_run_pipeline", lambda *a, **k: None)
 
-    tdef = _merge_tdef()
-    staged = _staged(tmp_path)
+    t_hang = _merge_tdef()                                   # -> "foo"
+    t_ok = TableDef(table="OASIS.BAR", unique_key="ID",
+                    cdc_column="AMEND_LAST_DATE", where_date_column=None,
+                    where_operator=None, where_value_of_initial_run=None,
+                    category=CATEGORY_MASTER)
+
+    def fake_eia(settings, tdef, *a, **k):
+        if tdef.dataset_table_name == "foo":
+            raise TimeoutError("hung 900s")
+        return None
+
+    monkeypatch.setattr(iceberg_load, "_existing_insert_at", fake_eia)
 
     def run_extraction(on_table_done):
-        on_table_done(ExtractResult(table_def=tdef, branch="b1", branch_id=1,
-                                    status="SUCCESS", row_count=2, staged_path=staged))
+        for tdef in (t_hang, t_ok):
+            on_table_done(ExtractResult(table_def=tdef, branch="b1", branch_id=1,
+                                        status="SUCCESS", row_count=2,
+                                        staged_path=_staged(tmp_path)))
 
     summary = iceberg_load.load_and_record(
-        run_extraction_fn=run_extraction, tables=[tdef],
-        settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False),
+        run_extraction_fn=run_extraction, tables=[t_hang, t_ok],
+        settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False,
+                          snapshot_maintenance=False, load_workers=1),
         control=iceberg_load.ControlStore(pg_meta),
-        run_id="r", total_branches=1, branches_in_run=1)
+        run_id="r", total_branches=2, branches_in_run=1)
 
-    # One initial build + exactly one rebuild triggered by the timeout.
-    assert len(builds) == 2
-    assert summary.plans[0].load_timed_out is True
+    by_name = {p.tdef.dataset_table_name: p for p in summary.plans}
+    assert by_name["foo"].load_timed_out is True
+    assert by_name["foo"].load_status == "FAILED"
+    assert by_name["bar"].load_status == "SUCCESS"
+    assert built == ["oracle_to_iceberg__foo", "oracle_to_iceberg__bar"]

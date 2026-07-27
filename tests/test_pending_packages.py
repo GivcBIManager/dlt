@@ -1,10 +1,9 @@
 """A failed table load must not leave pending dlt packages behind.
 
 dlt completes any pending (extracted/normalized-but-not-loaded) package before
-extracting new data on every ``pipeline.run``. Because all tables share one
-pipeline, a single poisoned package -- e.g. a bad unique_key that fails at
-normalize -- would otherwise be retried and fail again on every later table's
-run in the same (and the next) execution, blocking them all.
+extracting new data on every ``pipeline.run``. Each table now has its own
+pipeline, so debris can only ever block that table; it is swept just before
+the table loads.
 """
 from __future__ import annotations
 
@@ -100,28 +99,41 @@ def test_failed_table_load_drops_pending_packages(tmp_path, monkeypatch, pg_meta
     assert not pipeline.has_pending_data
 
 
-def test_load_and_record_starts_with_clean_pipeline(tmp_path, monkeypatch, pg_meta):
-    """Debris left by a crashed previous run is swept before any table loads."""
+def test_each_table_sweeps_its_own_pending_debris_before_loading(tmp_path, monkeypatch, pg_meta):
+    """Crash debris in a table's own pipeline is swept just before that table
+    loads (the per-table replacement for the old startup sweep)."""
     pipeline = _pipeline(tmp_path)
     pipeline.extract([{"id": 1}], table_name="leftover")
     assert pipeline.has_pending_data
 
-    monkeypatch.setattr(iceberg_load, "build_pipeline", lambda settings: pipeline)
-    # No observability/retention against the throwaway destination.
-    monkeypatch.setattr(iceberg_load, "_write_observability",
-                        lambda *a, **k: None)
-    monkeypatch.setattr(iceberg_load, "apply_snapshot_retention",
-                        lambda *a, **k: None)
+    built = []
 
-    settings = Settings(mode=MODE_INCREMENTAL, progress_enabled=False)
-    iceberg_load.load_and_record(
-        run_extraction_fn=lambda on_table_done: None,
-        tables=[],
-        settings=settings,
-        control=iceberg_load.ControlStore(pg_meta),
-        run_id="test-run",
-        total_branches=1,
-        branches_in_run=1,
-    )
+    def fake_build(settings, pipelines_dir=None, pipeline_name=None):
+        built.append(pipeline_name)
+        return pipeline
 
-    assert not pipeline.has_pending_data
+    monkeypatch.setattr(iceberg_load, "build_pipeline", fake_build)
+    monkeypatch.setattr(iceberg_load, "_write_observability", lambda *a, **k: None)
+    monkeypatch.setattr(iceberg_load, "apply_snapshot_retention", lambda *a, **k: None)
+
+    tdef = TableDef(table="OASIS.FOO", unique_key="ID", cdc_column="AMEND_LAST_DATE",
+                    where_date_column=None, where_operator=None,
+                    where_value_of_initial_run=None, category=CATEGORY_MASTER)
+    staged = tmp_path / "staged.parquet"
+    pq.write_table(pa.table({"ID": pa.array([], pa.int64())}), staged)
+
+    def run_extraction(on_table_done):
+        on_table_done(ExtractResult(table_def=tdef, branch="b1", branch_id=1,
+                                    status="SUCCESS", row_count=0,
+                                    staged_path=staged))
+
+    summary = iceberg_load.load_and_record(
+        run_extraction_fn=run_extraction, tables=[tdef],
+        settings=Settings(mode=MODE_INCREMENTAL, progress_enabled=False,
+                          snapshot_maintenance=False),
+        control=iceberg_load.ControlStore(pg_meta), run_id="test-run",
+        total_branches=1, branches_in_run=1)
+
+    assert built == ["oracle_to_iceberg__foo"]
+    assert not pipeline.has_pending_data          # swept before the load
+    assert summary.plans[0].load_status == "SUCCESS"   # 0-row skip path

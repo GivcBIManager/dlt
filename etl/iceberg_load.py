@@ -17,10 +17,12 @@ materializes a whole load package into memory before writing; one branch per run
 bounds that peak to the largest branch instead of the entire table. A ``merge``
 (incremental / branch subset) is small, so it stays a single run.
 
-Loads are serialized (a dlt pipeline is not safe to run concurrently with
-itself) but start eagerly, so a table is persisted the moment it is ready. Once
-everything finishes, the ``etl_control`` and ``etl_run_log`` Iceberg tables are
-written and snapshot retention is applied.
+Loads run on a small worker pool (``Settings.load_workers``); each table loads
+through its own per-table dlt pipeline (a dlt pipeline is not safe to run
+concurrently with itself, but distinct pipelines on distinct threads are
+fine), starting eagerly the moment the table is ready. Once everything
+finishes, observability rows are written to Postgres and snapshot retention
+is applied via the persistent Iceberg catalog.
 
 The authoritative watermark store is the Postgres ``etl_meta.control_state``
 table (``ControlStore``); the ``etl_control`` Iceberg table is a queryable
@@ -34,7 +36,6 @@ import hashlib
 import json
 import logging
 import struct
-import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -1046,12 +1047,11 @@ def _table_pipeline_name(settings: Settings, tdef: TableDef) -> str:
 def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None,
                    pipeline_name: Optional[str] = None):
     # pipelines_dir is dlt's LOCAL bookkeeping (schema/state/load packages), not
-    # the destination. None keeps dlt's default (~/.dlt/pipelines); a rebuild
-    # after a commit timeout passes a fresh dir so it can't re-adopt a poisoned
-    # pipeline's still-open load package (see _PipelineHolder.rebuild).
-    # pipeline_name overrides the settings-level name for per-table load
-    # pipelines (see _table_pipeline_name); None keeps the shared name for
-    # GUI/maintenance callers. Neither affects where data lands.
+    # the destination. None keeps dlt's default (~/.dlt/pipelines); callers
+    # (mainly tests) may point it at an isolated dir. pipeline_name overrides
+    # the settings-level name for per-table load pipelines (see
+    # _table_pipeline_name); None keeps the shared name for GUI/maintenance
+    # callers. Neither affects where data lands.
     return dlt.pipeline(
         pipeline_name=pipeline_name or settings.pipeline_name,
         destination=dlt.destinations.filesystem(
@@ -1060,39 +1060,6 @@ def build_pipeline(settings: Settings, pipelines_dir: Optional[str] = None,
         dataset_name=settings.dataset_name,
         pipelines_dir=pipelines_dir,
     )
-
-
-class _PipelineHolder:
-    """Mutable handle to the shared dlt pipeline so a hung commit can be swapped.
-
-    A commit that trips the watchdog leaves a daemon worker stuck inside the old
-    pipeline -- a native pyiceberg call can't be force-killed. Reusing that
-    pipeline for the next table (or clear_pending_packages / observability) would
-    race the zombie on shared client + working-dir state, so on a timeout the
-    holder is rebuilt to a fresh pipeline and the poisoned one is abandoned. All
-    reads/rebuilds happen on the single load thread, so no locking is needed.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self.pipeline = build_pipeline(settings)
-
-    def rebuild(self):
-        # A timed-out commit leaves a daemon worker still driving the OLD
-        # pipeline's started `.reference` package against the shared Iceberg
-        # catalog; that native pyiceberg call cannot be killed. Rebuilding to the
-        # SAME pipeline_name + pipelines_dir would re-adopt that still-open
-        # package on disk, so the new pipeline and the abandoned worker would
-        # drive the SAME commit against the same table `main` ref and livelock on
-        # optimistic-concurrency ("branch main has changed") -- the run wedges.
-        # Give the rebuild a FRESH pipelines_dir so it starts from clean local
-        # state and cannot re-drive the zombie's package. Only dlt's local
-        # working dir changes; the destination (bucket + Iceberg catalog) is
-        # untouched, so the run continues writing to the same tables.
-        fresh_dir = tempfile.mkdtemp(
-            prefix=f"{self._settings.pipeline_name}-rebuild-")
-        self.pipeline = build_pipeline(self._settings, pipelines_dir=fresh_dir)
-        return self.pipeline
 
 
 def _reject_unstable_key_types(table: pa.Table, key_cols: list[str]) -> None:
@@ -1541,21 +1508,17 @@ def load_and_record(
 ) -> LoadSummary:
     """Stream extraction into loads: write each table the moment its branches finish.
 
-    ``run_extraction_fn(on_table_done)`` runs the (threaded) extraction and calls
-    ``on_table_done`` for every (branch, table) result. When a table has received
-    a result from all ``branches_in_run`` branches, it is handed to a dedicated
-    single-threaded load executor and written immediately -- concurrently with
-    the extraction (and loading) of the other tables. Loads are serialized
-    because a dlt pipeline is not safe to run concurrently with itself, but each
-    table still lands as soon as it is ready rather than waiting for the rest.
+    ``on_table_done`` is called for every (branch, table) result; when a table
+    has results from all ``branches_in_run`` branches it is handed to a
+    ``settings.load_workers``-wide pool and written immediately -- concurrently
+    with extraction and with other tables' loads. A dlt pipeline is not safe to
+    run concurrently with ITSELF, so every table loads through its own
+    per-table pipeline (see _table_pipeline_name); same-table exclusivity is
+    structural (a table becomes ready exactly once per run).
     """
     # Make every Iceberg merge commit a single snapshot instead of one per
     # 1,000 rows (see _install_single_commit_merge). Must run before any load.
     _install_single_commit_merge()
-    holder = _PipelineHolder(settings)
-    # A crash (OOM, kill) can leave pending packages behind with no except
-    # handler having run; sweep them so this run doesn't inherit the blockage.
-    clear_pending_packages(holder.pipeline, "startup")
     table_defs = {t.dataset_table_name: t for t in tables}
     order = {t.dataset_table_name: i for i, t in enumerate(tables)}
 
@@ -1563,7 +1526,8 @@ def load_and_record(
     collected: dict[str, list[ExtractResult]] = {name: [] for name in table_defs}
     all_results: list[ExtractResult] = []
     lock = threading.Lock()
-    load_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="load")
+    load_pool = ThreadPoolExecutor(max_workers=settings.load_workers,
+                                   thread_name_prefix="load")
     load_futures = []
 
     monitor = PipelineMonitor(
@@ -1574,17 +1538,23 @@ def load_and_record(
     ).start()
 
     def _load_task(tdef: TableDef, batch: list[ExtractResult]) -> TableLoadPlan:
-        # Resolve the pipeline at execution time (on the single load thread) so a
-        # rebuild after a hung commit is seen by every later table. If this
-        # table's commit timed out, the pipeline is poisoned -- swap it for a
-        # fresh one before the next table (and before finalize) touches it.
-        plan = _load_one_table(
-            holder.pipeline, tdef, batch, settings, control,
-            total_branches, branches_in_run, monitor)
+        # Each table loads through its OWN dlt pipeline, built on the worker
+        # thread that runs it (dlt contexts are thread-affine, so concurrent
+        # pipelines must live on separate threads). The name is stable across
+        # runs, so pending debris from a crashed/failed earlier run can only
+        # ever belong to this table -- swept here instead of once at startup.
+        # A commit timeout poisons only this pipeline; nothing else touches it
+        # this run, so it is simply abandoned (the old shared-pipeline holder's
+        # rebuild machinery is gone). The zombie's leftover package is dropped
+        # by this same sweep on the table's next run.
+        pipeline = build_pipeline(
+            settings, pipeline_name=_table_pipeline_name(settings, tdef))
+        clear_pending_packages(pipeline, f"{tdef.dataset_table_name}:pre-load")
+        plan = _load_one_table(pipeline, tdef, batch, settings, control,
+                               total_branches, branches_in_run, monitor)
         if plan.load_timed_out:
-            log.warning("[%s] rebuilding pipeline after commit timeout",
-                        tdef.dataset_table_name)
-            holder.rebuild()
+            log.warning("[%s] abandoning this table's pipeline after commit "
+                        "timeout", tdef.dataset_table_name)
         return plan
 
     def on_table_done(result: ExtractResult) -> None:
