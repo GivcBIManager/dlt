@@ -1095,7 +1095,7 @@ def _key_column_view(col) -> "tuple[memoryview, memoryview, Optional[list]]":
     arr = pc.cast(col, pa.large_string())
     if isinstance(arr, pa.ChunkedArray):
         arr = arr.combine_chunks()
-    if isinstance(arr, pa.ChunkedArray):  # older pyarrow: still chunked
+    if isinstance(arr, pa.ChunkedArray):  # defensive: combine_chunks contract varies
         arr = arr.chunk(0) if arr.num_chunks else pa.array([], pa.large_string())
     if arr.offset != 0:
         raise ValueError("expected offset-0 array after cast/combine")

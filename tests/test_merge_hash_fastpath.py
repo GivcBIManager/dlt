@@ -69,3 +69,31 @@ def test_reject_helper_raises_on_float_and_fractional_decimal():
     for t in (bad_float, bad_dec):
         with pytest.raises(ValueError, match="not run-stable"):
             _reject_unstable_key_types(t, ["id"])
+
+
+def test_fallback_path_matches_reference_and_warns(monkeypatch, caplog):
+    # Force the fast path to be unavailable: the fallback must produce the
+    # SAME digests via the reference serializer and log a warning.
+    import logging
+    from etl import iceberg_load
+
+    def _boom(col):
+        raise ValueError("forced for test")
+
+    monkeypatch.setattr(iceberg_load, "_key_column_view", _boom)
+    t = pa.table({"id": pa.array([1, None, 3], pa.int64()),
+                  "branch_id": pa.array([7, 7, 8], pa.int64())})
+    with caplog.at_level(logging.WARNING, logger="etl.load"):
+        got = [v.as_py() for v in _merge_hash_array(t, t.column_names)]
+    assert got == _reference_digests(t, t.column_names)
+    assert any("fast merge-hash framing unavailable" in r.message
+               for r in caplog.records)
+
+
+def test_len_prefix_cache_boundary_exact():
+    # Lengths 127 (last cached prefix) and 128 (first struct.pack path) must
+    # frame identically to the reference serializer.
+    t = pa.table({"id": pa.array(["x" * 127, "x" * 128], pa.string()),
+                  "branch_id": pa.array([1, 1], pa.int64())})
+    got = [v.as_py() for v in _merge_hash_array(t, t.column_names)]
+    assert got == _reference_digests(t, t.column_names)
