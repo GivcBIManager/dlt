@@ -526,7 +526,8 @@ def _existing_insert_at(
 
 
 def _staged_delta_hashes(
-    paths: list, key_cols: list[str], unified_schema: pa.Schema
+    paths: list, key_cols: list[str], unified_schema: pa.Schema,
+    table_name: str = "",
 ) -> Optional[pa.Array]:
     """Distinct merge-hash values present in a merge delta's staged parquets.
 
@@ -550,7 +551,8 @@ def _staged_delta_hashes(
             return None
         return pc.unique(pa.chunked_array(chunks, type=pa.binary()))
     except Exception as exc:  # noqa: BLE001 - prefilter is an optimization only
-        log.warning("delta hash prefilter unavailable: %s", exc)
+        log.warning("[%s] delta hash prefilter unavailable: %s",
+                    table_name or "?", exc)
         return None
 
 
@@ -1431,7 +1433,7 @@ def _load_one_table(
                 delta_hashes = _staged_delta_hashes(
                     [r.staged_path for r in plan.success],
                     list(tdef.key_columns) + [settings.branch_id_column],
-                    plan.unified_schema)
+                    plan.unified_schema, tdef.dataset_table_name)
                 if delta_hashes is not None:
                     existing = existing.filter(pc.is_in(
                         existing.column(settings.merge_hash_column),
