@@ -2,8 +2,9 @@
 
 ``iceberg_browser`` stays read-only (StaticTable cannot commit); anything that
 rewrites table metadata lives here. Tables are opened writable through the persistent
-Iceberg catalog (same commit path the loader uses) — so the new metadata files follow
-dlt's naming and are picked up by both the loader and the browser.
+Iceberg catalog (the same commit path the loader's own ``apply_snapshot_retention``
+uses) — so the new metadata files follow dlt's naming and are picked up by both the
+loader and the browser.
 
 pyiceberg's ``expire_snapshots`` only removes snapshot entries from metadata;
 the data/manifest files they referenced stay on disk. ``expire_snapshots``

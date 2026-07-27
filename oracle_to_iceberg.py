@@ -186,7 +186,7 @@ def main(argv: list[str]) -> int:
 
         # Streaming extract + load for this phase only. Extraction reads an
         # isolated snapshot of the control state; the live store is mutated only
-        # by the (serialized) load executor as tables complete.
+        # by the load workers through the locked ControlStore as tables complete.
         control_snapshot = copy.deepcopy(control.as_dict())
 
         def run_extraction_fn(on_table_done, _tables=phase_tables, _snap=control_snapshot):

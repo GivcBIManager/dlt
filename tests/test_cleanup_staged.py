@@ -157,8 +157,8 @@ def test_load_one_table_zero_row_deletes_staged(tmp_path):
 def test_load_one_table_merge_deletes_staged(tmp_path, monkeypatch):
     # Merge branch: stub the dlt run + destination reads so no real commit
     # happens, then assert the advance-loop cleanup deleted the parquet.
-    monkeypatch.setattr(iceberg_load, "_coerce_unified_nulls", lambda p, t, s: s)
-    monkeypatch.setattr(iceberg_load, "_widen_schema_to_destination", lambda p, t, s: s)
+    monkeypatch.setattr(iceberg_load, "_coerce_unified_nulls", lambda *a: a[-1])
+    monkeypatch.setattr(iceberg_load, "_widen_schema_to_destination", lambda *a: a[-1])
     monkeypatch.setattr(iceberg_load, "_table_is_hash_ready", lambda *a, **k: False)
     monkeypatch.setattr(iceberg_load, "_existing_insert_at", lambda *a, **k: None)
     monkeypatch.setattr(iceberg_load, "_iceberg_resource", lambda *a, **k: None)

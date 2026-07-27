@@ -72,9 +72,9 @@ def test_merge_shrinks_existing_to_delta_rows(tmp_path, monkeypatch):
         captured["existing"] = existing_insert_at
         return None
 
-    monkeypatch.setattr(iceberg_load, "_coerce_unified_nulls", lambda p_, t, s: s)
+    monkeypatch.setattr(iceberg_load, "_coerce_unified_nulls", lambda *a: a[-1])
     monkeypatch.setattr(iceberg_load, "_widen_schema_to_destination",
-                        lambda p_, t, s: s)
+                        lambda *a: a[-1])
     monkeypatch.setattr(iceberg_load, "_table_is_hash_ready", lambda *a, **k: True)
     monkeypatch.setattr(iceberg_load, "_existing_insert_at",
                         lambda *a, **k: existing)

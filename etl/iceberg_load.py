@@ -1575,8 +1575,9 @@ def load_and_record(
         # Each table gets its OWN pipeline object with its own local working
         # dir; pipeline.run is called on this explicit object rather than
         # resolved from dlt's (thread-affine) global context, and the commit
-        # itself runs on an ephemeral commit:<label> watchdog thread, not here.
-        # The name is stable across runs, so pending debris from a crashed/
+        # itself runs on an ephemeral commit:<label> watchdog thread, not here
+        # (unless load_commit_timeout_s is 0, which runs it inline on this
+        # worker). The name is stable across runs, so pending debris from a crashed/
         # failed earlier run can only ever belong to this table -- swept here
         # instead of once at startup. A commit timeout poisons only this
         # pipeline; nothing else touches it this run, so it is simply
