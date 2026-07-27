@@ -525,6 +525,35 @@ def _existing_insert_at(
     return existing
 
 
+def _staged_delta_hashes(
+    paths: list, key_cols: list[str], unified_schema: pa.Schema
+) -> Optional[pa.Array]:
+    """Distinct merge-hash values present in a merge delta's staged parquets.
+
+    Reads ONLY the key columns (columnar), casts them to the unified schema's
+    types -- the same cast ``_finish_batch`` applies before hashing, so the
+    digests are byte-identical to the ones the batches will carry -- and
+    hashes. Used to pre-shrink the carry-forward ``existing`` table to just
+    the rows the delta can actually touch: ``_finish_batch`` joins ``existing``
+    once per streamed batch, so an unfiltered multi-million-row table would be
+    re-hashed for the join on every 50k-row batch. Best-effort: returns
+    ``None`` (no prefilter, today's behavior) on any failure.
+    """
+    try:
+        key_schema = pa.schema([unified_schema.field(c) for c in key_cols])
+        chunks = []
+        for path in paths:
+            t = pq.read_table(path, columns=key_cols)
+            t = types_map.cast_table_to_schema(t, key_schema)
+            chunks.append(_merge_hash_array(t, key_cols))
+        if not chunks:
+            return None
+        return pc.unique(pa.chunked_array(chunks, type=pa.binary()))
+    except Exception as exc:  # noqa: BLE001 - prefilter is an optimization only
+        log.warning("delta hash prefilter unavailable: %s", exc)
+        return None
+
+
 def _table_is_hash_ready(pipeline, tdef: TableDef, hash_col: str) -> bool:
     """True iff the stored Iceberg table already carries ``hash_col`` -- i.e. a
     prior full replace wrote it for every row. Missing table or any read error
@@ -1394,6 +1423,21 @@ def _load_one_table(
                 pipeline, tdef, settings,
                 [r.branch_id for r in plan.success], plan.unified_schema,
                 hash_ready=hash_ready)
+            if hash_ready and existing is not None:
+                # Shrink carry-forward to the rows the delta can touch: the
+                # batch loop joins `existing` once per streamed batch, so an
+                # unfiltered multi-million-row table would be re-hashed for
+                # the join on every 50k-row batch.
+                delta_hashes = _staged_delta_hashes(
+                    [r.staged_path for r in plan.success],
+                    list(tdef.key_columns) + [settings.branch_id_column],
+                    plan.unified_schema)
+                if delta_hashes is not None:
+                    existing = existing.filter(pc.is_in(
+                        existing.column(settings.merge_hash_column),
+                        value_set=delta_hashes))
+                    if existing.num_rows == 0:
+                        existing = None   # nothing to carry: skip joins entirely
             carry_keys = ([settings.merge_hash_column] if hash_ready
                           else list(tdef.key_columns) + [settings.branch_id_column])
             _run_pipeline(
