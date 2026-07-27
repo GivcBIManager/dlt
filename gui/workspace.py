@@ -76,6 +76,7 @@ EDITABLE_ETL_KEYS = {
     "snapshot_maintenance", "snapshot_expire_days", "snapshot_min_to_keep",
     "progress_enabled", "progress_interval_s",
     "load_batch_rows", "load_group_max_bytes", "load_commit_timeout_s",
+    "load_workers",
     "cleanup_staging_after_load", "dsn_mode",
     "dq_hash_delta_tolerance_pct",
     # thick_mode / oracle_client_lib_dir stay view-only: host-specific values

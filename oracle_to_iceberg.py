@@ -55,6 +55,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     p.add_argument("--max-branch-workers", type=int, help="outer pool size (branches)")
     p.add_argument("--max-table-workers", type=int, help="inner pool size (tables/branch)")
+    p.add_argument("--load-workers", type=int,
+                   help="parallel table loads (per-table pipelines; default 2, "
+                        "1 = serial)")
     p.add_argument("--pool-max", type=int, help="max Oracle connections per branch")
     p.add_argument("--max-retries", type=int, help="connection-failure retries")
     p.add_argument("--retry-interval", type=int, dest="retry_interval_s",
@@ -88,6 +91,7 @@ def build_overrides(args: argparse.Namespace) -> dict:
         "mode": args.mode,
         "max_branch_workers": args.max_branch_workers,
         "max_table_workers": args.max_table_workers,
+        "load_workers": args.load_workers,
         "pool_max": args.pool_max,
         "max_retries": args.max_retries,
         "retry_interval_s": args.retry_interval_s,

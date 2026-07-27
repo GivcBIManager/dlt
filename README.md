@@ -298,6 +298,24 @@ above) — not in the Iceberg lake:
 - The authoritative CDC watermark store is the Postgres `etl_meta.control_state`
   table (fast/transactional); `etl_control` is its queryable twin.
 
+### Parallel table loads
+
+`etl.load_workers` (default 2) sets how many tables may load into Iceberg
+concurrently, each through its own per-table dlt pipeline
+(`oracle_to_iceberg__<table>`), all landing in the same bucket/dataset.
+
+- Peak load RSS scales roughly linearly with workers: each in-flight table
+  can materialize up to `load_group_max_bytes` of staged parquet (x3-6 once
+  decoded to Arrow). When raising `load_workers`, lower
+  `load_group_max_bytes` to compensate.
+- `load_workers = 1` restores the previous strictly-serial load behavior.
+- Each concurrent load also runs pyiceberg's internal write pool; on small
+  servers cap it with the `PYICEBERG_MAX_WORKERS` environment variable.
+- Concurrent loads open more Postgres connections (Iceberg catalog + app
+  metastore). Add `connect_timeout` to the catalog URI in `.dlt/secrets.toml`
+  (e.g. `...?connect_timeout=10`) so a wedged Postgres fails fast; the app
+  metastore already sets its own 10s timeout.
+
 ## Output
 
 Each table becomes one Iceberg dataset under the destination

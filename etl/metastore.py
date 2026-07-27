@@ -94,7 +94,12 @@ class MetaStore:
 
     def __init__(self, cfg: PostgresConfig) -> None:
         self.cfg = cfg
-        self.engine: Engine = create_engine(cfg.sqlalchemy_url(), pool_pre_ping=True)
+        # pool_pre_ping revalidates pooled connections; connect_timeout keeps a
+        # wedged Postgres (proxy accepts, server never answers) from hanging
+        # the run -- with parallel load workers every worker would block on it.
+        self.engine: Engine = create_engine(
+            cfg.sqlalchemy_url(), pool_pre_ping=True,
+            connect_args={"connect_timeout": 10})
         self.md = MetaData()
         self.control_state = _control_state_table(self.md, cfg.schema)
         self.etl_control = _etl_control_table(self.md, cfg.schema)
