@@ -1,10 +1,9 @@
 """Writable staging-lake maintenance: snapshot expiry + orphan file cleanup.
 
 ``iceberg_browser`` stays read-only (StaticTable cannot commit); anything that
-rewrites table metadata lives here. Tables are opened writable through the ETL
-pipeline's Iceberg catalog — the same commit path the loader's own
-``apply_snapshot_retention`` uses — so the new metadata files follow dlt's
-naming and are picked up by both the loader and the browser.
+rewrites table metadata lives here. Tables are opened writable through the persistent
+Iceberg catalog (same commit path the loader uses) — so the new metadata files follow
+dlt's naming and are picked up by both the loader and the browser.
 
 pyiceberg's ``expire_snapshots`` only removes snapshot entries from metadata;
 the data/manifest files they referenced stay on disk. ``expire_snapshots``
@@ -38,18 +37,17 @@ def _validated_dir(table: str) -> Path:
 
 
 def _writable_table(table: str):
-    """Open the staging table writable via the ETL pipeline's catalog."""
+    """Open the staging table writable via the persistent Iceberg catalog."""
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from dlt.common.libs.pyiceberg import get_iceberg_tables
+    from dlt.common.libs.pyiceberg import get_catalog
+    from pyiceberg.exceptions import NoSuchTableError
 
     from etl.config import load_settings
-    from etl.iceberg_load import build_pipeline
 
-    pipeline = build_pipeline(load_settings())
     try:
-        return get_iceberg_tables(pipeline, table)[table]
-    except ValueError as exc:  # unknown to the pipeline schema
+        return get_catalog().load_table(f"{load_settings().dataset_name}.{table}")
+    except NoSuchTableError as exc:  # unknown to the catalog
         raise FileNotFoundError(table) from exc
 
 
