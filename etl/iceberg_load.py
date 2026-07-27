@@ -919,15 +919,43 @@ class LoadSummary:
         return "\n".join(lines)
 
 
-def _table_snapshot_ids(settings: Settings, table_name: str) -> set[int]:
-    """Snapshot ids currently in the table's metadata (empty if it doesn't exist)."""
+def _table_snapshot_ids(settings: Settings, table_name: str) -> Optional[set[int]]:
+    """Snapshot ids currently in the table's metadata, read directly from the
+    catalog rather than via ``_open_dest_table``.
+
+    ``_open_dest_table`` deliberately collapses "table absent" and "catalog
+    failure" into the same ``None`` -- fine for a read that just wants to
+    degrade quietly, but this baseline feeds the intra-run squash, which must
+    tell the two apart: squashing against a baseline that is empty because
+    the catalog was merely unreachable would expire every snapshot from prior
+    runs, mistaking them for this run's own.
+
+    Returns:
+        ``set()`` if the table genuinely does not exist yet (first load --
+        nothing to protect). ``None`` if the catalog could not be read
+        (import failure, transient error, or an unreadable snapshot list):
+        the caller MUST treat this as "unknown" and skip any squash keyed off
+        it, or prior history would look like it belongs to this run and get
+        expired. Otherwise, the set of snapshot ids present in the table.
+    """
     try:
-        tbl = _open_dest_table(settings, table_name)
-        if tbl is None:
-            return set()
+        from dlt.common.libs.pyiceberg import get_catalog
+        from pyiceberg.exceptions import NoSuchTableError
+    except ImportError as exc:
+        log.warning("pyiceberg catalog access unavailable: %s", exc)
+        return None
+    try:
+        tbl = get_catalog().load_table(f"{settings.dataset_name}.{table_name}")
+    except NoSuchTableError:
+        return set()  # first load: nothing to protect
+    except Exception as exc:  # noqa: BLE001 - baseline must be known-good or skipped
+        log.warning("[%s] snapshot baseline unreadable: %s", table_name, exc)
+        return None
+    try:
         return {s.snapshot_id for s in tbl.metadata.snapshots}
-    except Exception:  # noqa: BLE001 - first run: table not created yet
-        return set()
+    except Exception as exc:  # noqa: BLE001 - as above
+        log.warning("[%s] snapshot baseline unreadable: %s", table_name, exc)
+        return None
 
 
 def _squash_run_snapshots(tbl, before_ids: set[int]) -> int:
@@ -1464,7 +1492,12 @@ def _load_one_table(
                 _cleanup_staged(r, settings)
         control.save()
         if settings.snapshot_maintenance:
-            _squash_table_run_snapshots(settings, tdef.dataset_table_name, before_ids)
+            if before_ids is None:
+                log.warning("[%s] snapshot baseline was unreadable before the load; "
+                            "skipping intra-run squash to protect prior history",
+                            tdef.dataset_table_name)
+            else:
+                _squash_table_run_snapshots(settings, tdef.dataset_table_name, before_ids)
         plan.load_status = "SUCCESS"
         log.info("[%s] loaded: disp=%s ok=%d fail=%d rows=%d",
                  tdef.dataset_table_name, plan.disposition, len(plan.success),
