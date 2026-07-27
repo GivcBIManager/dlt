@@ -699,8 +699,11 @@ def _group_by_staged_bytes(
     for r in results:
         try:
             size = r.staged_path.stat().st_size
-        except OSError:
-            size = max_bytes  # unknown size: quarantine in its own group
+        except OSError as exc:
+            # unknown size: quarantine in its own group
+            size = max_bytes
+            log.warning("[%s] could not stat staged parquet %s; treating as "
+                        "budget-sized: %s", r.table, r.staged_path, exc)
         if cur and cur_bytes + size > max_bytes:
             groups.append(cur)
             cur, cur_bytes = [], 0
@@ -880,11 +883,11 @@ def _table_snapshot_ids(pipeline, table_name: str) -> set[int]:
 def _squash_run_snapshots(tbl, before_ids: set[int]) -> int:
     """Expire this run's intermediate snapshots so one snapshot remains per run.
 
-    Per-branch loading (``_run_per_branch_rebuild``/``_run_per_branch_append``)
-    and dlt's chunked ``merge`` commit one snapshot per branch/chunk; only the
-    last one matters for history. Expires every snapshot not in ``before_ids``
-    except the current snapshot and any ref targets, so prior runs' history is
-    untouched and time travel keeps exactly one point per run.
+    Per-group loading (``_run_per_branch_rebuild``/``_run_per_branch_append``)
+    and dlt's chunked ``merge`` commit one snapshot per branch group/chunk; only
+    the last one matters for history. Expires every snapshot not in
+    ``before_ids`` except the current snapshot and any ref targets, so prior
+    runs' history is untouched and time travel keeps exactly one point per run.
     """
     meta = tbl.metadata
     protected = {ref.snapshot_id for ref in meta.refs.values()}
@@ -1284,12 +1287,13 @@ def _load_one_table(
     monitor.set_activity(f"load:{tdef.dataset_table_name}")
     try:
         if plan.disposition == "replace":
-            # Full rebuild: one branch per dlt run (first replace, rest append)
-            # so the loader never materializes more than one branch at a time.
-            # Watermarks advance inside the loop as each branch commits.
+            # Full rebuild: one size-budgeted branch group per dlt run (first group
+            # replace, rest append) so the loader never materializes more than one
+            # group at a time. Watermarks advance inside the loop as each group
+            # commits.
             _run_per_branch_rebuild(pipeline, plan, settings, control)
         elif plan.disposition == "append":
-            # Snapshot append: one branch per dlt run (all append) so history
+            # Snapshot append: one branch group per dlt run (all append) so history
             # from earlier runs is preserved and memory stays bounded.
             _run_per_branch_append(pipeline, plan, settings, control)
         else:
