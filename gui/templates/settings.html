@@ -27,11 +27,16 @@
 // workspace.EDITABLE_ETL_KEYS; everything else renders locked.
 const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers","max_table_workers",
   "pool_min","pool_max","pool_increment","pool_acquire_timeout_s","pool_acquire_attempts",
-  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep","dsn_mode",
+  "pool_backoff_base_s","pool_backoff_cap_s",
+  "max_retries","retry_interval_s","snapshot_maintenance","snapshot_expire_days","snapshot_min_to_keep",
+  "progress_enabled","progress_interval_s","load_batch_rows","load_group_max_bytes",
+  "load_commit_timeout_s","cleanup_staging_after_load","dsn_mode",
   "dq_hash_delta_tolerance_pct"]);
 const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
-  "pool_acquire_timeout_s","pool_acquire_attempts","max_retries","retry_interval_s",
-  "snapshot_expire_days","snapshot_min_to_keep","dq_hash_delta_tolerance_pct"]);
+  "pool_acquire_timeout_s","pool_acquire_attempts","pool_backoff_base_s","pool_backoff_cap_s",
+  "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep",
+  "progress_interval_s","load_batch_rows","load_group_max_bytes","load_commit_timeout_s",
+  "dq_hash_delta_tolerance_pct"]);
 
 const GROUPS = [
   { icon: "fa-tag", title: "Pipeline identity", blurb: "What the pipeline is called and where it writes.",
@@ -59,15 +64,33 @@ const GROUPS = [
       { k: "pool_increment", label: "Pool increment", unit: "conns", help: "Connections added when the pool grows." },
       { k: "pool_acquire_timeout_s", label: "Acquire timeout", unit: "s", help: "Wait for a free pooled connection before retrying." },
       { k: "pool_acquire_attempts",  label: "Acquire attempts", unit: "tries", help: "Acquire retries before the table errors out." },
+      { k: "pool_backoff_base_s", label: "Backoff base", unit: "s", help: "First pause between acquire attempts; doubles each retry." },
+      { k: "pool_backoff_cap_s",  label: "Backoff cap",  unit: "s", help: "Upper bound on the acquire backoff pause." },
       { k: "thick_mode", label: "Thick mode", help: "Oracle 11g requires the thick (Instant Client) driver." },
       { k: "oracle_client_lib_dir", label: "Instant Client dir", mono: true,
         help: "Ignored when missing on this host; $ORACLE_CLIENT_LIB_DIR overrides." },
     ]},
   { icon: "fa-clock-rotate-left", title: "Snapshot retention", blurb: "Iceberg snapshots expired after each load.",
     keys: [
-      { k: "snapshot_maintenance",  label: "Maintenance", help: "Expire old snapshots automatically after each load." },
+      { k: "snapshot_maintenance",  label: "Maintenance", options: ["true", "false"], help: "Expire old snapshots automatically after each load." },
       { k: "snapshot_expire_days",  label: "Keep for", unit: "days", help: "Snapshots older than this are expired." },
       { k: "snapshot_min_to_keep",  label: "Min to keep", unit: "snapshots", help: "Always retained, regardless of age." },
+    ]},
+  { icon: "fa-truck-fast", title: "Iceberg load", blurb: "Write-path batching, commit grouping, and the hang watchdog.",
+    keys: [
+      { k: "load_group_max_bytes", label: "Group budget", unit: "bytes",
+        help: "Staged parquet bytes packed into one commit group on a full rebuild (268435456 = 256 MiB). A bigger branch runs alone; lower this if load RSS climbs." },
+      { k: "load_batch_rows", label: "Load batch", unit: "rows",
+        help: "Rows per Arrow batch when streaming staged parquet into the load." },
+      { k: "load_commit_timeout_s", label: "Commit watchdog", unit: "s",
+        help: "A single Iceberg commit exceeding this is abandoned and the table marked FAILED for this run (0 disables)." },
+      { k: "cleanup_staging_after_load", label: "Delete staged parquet", options: ["true", "false"],
+        help: "Reclaim staging disk once a branch's rows are committed. Turn off to keep files for dq_check --self-test." },
+    ]},
+  { icon: "fa-heart-pulse", title: "Progress", blurb: "Heartbeat lines (rows, RSS) while a run is active.",
+    keys: [
+      { k: "progress_enabled",    label: "Heartbeat", options: ["true", "false"], help: "Periodic PROGRESS log lines during extraction and load." },
+      { k: "progress_interval_s", label: "Interval",  unit: "s", help: "Seconds between PROGRESS lines." },
     ]},
   { icon: "fa-scale-balanced", title: "Data quality", blurb: "Oracle ↔ Iceberg reconciliation tolerance.",
     keys: [

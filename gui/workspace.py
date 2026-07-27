@@ -71,9 +71,15 @@ def etl_settings() -> dict[str, Any]:
 EDITABLE_ETL_KEYS = {
     "dataset_name", "pipeline_name", "max_branch_workers", "max_table_workers",
     "pool_min", "pool_max", "pool_increment", "pool_acquire_timeout_s",
-    "pool_acquire_attempts", "max_retries", "retry_interval_s",
-    "snapshot_expire_days", "snapshot_min_to_keep", "dsn_mode",
+    "pool_acquire_attempts", "pool_backoff_base_s", "pool_backoff_cap_s",
+    "max_retries", "retry_interval_s",
+    "snapshot_maintenance", "snapshot_expire_days", "snapshot_min_to_keep",
+    "progress_enabled", "progress_interval_s",
+    "load_batch_rows", "load_group_max_bytes", "load_commit_timeout_s",
+    "cleanup_staging_after_load", "dsn_mode",
     "dq_hash_delta_tolerance_pct",
+    # thick_mode / oracle_client_lib_dir stay view-only: host-specific values
+    # that differ between the Windows dev box and the Linux server.
 }
 _ETL_KV_RE = re.compile(r"^(\s*)([A-Za-z0-9_]+)(\s*=\s*)(.*?)(\s*(?:#.*)?)$")
 
@@ -82,12 +88,16 @@ def _fmt_toml_scalar(existing_raw: str, value: Any) -> str:
     """Render ``value`` matching the quoting/type of the existing raw value."""
     existing_raw = existing_raw.strip()
     quoted = len(existing_raw) >= 2 and existing_raw[0] in "\"'"
+    # Booleans first: the page's <select> submits "true"/"false" as strings, and
+    # the generic string branch below would quote them ("false" is truthy in
+    # TOML-as-string). Only for unquoted fields, so a real string setting whose
+    # value happens to be "true" keeps its quoting.
+    sv = str(value).strip().lower()
+    if not quoted and sv in ("true", "false"):
+        return sv
     if quoted or isinstance(value, str) and not _looks_numeric(str(value)):
         s = str(value).replace("\\", "\\\\").replace('"', '\\"')
         return f'"{s}"'
-    sv = str(value).strip().lower()
-    if sv in ("true", "false"):
-        return sv
     return str(value).strip()
 
 
