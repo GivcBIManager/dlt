@@ -39,11 +39,24 @@ def table(tmp_path):
     return tbl
 
 
+class _FakeCatalog:
+    def __init__(self, tables):
+        self._tables = tables            # {(namespace, name): tbl}
+
+    def list_tables(self, namespace):
+        assert namespace == "oasis"      # settings.dataset_name
+        return list(self._tables)
+
+    def load_table(self, ident):
+        return self._tables[ident]
+
+
 def _retention(monkeypatch, tbl, **settings_kw):
     import dlt.common.libs.pyiceberg as ice
 
-    monkeypatch.setattr(ice, "get_iceberg_tables", lambda pipeline: {"foo": tbl})
-    iceberg_load.apply_snapshot_retention(object(), Settings(**settings_kw))
+    monkeypatch.setattr(ice, "get_catalog",
+                        lambda: _FakeCatalog({("oasis", "foo"): tbl}))
+    iceberg_load.apply_snapshot_retention(Settings(**settings_kw))
     tbl.refresh()
 
 
@@ -79,3 +92,21 @@ def test_noop_when_maintenance_disabled(tmp_path, table, monkeypatch):
     before = _metadata_files(tmp_path)
     _retention(monkeypatch, table, snapshot_maintenance=False)
     assert _metadata_files(tmp_path) == before
+
+
+def test_retention_skips_dlt_system_tables(tmp_path, table, monkeypatch):
+    import dlt.common.libs.pyiceberg as ice
+
+    loaded = []
+
+    class _Cat:
+        def list_tables(self, ns):
+            return [("oasis", "_dlt_loads"), ("oasis", "foo")]
+
+        def load_table(self, ident):
+            loaded.append(ident)
+            return table
+
+    monkeypatch.setattr(ice, "get_catalog", lambda: _Cat())
+    iceberg_load.apply_snapshot_retention(Settings())
+    assert loaded == [("oasis", "foo")]

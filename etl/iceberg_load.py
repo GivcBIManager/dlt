@@ -956,18 +956,22 @@ def _squash_table_run_snapshots(settings: Settings, table_name: str, before_ids:
         log.warning("[%s] snapshot squash failed: %s", table_name, exc)
 
 
-def apply_snapshot_retention(pipeline, settings: Settings) -> None:
+def apply_snapshot_retention(settings: Settings) -> None:
     """Configure + enforce per-table snapshot retention (keep last N days).
 
     Sets the Iceberg table properties on first creation (and keeps them set),
     then expires snapshots older than the window so metadata/manifests don't grow
     unbounded. ``min-snapshots-to-keep`` guarantees the current snapshot survives.
     Best-effort: a maintenance failure never fails the load.
+
+    Enumerates tables from the persistent Iceberg catalog (every table ever
+    loaded, regardless of any pipeline's local schema); ``_dlt*`` names are
+    skipped.
     """
     if not settings.snapshot_maintenance:
         return
     try:
-        from dlt.common.libs.pyiceberg import get_iceberg_tables
+        from dlt.common.libs.pyiceberg import get_catalog
     except ImportError:
         log.warning("pyiceberg table access unavailable; skipping snapshot retention")
         return
@@ -986,13 +990,18 @@ def apply_snapshot_retention(pipeline, settings: Settings) -> None:
     }
 
     try:
-        tables = get_iceberg_tables(pipeline)
+        catalog = get_catalog()
+        idents = catalog.list_tables(settings.dataset_name)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Could not open Iceberg tables for retention: %s", exc)
+        log.warning("Could not list Iceberg tables for retention: %s", exc)
         return
 
-    for name, tbl in tables.items():
+    for ident in idents:
+        name = ident[-1] if isinstance(ident, tuple) else str(ident).rsplit(".", 1)[-1]
+        if name.startswith("_dlt"):
+            continue  # dlt bookkeeping tables are not retention targets
         try:
+            tbl = catalog.load_table(ident)
             # Property writes and no-op expiry are real catalog commits (a new
             # metadata.json per table per run) -- pyiceberg's set_properties
             # commits even when the values are unchanged. Guard both so a
@@ -1590,11 +1599,10 @@ def load_and_record(
         # Observability + retention reflect everything that completed this run.
         # Observability writes go straight to Postgres via control.store (the
         # same MetaStore ControlStore already holds -- no second engine/pool).
-        # Retention still uses holder.pipeline: a mid-run commit timeout may
-        # have replaced it.
+        # Retention enumerates tables from the persistent Iceberg catalog.
         monitor.set_activity("finalize")
         _write_observability(control.store, plans, settings, run_id)
-        apply_snapshot_retention(holder.pipeline, settings)
+        apply_snapshot_retention(settings)
     finally:
         monitor.stop()
 
