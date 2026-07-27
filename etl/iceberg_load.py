@@ -1431,7 +1431,7 @@ def _load_one_table(
 
     # Label the peak-memory window: this is where the staged parquet is read
     # back into Arrow and committed to Iceberg.
-    monitor.set_activity(f"load:{tdef.dataset_table_name}")
+    monitor.begin_load(tdef.dataset_table_name)
     try:
         if plan.disposition == "replace":
             # Full rebuild: one size-budgeted branch group per dlt run (first group
@@ -1510,8 +1510,7 @@ def _load_one_table(
         # Persist any per-branch watermarks that committed before the failure.
         control.save()
     finally:
-        # Hand the label back to extraction (which may still be running).
-        monitor.set_activity("extract")
+        monitor.end_load(tdef.dataset_table_name)
         monitor.record_table_loaded(plan.load_status)
     return plan
 

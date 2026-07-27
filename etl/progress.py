@@ -191,8 +191,9 @@ class PipelineMonitor:
     """Background heartbeat + peak-memory attribution for one pipeline run.
 
     Call ``start()`` once, ``record_unit`` / ``record_table_loaded`` from the
-    extraction/load callbacks, ``set_activity`` to label what is currently
-    running, and ``stop()`` at the end to get (and log) a :class:`MonitorReport`.
+    extraction/load callbacks, ``set_activity`` for phase labels and
+    ``begin_load``/``end_load`` from load workers, and ``stop()`` at the end
+    to get (and log) a :class:`MonitorReport`.
     Every method is safe to call when ``enabled=False`` -- it just does nothing,
     so call sites need no conditionals.
     """
@@ -212,7 +213,8 @@ class PipelineMonitor:
         self._rows = 0
         self._tables_loaded = 0
         self._tables_failed = 0
-        self._activity = "starting"            # plain str: assignment is atomic
+        self._phase = "starting"               # coarse label when no loads run
+        self._active_loads: dict[str, None] = {}   # insertion-ordered set
 
         self._rss_cur, self._rss_peak_fn = _make_rss_reader()
         self._rss_peak = 0
@@ -244,7 +246,26 @@ class PipelineMonitor:
 
     # ----- hot-path updates (cheap) -----------------------------------------
     def set_activity(self, label: str) -> None:
-        self._activity = label
+        """Coarse phase label (extract/draining-loads/finalize); shown whenever
+        no table load is in flight. Plain str: assignment is atomic."""
+        self._phase = label
+
+    def begin_load(self, table: str) -> None:
+        """Mark a table load in flight (called from a load worker thread)."""
+        with self._lock:
+            self._active_loads[table] = None
+
+    def end_load(self, table: str) -> None:
+        with self._lock:
+            self._active_loads.pop(table, None)
+
+    def _activity_label(self) -> str:
+        """The in-flight loads if any (``load[2]:a,b``), else the phase label."""
+        with self._lock:
+            active = list(self._active_loads)
+        if active:
+            return f"load[{len(active)}]:" + ",".join(active)
+        return self._phase
 
     def record_unit(self, rows: int, status: str) -> None:
         with self._lock:
@@ -263,7 +284,7 @@ class PipelineMonitor:
     def _refresh_peaks(self) -> None:
         # OS/Arrow high-water marks are monotonic; whenever one ticks up, pin the
         # increase to whatever activity is running right now.
-        act = self._activity
+        act = self._activity_label()
         rss = self._rss_peak_fn() or self._rss_cur()
         if rss > self._rss_peak:
             self._rss_peak, self._rss_peak_activity = rss, act
@@ -281,11 +302,12 @@ class PipelineMonitor:
                 next_report = elapsed + self.interval_s
 
     def _heartbeat(self, elapsed: float) -> str:
+        activity = self._activity_label()
         with self._lock:
             ud, uf, rows = self._units_done, self._units_failed, self._rows
             tl = self._tables_loaded
         failed = f" {uf} failed" if uf else ""
-        return (f"PROGRESS {_elapsed(elapsed)} | {self._activity} | "
+        return (f"PROGRESS {_elapsed(elapsed)} | {activity} | "
                 f"tables {tl}/{self.total_tables} | "
                 f"extract {ud}/{self.total_units}{failed} | "
                 f"rows={rows:,} | rss={_mb(self._rss_cur())}"
