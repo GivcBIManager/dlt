@@ -104,6 +104,11 @@ class ControlStore:
     def __init__(self, store: "MetaStore"):
         self.store = store
         self.data: dict = {}
+        # advance()/save() run on concurrent load workers; the lock keeps dict
+        # mutation and save's iteration consistent. load()/as_dict()/entry()
+        # are only called when no loads are in flight (run start / between
+        # phases), so they stay lock-free.
+        self._lock = threading.RLock()
 
     def load(self) -> "ControlStore":
         self.store.ensure_schema()
@@ -130,30 +135,32 @@ class ControlStore:
 
     def advance(self, result: ExtractResult) -> None:
         """Move watermarks forward for a successfully loaded (table, branch)."""
-        tbl = self.data.setdefault(result.table, {})
-        cur = tbl.setdefault(result.branch, {})
-        cur["last_cdc"] = _wm_advance(cur.get("last_cdc"), result.new_cdc)
-        cur["last_date"] = _wm_advance(cur.get("last_date"), result.new_date)
-        cur["status"] = result.status
-        cur["row_count"] = result.row_count
-        cur["duration_ms"] = result.duration_ms
-        cur["last_run_at"] = now_local().isoformat()
+        with self._lock:
+            tbl = self.data.setdefault(result.table, {})
+            cur = tbl.setdefault(result.branch, {})
+            cur["last_cdc"] = _wm_advance(cur.get("last_cdc"), result.new_cdc)
+            cur["last_date"] = _wm_advance(cur.get("last_date"), result.new_date)
+            cur["status"] = result.status
+            cur["row_count"] = result.row_count
+            cur["duration_ms"] = result.duration_ms
+            cur["last_run_at"] = now_local().isoformat()
 
     def save(self) -> None:
-        rows = []
-        for table, branches in self.data.items():
-            for branch, info in branches.items():
-                cdc = info.get("last_cdc") or {}
-                date = info.get("last_date") or {}
-                rows.append({
-                    "table_name": table, "branch_id": str(branch),
-                    "last_cdc_value": cdc.get("value"), "last_cdc_kind": cdc.get("kind"),
-                    "last_date_value": date.get("value"), "last_date_kind": date.get("kind"),
-                    "status": info.get("status"), "row_count": info.get("row_count"),
-                    "duration_ms": info.get("duration_ms"),
-                    "last_run_at": info.get("last_run_at"),
-                })
-        self.store.upsert_control_state(rows)
+        with self._lock:
+            rows = []
+            for table, branches in self.data.items():
+                for branch, info in branches.items():
+                    cdc = info.get("last_cdc") or {}
+                    date = info.get("last_date") or {}
+                    rows.append({
+                        "table_name": table, "branch_id": str(branch),
+                        "last_cdc_value": cdc.get("value"), "last_cdc_kind": cdc.get("kind"),
+                        "last_date_value": date.get("value"), "last_date_kind": date.get("kind"),
+                        "status": info.get("status"), "row_count": info.get("row_count"),
+                        "duration_ms": info.get("duration_ms"),
+                        "last_run_at": info.get("last_run_at"),
+                    })
+            self.store.upsert_control_state(rows)
 
 
 # --------------------------------------------------------------------------- #
