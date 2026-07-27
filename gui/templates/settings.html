@@ -30,12 +30,12 @@ const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers
   "pool_backoff_base_s","pool_backoff_cap_s",
   "max_retries","retry_interval_s","snapshot_maintenance","snapshot_expire_days","snapshot_min_to_keep",
   "progress_enabled","progress_interval_s","load_batch_rows","load_group_max_bytes",
-  "load_commit_timeout_s","cleanup_staging_after_load","dsn_mode",
+  "load_commit_timeout_s","load_workers","cleanup_staging_after_load","dsn_mode",
   "dq_hash_delta_tolerance_pct"]);
 const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
   "pool_acquire_timeout_s","pool_acquire_attempts","pool_backoff_base_s","pool_backoff_cap_s",
   "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep",
-  "progress_interval_s","load_batch_rows","load_group_max_bytes","load_commit_timeout_s",
+  "progress_interval_s","load_batch_rows","load_group_max_bytes","load_commit_timeout_s","load_workers",
   "dq_hash_delta_tolerance_pct"]);
 
 const GROUPS = [
@@ -84,6 +84,8 @@ const GROUPS = [
         help: "Rows per Arrow batch when streaming staged parquet into the load." },
       { k: "load_commit_timeout_s", label: "Commit watchdog", unit: "s",
         help: "A single Iceberg commit exceeding this is abandoned and the table marked FAILED for this run (0 disables)." },
+      { k: "load_workers", label: "Load workers", unit: "parallel",
+        help: "Tables loading into Iceberg at once, each through its own per-table pipeline (1 = serial). Peak load RSS scales with this × the group budget — lower the group budget when raising it." },
       { k: "cleanup_staging_after_load", label: "Delete staged parquet", options: ["true", "false"],
         help: "Reclaim staging disk once a branch's rows are committed. Turn off to keep files for dq_check --self-test." },
     ]},
