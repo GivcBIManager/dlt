@@ -680,37 +680,74 @@ def _cleanup_staged(result: ExtractResult, settings: Settings) -> None:
                     result.table, path, exc)
 
 
+def _group_by_staged_bytes(
+    results: list[ExtractResult], max_bytes: int
+) -> list[list[ExtractResult]]:
+    """Greedy, order-preserving packing of branch results into size-budgeted groups.
+
+    Each group's staged parquet bytes total at most ``max_bytes``, except a
+    single branch that alone exceeds the budget, which gets its own group (the
+    pre-grouping behavior). One group = one dlt run = one Iceberg commit, so
+    small tables collapse to a single commit while the loader's in-memory peak
+    (dlt materializes each load package whole) stays bounded by the budget
+    times the parquet->Arrow expansion factor. A branch whose staged file
+    cannot be stat'ed is treated as budget-sized so it runs alone.
+    """
+    groups: list[list[ExtractResult]] = []
+    cur: list[ExtractResult] = []
+    cur_bytes = 0
+    for r in results:
+        try:
+            size = r.staged_path.stat().st_size
+        except OSError:
+            size = max_bytes  # unknown size: quarantine in its own group
+        if cur and cur_bytes + size > max_bytes:
+            groups.append(cur)
+            cur, cur_bytes = [], 0
+        cur.append(r)
+        cur_bytes += size
+    if cur:
+        groups.append(cur)
+    return groups
+
+
 def _run_per_branch_rebuild(
     pipeline,
     plan: TableLoadPlan,
     settings: Settings,
     control: ControlStore,
 ) -> None:
-    """Load a full-rebuild (``replace``) table one branch per dlt run.
+    """Load a full-rebuild (``replace``) table in size-budgeted branch groups.
 
     The dlt filesystem-Iceberg loader materializes a whole load package into one
     Arrow table (``arrow_dataset.to_table()``) before writing -- regardless of
-    write disposition -- so a single all-branches ``replace`` peaks at the entire
-    table (e.g. ~11GB for 3.5M rows). By writing one branch per ``pipeline.run``
-    instead -- the first branch with ``replace`` (which truncates any prior
-    table via pyiceberg ``overwrite``) and every later branch with ``append`` --
-    each load package holds a single branch, so the peak drops to the largest
-    branch.
+    write disposition -- so each run's package must fit in memory. Branches are
+    greedily packed into groups whose staged bytes fit
+    ``settings.load_group_max_bytes``: a small table becomes ONE run (one
+    Iceberg commit instead of one per branch), while an oversized branch still
+    runs alone, keeping the peak bounded exactly as before grouping.
 
-    Watermarks advance per branch as it commits, so a mid-stream failure still
-    leaves the already-loaded branches (and their watermarks) correct; the failed
-    and not-yet-attempted branches keep their old watermark and are re-pulled next
-    run. The caller persists ``control`` and marks the table FAILED if this raises.
+    The first group is written with ``replace`` (which truncates any prior
+    table via pyiceberg ``overwrite``); every later group ``append``s.
+    Watermarks advance per group as it commits, so a mid-stream failure still
+    leaves the already-committed groups' branches (and their watermarks)
+    correct; the failed and not-yet-attempted branches keep their old watermark
+    and are re-pulled next run. The caller persists ``control`` and marks the
+    table FAILED if this raises.
     """
-    disposition = "replace"  # first branch truncates the prior table
-    for r in plan.success:
+    disposition = "replace"  # first group truncates the prior table
+    for group in _group_by_staged_bytes(plan.success, settings.load_group_max_bytes):
+        branch_ids = ",".join(str(r.branch_id) for r in group)
         _run_pipeline(
-            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], disposition,
-                                         write_hash=not plan.tdef.is_snapshot)],
-            settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:{disposition}")
-        control.advance(r)
-        _cleanup_staged(r, settings)
-        disposition = "append"  # everything after the first adds on
+            pipeline,
+            [_iceberg_resource(plan, settings, [r.staged_path for r in group],
+                               disposition, write_hash=not plan.tdef.is_snapshot)],
+            settings,
+            f"{plan.tdef.dataset_table_name}:branches={branch_ids}:{disposition}")
+        for r in group:
+            control.advance(r)
+            _cleanup_staged(r, settings)
+        disposition = "append"  # everything after the first group adds on
 
 
 def _run_per_branch_append(
@@ -719,20 +756,25 @@ def _run_per_branch_append(
     settings: Settings,
     control: ControlStore,
 ) -> None:
-    """Append a snapshot table one branch per dlt run (memory-bounded).
+    """Append a snapshot table in size-budgeted branch groups (memory-bounded).
 
-    Like ``_run_per_branch_rebuild`` this bounds the loader's peak to a single
-    branch, but *every* branch appends -- including the first -- so snapshots
-    stored by earlier runs are preserved (the whole point of a snapshot table).
-    Watermarks advance per branch as it commits so a mid-stream failure leaves
-    the already-appended branches correct.
+    Like ``_run_per_branch_rebuild`` this packs branches into
+    ``load_group_max_bytes`` groups, but *every* group appends -- including the
+    first -- so snapshots stored by earlier runs are preserved (the whole point
+    of a snapshot table). Watermarks advance per group as it commits so a
+    mid-stream failure leaves the already-appended branches correct.
     """
-    for r in plan.success:
+    for group in _group_by_staged_bytes(plan.success, settings.load_group_max_bytes):
+        branch_ids = ",".join(str(r.branch_id) for r in group)
         _run_pipeline(
-            pipeline, [_iceberg_resource(plan, settings, [r.staged_path], "append")],
-            settings, f"{plan.tdef.dataset_table_name}:branch={r.branch_id}:append")
-        control.advance(r)
-        _cleanup_staged(r, settings)
+            pipeline,
+            [_iceberg_resource(plan, settings, [r.staged_path for r in group],
+                               "append")],
+            settings,
+            f"{plan.tdef.dataset_table_name}:branches={branch_ids}:append")
+        for r in group:
+            control.advance(r)
+            _cleanup_staged(r, settings)
 
 
 # --------------------------------------------------------------------------- #

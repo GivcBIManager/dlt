@@ -321,6 +321,16 @@ class Settings:
     # Iceberg load. Caps load-time memory vs reading a whole branch file at once.
     load_batch_rows: int = 50_000
 
+    # Full-rebuild/append branch grouping: pack consecutive branches into one
+    # dlt run while their staged parquet bytes fit this budget. One run = one
+    # Iceberg commit, so a small table collapses from one commit per branch to
+    # a single commit (measured: 39-54% of INITIAL load time was pure
+    # per-branch commit overhead). A branch bigger than the budget still runs
+    # alone -- the pre-grouping behavior. Staged bytes are compressed; the
+    # loader's in-memory Arrow peak is a few times larger, so keep this well
+    # under the available RAM headroom.
+    load_group_max_bytes: int = 256 * 1024 * 1024
+
     # Watchdog on each blocking Iceberg commit (``pipeline.run``). A pyiceberg
     # commit can hang forever with no error, deadlocking the whole run; if a
     # single commit exceeds this many seconds it is abandoned and that table is
@@ -554,6 +564,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         progress_enabled=bool(_cfg("etl.progress_enabled", True)),
         progress_interval_s=float(_cfg("etl.progress_interval_s", 5.0)),
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),
+        load_group_max_bytes=int(_cfg("etl.load_group_max_bytes", 256 * 1024 * 1024)),
         load_commit_timeout_s=int(_cfg("etl.load_commit_timeout_s", 900)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
         cleanup_staging_after_load=bool(_cfg("etl.cleanup_staging_after_load", True)),
