@@ -148,6 +148,7 @@ const fileDash = createLogDash();
 const TABLE_COLS  = ["table_name","table","source_table","target_table"];
 const BRANCH_COLS = ["branch","branch_id","branch_key","branch_name"];
 const STATUS_COLS = ["status","result","outcome"];
+const LOAD_STATUS_COLS = ["load_status"];
 // Ordered by preference — first match wins (check_time for DQ, start_time for run-log/control).
 const DATE_COLS   = ["check_time","start_time","started_at","run_started_at","recorded_at",
                      "updated_at","window_start","window_end","window_until","window_from",
@@ -164,7 +165,7 @@ const dateOnly = (v) => v ? String(v).slice(0, 10) : "";
 function SysTable(cfg) {
   let DATA = { columns: [], rows: [] };
   let roles = {};
-  const state = { table: "", branch: "", status: "", from: "", to: "" };
+  const state = { table: "", branch: "", status: "", load_status: "", from: "", to: "" };
 
   function distinct(col) {
     return [...new Set(DATA.rows.map(r => r[col]).filter(v => v != null && v !== ""))]
@@ -180,6 +181,7 @@ function SysTable(cfg) {
     if (roles.table)  parts.push(selHtml("table", "Table", distinct(roles.table)));
     if (roles.branch) parts.push(selHtml("branch", "Branch", distinct(roles.branch)));
     if (roles.status) parts.push(selHtml("status", "Status", distinct(roles.status)));
+    if (roles.loadStatus) parts.push(selHtml("load_status", "Load status", distinct(roles.loadStatus)));
     if (roles.date) {
       parts.push(`<div><label>From <small>(${esc(roles.date)})</small></label><input type="date" data-f="from"></div>`);
       parts.push(`<div><label>To</label><input type="date" data-f="to"></div>`);
@@ -201,6 +203,7 @@ function SysTable(cfg) {
       if (state.table && roles.table && String(r[roles.table]) !== state.table) return false;
       if (state.branch && roles.branch && String(r[roles.branch]) !== state.branch) return false;
       if (state.status && roles.status && String(r[roles.status]) !== state.status) return false;
+      if (state.load_status && roles.loadStatus && String(r[roles.loadStatus]) !== state.load_status) return false;
       if (roles.date && (state.from || state.to)) {
         const d = dateOnly(r[roles.date]);
         if (state.from && d < state.from) return false;
@@ -244,6 +247,7 @@ function SysTable(cfg) {
         table: pickCol(DATA.columns, TABLE_COLS),
         branch: pickCol(DATA.columns, BRANCH_COLS),
         status: pickCol(DATA.columns, STATUS_COLS),
+        loadStatus: pickCol(DATA.columns, LOAD_STATUS_COLS),
         date: pickCol(DATA.columns, DATE_COLS),
       };
       buildBar();
@@ -260,7 +264,7 @@ const dqView = SysTable({
 });
 const runlogView = SysTable({
   endpoint: "/api/iceberg/system/etl_run_log?limit=1000", barId: "runlog-bar", outId: "runlog",
-  pillCols: ["status"], numCols: ["row_count","duration_ms","attempts"],
+  pillCols: ["status","load_status"], numCols: ["row_count","duration_ms","attempts"],
 });
 const controlView = SysTable({
   endpoint: "/api/iceberg/system/etl_control?limit=1000", barId: "control-bar", outId: "control",
