@@ -104,7 +104,7 @@ function makePipelineView(opts = {}) {
     ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
     prog: /PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+([^|]+?)\s+\|\s+tables\s+(\d+)\/(\d+)\s+\|\s+extract\s+(\d+)\/(\d+)(?:\s+(\d+)\s+failed)?\s+\|\s+rows=([\d,]+)\s+\|\s+rss=([^( ]+)\(peak\s+([^)]+)\)\s+arrow=(\S+)/,
     unit: /\[([^/\]]+)\/([^\]]+)\]\s+([\d,]+)\s+rows\s+\(attempt\s+(\d+)\)/,
-    unitErr: /\[([^/\]]+)\/([^\]]+)\]\s+(?:non-connection error during read|connection error[^:]*):\s*(.+)/,
+    unitErr: /\[([^/\]]+)\/([^\]]+)\]\s+(?:non-connection error during read|connection error[^:]*|connection failed after \d+ attempt\(s\)):\s*(.+)/,
     loaded: /\[([^/\]]+)\]\s+loaded:\s+disp=(\S+)\s+ok=(\d+)\s+fail=(\d+)\s+rows=([\d,]+)/,
     loadFail: /\[([^/\]]+)\]\s+load failed:\s*(.+)/,
     skipped: /\[([^/\]]+)\]\s+skipped:\s*(.+)/,
@@ -123,7 +123,7 @@ function makePipelineView(opts = {}) {
   }
   function tdef(name) {
     let t = dash.tables.get(name);
-    if (!t) { t = { ok: 0, fail: 0, branches: new Set(), load: "pending", disp: "", rows: 0, err: "", final: null }; dash.tables.set(name, t); }
+    if (!t) { t = { ok: 0, fail: 0, okFinal: 0, failFinal: 0, branches: new Set(), load: "pending", disp: "", rows: 0, err: "", final: null }; dash.tables.set(name, t); }
     return t;
   }
   function bdef(key) {
@@ -158,11 +158,15 @@ function makePipelineView(opts = {}) {
     }
     if ((m = RE.unit.exec(line))) { dash.started = true; const t = tdef(m[2]); t.ok++; t.branches.add(m[1]); t.rows += +m[3].replace(/,/g, ""); bdef(m[1]).ok++; return; }
     if ((m = RE.unitErr.exec(line))) { const t = tdef(m[2]); t.fail++; t.err = m[3].slice(0, 160); bdef(m[1]).fail++; pushIssue(line, "error"); return; }
-    if ((m = RE.loaded.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.load = +m[4] > 0 ? "failed" : "loaded"; t.rows = +m[5].replace(/,/g, ""); return; }
+    // The loaded / no-rows / summary lines carry the authoritative per-table
+    // ok/fail branch counts, so the extract column self-heals when per-unit
+    // lines were never emitted (an unreachable branch fails every table with
+    // one "branch unreachable" line) or arrived in an unparsed variant.
+    if ((m = RE.loaded.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.okFinal = +m[3]; t.failFinal = +m[4]; t.load = +m[4] > 0 ? "failed" : "loaded"; t.rows = +m[5].replace(/,/g, ""); return; }
     if ((m = RE.loadFail.exec(line))) { const t = tdef(m[1]); t.load = "failed"; t.err = m[2].slice(0, 160); pushIssue(line, "error"); return; }
-    if ((m = RE.noRows.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.load = "no rows"; return; }
+    if ((m = RE.noRows.exec(line))) { const t = tdef(m[1]); t.disp = m[2]; t.okFinal = +m[3]; t.failFinal = +m[4]; t.load = "no rows"; return; }
     if ((m = RE.skipped.exec(line))) { const t = tdef(m[1]); t.load = "skipped"; t.err = m[2].slice(0, 160); return; }
-    if ((m = RE.summaryRow.exec(line))) { const t = tdef(m[1]); t.final = m[2]; t.disp = m[3]; if (t.load === "pending" || t.load === "loading") t.load = m[2] === "SUCCESS" ? "loaded" : "failed"; return; }
+    if ((m = RE.summaryRow.exec(line))) { const t = tdef(m[1]); t.final = m[2]; t.disp = m[3]; t.okFinal = +m[4]; t.failFinal = +m[5]; if (t.load === "pending" || t.load === "loading") t.load = m[2] === "SUCCESS" ? "loaded" : "failed"; return; }
     if (/\|\s*(WARNING|ERROR)\s*\||\|\[(WARNING|ERROR)\]\||UserWarning|Traceback/.test(line)) pushIssue(line, /ERROR|Traceback/.test(line) ? "error" : "warn");
   }
   function branchTotal() { return dash.branchesTotal || dash.branches.size || branchHint() || 0; }
@@ -179,6 +183,18 @@ function makePipelineView(opts = {}) {
     if (stage === "finalize" || stage === "done") return "st-final";
     return "";
   }
+  function stageLabel(stage) {
+    // "load[9]:t1,t2,..." lists every in-flight table -- far too long for the
+    // banner. Show just the count; the per-table LOADING pills carry the names.
+    const m = /^load\[(\d+)\]:/.exec(stage);
+    if (m) return `loading ${m[1]} table${m[1] === "1" ? "" : "s"}`;
+    return stage;
+  }
+  // Per-unit extract lines undercount when a branch failed without one (see
+  // feedLine); prefer the authoritative ok/fail totals once a load reported.
+  function extractCounts(t) {
+    return { ok: Math.max(t.branches.size, t.okFinal), fail: Math.max(t.fail, t.failFinal) };
+  }
   function loadPill(s) {
     const cls = { pending: "gray", loading: "running", loaded: "ok", failed: "failed", skipped: "skipped", "no rows": "gray" }[s] || "gray";
     return `<span class="pill ${cls}">${esc(s)}</span>`;
@@ -190,13 +206,13 @@ function makePipelineView(opts = {}) {
     // The PROGRESS heartbeat only ticks every ~5s; the per-unit extract lines are
     // fresher, so show whichever count is further along.
     const done = Math.max(dash.unitsDone,
-      [...dash.tables.values()].reduce((a, t) => a + t.branches.size, 0));
+      [...dash.tables.values()].reduce((a, t) => a + extractCounts(t).ok, 0));
     const total = dash.unitsTotal || (bt * (dash.tablesTotal || dash.tables.size)) || 0;
     const exited = meta && meta.exit != null;
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
-    const failTotal = dash.unitsFailed || [...dash.tables.values()].reduce((a, t) => a + t.fail, 0);
+    const failTotal = dash.unitsFailed || [...dash.tables.values()].reduce((a, t) => a + extractCounts(t).fail, 0);
 
-    el("rd-stage").textContent = dash.stage || (exited ? "done" : "starting");
+    el("rd-stage").textContent = stageLabel(dash.stage) || (exited ? "done" : "starting");
     el("rd-stage").className = "rd-stage " + stageClass(dash.stage || (exited ? "done" : ""));
     el("rd-elapsed").textContent = dash.elapsed || elapsedFromTs();
     el("rd-rows").textContent = fmtNum(dash.rows) + " rows";
@@ -215,14 +231,15 @@ function makePipelineView(opts = {}) {
     }).join("");
 
     el("rd-tbody").innerHTML = [...dash.tables.entries()].map(([name, t]) => {
-      const ebTot = bt || t.branches.size || 0;
-      const eCount = t.branches.size;
+      const ec = extractCounts(t);
+      const ebTot = bt || ec.ok || 0;
+      const eCount = ec.ok;
       const ePct = ebTot ? Math.round(Math.min(eCount, ebTot) / ebTot * 100) : (t.final ? 100 : 0);
       const issue = t.err ? `<span class="rd-err" title="${esc(t.err)}">${esc(t.err.slice(0, 64))}</span>` : "";
       return `<tr>
         <td class="mono">${esc(name)}</td>
-        <td><span class="rd-mini"><span class="rd-mini-fill${t.fail ? " err" : ""}" style="width:${ePct}%"></span></span>
-            <span class="rd-mini-lbl">${eCount}${ebTot ? `/${ebTot}` : ""}${t.fail ? ` · ${t.fail}✕` : ""}</span></td>
+        <td><span class="rd-mini"><span class="rd-mini-fill${ec.fail ? " err" : ""}" style="width:${ePct}%"></span></span>
+            <span class="rd-mini-lbl">${eCount}${ebTot ? `/${ebTot}` : ""}${ec.fail ? ` · ${ec.fail}✕` : ""}</span></td>
         <td>${loadPill(t.load)}${t.disp ? ` <span class="rd-disp">${esc(t.disp)}</span>` : ""}</td>
         <td class="num">${fmtNum(t.rows)}</td>
         <td>${issue}</td></tr>`;
