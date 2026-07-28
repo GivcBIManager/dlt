@@ -7,6 +7,7 @@ hang -- so the existing recovery marks the table FAILED and the run proceeds.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -47,6 +48,53 @@ def test_zero_timeout_runs_inline_without_watchdog():
     # 0/None disables the watchdog: fn runs on the calling thread and returns.
     assert _run_with_timeout(lambda: "ok", timeout_s=0, label="t") == "ok"
     assert _run_with_timeout(lambda: "ok", timeout_s=None, label="t") == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# Abandoned-thread accounting. A timed-out commit thread cannot be killed, only
+# abandoned -- and executors created inside it (dlt's load pool, pyiceberg's
+# ExecutorFactory) register workers that concurrent.futures' exit hook joins at
+# interpreter shutdown, hung ones forever (run 20260727-161529 spent 9h+ there).
+# The registry lets the process entry point detect that and hard-exit instead.
+# --------------------------------------------------------------------------- #
+from etl import iceberg_load  # noqa: E402
+
+
+def test_timeout_registers_abandoned_thread_until_it_finishes(monkeypatch):
+    monkeypatch.setattr(iceberg_load, "_abandoned_commits", [])
+    release = threading.Event()
+    with pytest.raises(TimeoutError):
+        _run_with_timeout(release.wait, timeout_s=0.1, label="wedged-table")
+    assert any("wedged-table" in name
+               for name in iceberg_load.hung_commit_threads())
+    # Once the zombie finally returns it stops counting as hung.
+    release.set()
+    deadline = time.monotonic() + 5
+    while iceberg_load.hung_commit_threads() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert iceberg_load.hung_commit_threads() == []
+
+
+def test_completed_commit_is_never_registered(monkeypatch):
+    monkeypatch.setattr(iceberg_load, "_abandoned_commits", [])
+    assert _run_with_timeout(lambda: "ok", timeout_s=5, label="t") == "ok"
+    assert iceberg_load.hung_commit_threads() == []
+
+
+def test_timeout_logs_where_the_hung_thread_is_stuck(monkeypatch, caplog):
+    # The dump is the hung-vs-slow evidence for chronic watchdog tables: the
+    # abandoned thread's stack must land in the log, naming the stuck frame.
+    monkeypatch.setattr(iceberg_load, "_abandoned_commits", [])
+    release = threading.Event()
+
+    def wedged_commit_marker():
+        release.wait()
+
+    with caplog.at_level(logging.WARNING, logger="etl.load"):
+        with pytest.raises(TimeoutError):
+            _run_with_timeout(wedged_commit_marker, timeout_s=0.1, label="t")
+    release.set()
+    assert "wedged_commit_marker" in caplog.text
 
 
 # --------------------------------------------------------------------------- #

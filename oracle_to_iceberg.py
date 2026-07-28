@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import copy
 import logging
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -218,5 +219,27 @@ def main(argv: list[str]) -> int:
     return exit_code
 
 
+def _shutdown_exit(code: int) -> None:
+    """Exit the process, sidestepping interpreter shutdown when it would hang.
+
+    A watchdog-abandoned commit thread cannot be killed, and the executors
+    spawned inside it register worker threads that concurrent.futures' exit
+    hook joins during normal interpreter shutdown -- a hung worker turns
+    ``sys.exit`` into a forever-blocked process that not even SIGTERM can reach
+    (the main thread is parked in a C-level join). While any such thread is
+    still alive, flush logging and ``os._exit`` with the same code; a clean run
+    keeps the normal path so atexit hooks, profilers and coverage still run.
+    """
+    hung = iceberg_load.hung_commit_threads()
+    if hung:
+        logging.getLogger("etl").warning(
+            "hard exit (code %d): %d abandoned commit thread(s) still alive "
+            "(%s); skipping interpreter shutdown, which would join their "
+            "executor threads forever", code, len(hung), ", ".join(hung))
+        logging.shutdown()
+        os._exit(code)
+    sys.exit(code)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    _shutdown_exit(main(sys.argv[1:]))

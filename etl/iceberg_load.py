@@ -36,7 +36,9 @@ import hashlib
 import json
 import logging
 import struct
+import sys
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -1326,6 +1328,37 @@ def clear_pending_packages(pipeline, context: str) -> None:
         log.warning("[%s] could not drop pending packages: %s", context, exc)
 
 
+# Watchdog-abandoned commit threads. A thread stuck in a native pyiceberg call
+# cannot be killed, and abandonment is not free: executors created inside the
+# abandoned ``pipeline.run`` (dlt's load pool, pyiceberg's ExecutorFactory)
+# register worker threads that concurrent.futures' exit hook joins at
+# interpreter shutdown -- hung ones forever, daemon flag notwithstanding. The
+# entry point checks this registry and hard-exits (``os._exit``) while any are
+# still alive; see ``hung_commit_threads``.
+_abandoned_commits: list[threading.Thread] = []
+
+
+def hung_commit_threads() -> list[str]:
+    """Names of watchdog-abandoned commit threads that are still alive."""
+    return [t.name for t in _abandoned_commits if t.is_alive()]
+
+
+def _log_hung_stack(worker: threading.Thread, label: str, timeout_s: float) -> None:
+    """Log where the abandoned commit thread is stuck.
+
+    This is the hung-vs-slow evidence for chronically timed-out tables: a stack
+    parked in socket/catalog I/O means the fix is a connect/request timeout, one
+    deep in upsert work means the commit is merely slow and needs a bigger
+    budget (or a faster merge), not abandonment.
+    """
+    frame = sys._current_frames().get(worker.ident)
+    if frame is None:  # finished inside the race window; nothing to show
+        return
+    log.warning("[%s] commit watchdog fired after %ss; abandoned thread's "
+                "stack:\n%s", label, timeout_s,
+                "".join(traceback.format_stack(frame)))
+
+
 def _run_with_timeout(fn: Callable[[], object], timeout_s: Optional[float], label: str):
     """Run ``fn`` under a wall-clock watchdog, turning a hang into ``TimeoutError``.
 
@@ -1338,9 +1371,13 @@ def _run_with_timeout(fn: Callable[[], object], timeout_s: Optional[float], labe
     still returns its result untouched.
 
     ``timeout_s`` of 0/None disables the watchdog and runs ``fn`` inline. On
-    timeout the worker thread is abandoned (it is a daemon, so it never blocks
-    process exit): a Python thread blocked in a native pyiceberg call cannot be
-    force-killed, so the caller MUST NOT reuse the now-poisoned pipeline.
+    timeout the worker thread is abandoned: a Python thread blocked in a native
+    pyiceberg call cannot be force-killed, so the caller MUST NOT reuse the
+    now-poisoned pipeline. Abandonment does NOT end at the daemon flag -- the
+    executors spawned inside the abandoned ``pipeline.run`` would still hang
+    interpreter shutdown (see ``_abandoned_commits``), so the timed-out worker
+    is recorded for the entry point's exit decision and its stack is logged
+    while it is still stuck.
     """
     if not timeout_s or timeout_s <= 0:
         return fn()
@@ -1356,6 +1393,8 @@ def _run_with_timeout(fn: Callable[[], object], timeout_s: Optional[float], labe
     worker.start()
     worker.join(timeout_s)
     if worker.is_alive():
+        _abandoned_commits.append(worker)
+        _log_hung_stack(worker, label, timeout_s)
         raise TimeoutError(
             f"Iceberg commit for '{label}' exceeded {timeout_s}s (likely a hung "
             f"pyiceberg .reference job); abandoning it and failing the table"
