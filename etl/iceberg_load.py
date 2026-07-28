@@ -284,7 +284,7 @@ def _plan_table(
     return plan
 
 
-def _open_dest_table(settings: Settings, table_name: str):
+def _open_dest_table(settings: Settings, table_name: str, strict: bool = False):
     """Open ``<dataset>.<table>`` from the configured Iceberg catalog, or None.
 
     Destination READS go through the persistent catalog (``[iceberg_catalog]``
@@ -296,21 +296,28 @@ def _open_dest_table(settings: Settings, table_name: str):
     The catalog knows every table ever loaded regardless of local state. The
     dlt WRITE path is untouched.
 
-    Best-effort by contract and NEVER raises: a missing table (normal first
-    load) returns None silently; any other failure logs a warning and returns
-    None so the caller degrades exactly as before.
+    Best-effort by default and never raises then: a missing table (normal
+    first load) returns None silently; any other failure logs a warning and
+    returns None so the caller degrades exactly as before. ``strict=True`` is
+    for correctness decisions (``_table_is_hash_ready``): a missing table
+    still returns None, but any other failure PROPAGATES -- degrading there
+    means answering a yes/no question with a guess.
     """
     try:
         from dlt.common.libs.pyiceberg import get_catalog
         from pyiceberg.exceptions import NoSuchTableError
     except ImportError as exc:
+        if strict:
+            raise
         log.warning("pyiceberg catalog access unavailable: %s", exc)
         return None
     try:
         return get_catalog().load_table(f"{settings.dataset_name}.{table_name}")
     except NoSuchTableError:
         return None  # first load: the table does not exist yet
-    except Exception as exc:  # noqa: BLE001 - best effort by contract
+    except Exception as exc:  # noqa: BLE001 - best effort unless strict
+        if strict:
+            raise
         log.warning("[%s] could not open destination table via catalog: %s",
                     table_name, exc)
         return None
@@ -584,17 +591,22 @@ def _staged_delta_hashes(
 
 def _table_is_hash_ready(settings: Settings, tdef: TableDef, hash_col: str) -> bool:
     """True iff the stored Iceberg table already carries ``hash_col`` -- i.e. a
-    prior full replace wrote it for every row. Missing table or any read error
-    -> not ready (the merge falls back to the composite key). Best-effort: never
-    fails a load.
+    prior full replace wrote it for every row. Missing table (normal first
+    load) -> not ready; the merge falls back to the composite key.
+
+    Unlike the best-effort destination reads, an unreadable catalog RAISES and
+    fails this table's load. This is a correctness decision, not an
+    optimization: guessing "not ready" for a table that IS hash-ready makes
+    the resource skip hashing while the pipeline's synced schema still
+    declares the column, so dlt's normalize fabricates it as all-NULL and the
+    commit would poison the stored hashes (see the guard in
+    ``_merge_iceberg_single_commit``). Per-table isolation contains the
+    failure; the table simply retries next run.
     """
-    tbl = _open_dest_table(settings, tdef.dataset_table_name)
+    tbl = _open_dest_table(settings, tdef.dataset_table_name, strict=True)
     if tbl is None:
         return False
-    try:
-        return hash_col.lower() in {f.name for f in tbl.schema().fields}
-    except Exception:  # noqa: BLE001 - best effort
-        return False
+    return hash_col.lower() in {f.name for f in tbl.schema().fields}
 
 
 def _finish_batch(
@@ -1267,6 +1279,31 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
             f'Table: "{load_table_name}".'
         )
 
+    # A merge_hash column that is present but not fully populated was NOT
+    # computed from the keys: dlt's arrow normalization inserts a missing
+    # schema column as all-NULL (``normalize_py_arrow_item`` rule 3), which is
+    # how a delta built with ``write_hash=False`` against a schema that
+    # declares the column arrives here. Nulls never match -- Arrow joins drop
+    # null keys and ``NULL IN (...)`` is never true -- so joining on it
+    # mis-merges, and even committing it around a composite join would
+    # overwrite stored hashes with NULL (or evolve an all-NULL column into a
+    # not-ready table), breaking hash-readiness' presence => populated
+    # invariant for every later run. The keys are NOT NULL, so a computed hash
+    # can never be null: any null means fabrication. Refuse before touching
+    # the table; the per-table handler marks the table FAILED and it retries
+    # next run.
+    from etl.config import Settings
+    hash_col = Settings().merge_hash_column
+    if hash_col in data.column_names:
+        null_hashes = data.column(hash_col).null_count
+        if null_hashes:
+            raise ValueError(
+                f'Merge delta for "{load_table_name}" carries {null_hashes} '
+                f'null {hash_col} value(s) -- fabricated by schema '
+                f'normalization, not computed from the keys. Refusing to '
+                f'merge it.'
+            )
+
     # Evolve the table schema so any new column in the delta is accepted.
     with table.update_schema() as update:
         update.union_by_name(ensure_iceberg_compatible_arrow_schema(data.schema))
@@ -1277,8 +1314,7 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
         join_cols = get_columns_names_with_prop(schema, "primary_key")
 
     normalized = ensure_iceberg_compatible_arrow_data(data)
-    from etl.config import Settings
-    join_cols = _merge_join_cols(table, normalized, join_cols, Settings().merge_hash_column)
+    join_cols = _merge_join_cols(table, normalized, join_cols, hash_col)
 
     table.upsert(
         df=normalized,

@@ -28,11 +28,11 @@ def test_hash_ready_true_only_when_column_present(tmp_path, monkeypatch):
     t_plain.append(without)
     from etl.config import Settings
 
-    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t_ready)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n, **kw: t_ready)
     assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is True
-    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: t_plain)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n, **kw: t_plain)
     assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is False
-    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n: None)
+    monkeypatch.setattr(iceberg_load, "_open_dest_table", lambda s, n, **kw: None)
     assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is False
 
 
@@ -195,3 +195,112 @@ def test_existing_insert_at_hash_ready_normalizes_hash_col_case(tmp_path, monkey
     assert out is not None
     assert "merge_hash" in out.column_names
     assert out.column(settings.inserted_ts_column).to_pylist() == ["2020-01-01"]
+
+
+# --------------------------------------------------------------------------- #
+# Fabricated-hash defenses. dlt's arrow normalization inserts a missing schema
+# column as all-NULL (normalize_py_arrow_item rule 3), so a delta built with
+# write_hash=False against a schema that declares merge_hash reaches the merge
+# with a present-but-NULL hash column. Nulls never match (Arrow joins drop null
+# keys; NULL IN (...) is never true), so joining on it mis-merges, and merely
+# committing it poisons stored hashes -- run 20260727-161529 failed docl /
+# master_deliveries / orders_master exactly this way.
+# --------------------------------------------------------------------------- #
+import pytest  # noqa: E402
+
+
+def _null_hash(t: pa.Table) -> pa.Table:
+    """The column dlt normalize fabricates: present, typed, all NULL."""
+    return t.append_column("merge_hash",
+                           pa.array([None] * t.num_rows, pa.binary()))
+
+
+def test_merge_refuses_fabricated_all_null_hash(tmp_path):
+    # Hash-ready stored table, multi-row fabricated delta: joining would die on
+    # pyiceberg's duplicate check; committing would NULL the stored hashes. The
+    # merge must refuse before touching the table.
+    t = _seed(tmp_path, "fab", with_hash=True)
+    before = len(list(t.metadata.snapshots))
+    with pytest.raises(ValueError, match="merge_hash"):
+        _merge_iceberg_single_commit(t, _null_hash(_rows([0, 1], ["u0", "n1"])),
+                                     _schema_dict(), "m")
+    t.refresh()
+    assert len(list(t.metadata.snapshots)) == before          # nothing committed
+    got = t.scan().to_arrow()
+    assert got.column("merge_hash").null_count == 0           # stored hashes intact
+
+
+def test_merge_refuses_single_row_fabricated_hash(tmp_path):
+    # A 1-row fabricated delta slips past pyiceberg's duplicate check (one NULL
+    # group of one row) and would blind-insert a duplicate key -- the silent
+    # variant. The guard must catch it the same way.
+    t = _seed(tmp_path, "fab1", with_hash=True)
+    with pytest.raises(ValueError, match="merge_hash"):
+        _merge_iceberg_single_commit(t, _null_hash(_rows([0], ["u0"])),
+                                     _schema_dict(), "m")
+
+
+def test_merge_refuses_fabricated_hash_on_not_ready_table(tmp_path):
+    # Stored table has no merge_hash: committing a fabricated column would
+    # evolve the schema and mint an all-NULL merge_hash, breaking hash-
+    # readiness' presence => populated invariant for every later run.
+    t = _seed(tmp_path, "fab2", with_hash=False)
+    with pytest.raises(ValueError, match="merge_hash"):
+        _merge_iceberg_single_commit(t, _null_hash(_rows([1], ["b"])),
+                                     _schema_dict(), "m")
+    t.refresh()
+    assert "merge_hash" not in {f.name for f in t.schema().fields}
+
+
+def test_merge_accepts_populated_hash_unchanged(tmp_path):
+    # No false positive: a genuinely computed hash (null_count 0) merges as before.
+    t = _seed(tmp_path, "fab_ok", with_hash=True)
+    _merge_iceberg_single_commit(t, _rows([0, 1], ["u0", "n1"], with_hash=True),
+                                 _schema_dict(), "m")
+    t.refresh()
+    assert t.scan().to_arrow().num_rows == 2
+
+
+# --------------------------------------------------------------------------- #
+# The workflow cause: hash-readiness is a correctness decision. Guessing "not
+# ready" on a transient catalog error makes the resource skip hashing while the
+# synced dlt schema still declares the column -- the fabrication above. An
+# unreadable catalog must fail THIS table's load (per-table isolation contains
+# it; the table retries next run), not degrade.
+# --------------------------------------------------------------------------- #
+
+def test_hash_ready_raises_when_catalog_read_fails(monkeypatch):
+    import dlt.common.libs.pyiceberg as dlt_ice
+
+    def _boom(*a, **k):
+        raise RuntimeError("catalog down")
+
+    monkeypatch.setattr(dlt_ice, "get_catalog", _boom)
+    with pytest.raises(RuntimeError, match="catalog down"):
+        iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash")
+
+
+def test_hash_ready_missing_table_is_false_not_an_error(monkeypatch):
+    import dlt.common.libs.pyiceberg as dlt_ice
+    from pyiceberg.exceptions import NoSuchTableError
+
+    class _Cat:
+        def load_table(self, name):
+            raise NoSuchTableError(name)
+
+    monkeypatch.setattr(dlt_ice, "get_catalog", lambda: _Cat())
+    assert iceberg_load._table_is_hash_ready(Settings(), _Tdef, "merge_hash") is False
+
+
+def test_open_dest_table_default_swallows_strict_raises(monkeypatch):
+    # Best-effort callers (insert_at carry-forward, widening, squash baseline)
+    # keep the never-raises contract; strict is for correctness decisions.
+    import dlt.common.libs.pyiceberg as dlt_ice
+
+    def _boom(*a, **k):
+        raise RuntimeError("catalog down")
+
+    monkeypatch.setattr(dlt_ice, "get_catalog", _boom)
+    assert iceberg_load._open_dest_table(Settings(), "t") is None
+    with pytest.raises(RuntimeError, match="catalog down"):
+        iceberg_load._open_dest_table(Settings(), "t", strict=True)
