@@ -1308,12 +1308,42 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
     with table.update_schema() as update:
         update.union_by_name(ensure_iceberg_compatible_arrow_schema(data.schema))
 
+    # The upsert's matched-rows scan projects the branch-head SNAPSHOT's
+    # schema, and the union above evolves only the table metadata -- no
+    # snapshot -- so a column it just added stays invisible to the scan and
+    # pyiceberg's positional cast of the delta against the scanned rows
+    # fails. Nothing heals this later: the next run's union is a no-op, so
+    # the head keeps referencing the old schema and the table's merge stays
+    # wedged. Advance the head to the current schema with an empty append
+    # (one extra snapshot, only on runs that actually add a column).
+    snap = table.current_snapshot()
+    if (
+        snap is not None
+        and snap.schema_id is not None
+        and snap.schema_id != table.schema().schema_id
+    ):
+        from pyiceberg.io.pyarrow import schema_to_pyarrow
+
+        table.append(schema_to_pyarrow(table.schema()).empty_table())
+
     if "parent" in schema:
         join_cols = [get_first_column_name_with_prop(schema, "unique")]
     else:
         join_cols = get_columns_names_with_prop(schema, "primary_key")
 
     normalized = ensure_iceberg_compatible_arrow_data(data)
+
+    # That same positional cast also requires the delta's column ORDER to
+    # match the scanned rows', not just the name set. The table's order
+    # diverges from the source's as soon as any column is added after
+    # creation -- union_by_name appends it at the tail while the source
+    # keeps emitting it in its upstream position -- so project the delta
+    # onto the table's column order (a zero-copy select).
+    in_delta = set(normalized.column_names)
+    normalized = normalized.select(
+        [f.name for f in table.schema().fields if f.name in in_delta]
+    )
+
     join_cols = _merge_join_cols(table, normalized, join_cols, hash_col)
 
     table.upsert(

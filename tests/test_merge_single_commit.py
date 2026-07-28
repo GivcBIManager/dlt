@@ -28,7 +28,7 @@ def _rows(ids, names, branch=1):
     })
 
 
-def _make_table(tmp_path, tag):
+def _make_table(tmp_path, tag, seed=None):
     catalog = SqlCatalog(
         "test",
         uri=f"sqlite:///{(tmp_path / f'cat_{tag}.db').as_posix()}",
@@ -37,8 +37,9 @@ def _make_table(tmp_path, tag):
         **{"py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO"},
     )
     catalog.create_namespace("oasis")
-    t = catalog.create_table(f"oasis.m_{tag}", schema=_rows([0], ["seed"]).schema)
-    t.append(_rows([0], ["seed"]))   # one existing row (id=0) + baseline snapshot
+    seed = seed if seed is not None else _rows([0], ["seed"])
+    t = catalog.create_table(f"oasis.m_{tag}", schema=seed.schema)
+    t.append(seed)                   # one existing row (id=0) + baseline snapshot
     return t
 
 
@@ -88,6 +89,62 @@ def test_insert_only_strategy_appends_without_updating(tmp_path):
     row0 = got.filter(pc.equal(got["id"], 0)).to_pydict()
     assert row0["name"] == ["seed"]                      # untouched by insert-only
     assert got.num_rows == 3                             # ids 1 and 2 inserted
+
+
+def _drift_delta():
+    """A 2-row delta (id 0 updates, id 1 inserts) with ``etimad`` MID-ROW."""
+    return pa.table({
+        "id": pa.array([0, 1], pa.int64()),
+        "etimad": pa.array([10, 20], pa.int64()),  # source's upstream position
+        "name": pa.array(["v0", "v1"]),
+        "branch_id": pa.array([1, 1], pa.int64()),
+    })
+
+
+def test_merge_survives_column_order_drift(tmp_path):
+    """A delta whose column ORDER differs from the table's must still merge.
+
+    ``union_by_name`` appends a column added after table creation at the
+    table's tail, while the source keeps emitting it in its upstream mid-row
+    position -- so the two orders drift apart permanently (same column SET,
+    different positions). pyiceberg's upsert casts the delta to the scanned
+    rows' schema positionally (``upsert_util.get_rows_to_update``), so the
+    merge died on the order alone whenever the delta updated existing rows.
+    """
+    seed = pa.table({
+        "id": pa.array([0], pa.int64()),
+        "name": pa.array(["seed"]),
+        "branch_id": pa.array([1], pa.int64()),
+        "etimad": pa.array([0], pa.int64()),  # added in an earlier run -> TAIL
+    })
+    t = _make_table(tmp_path, "order", seed=seed)
+    _merge_iceberg_single_commit(t, _drift_delta(), _schema(), "m")
+    t.refresh()
+    got = t.scan().to_arrow()
+    assert got.num_rows == 2                             # id 0 updated, id 1 inserted
+    row0 = got.filter(pc.equal(got["id"], 0)).to_pydict()
+    assert row0["name"] == ["v0"]
+    assert row0["etimad"] == [10]
+
+
+def test_merge_survives_column_added_this_run(tmp_path):
+    """A delta that INTRODUCES a column must still merge existing rows.
+
+    The upsert's matched-rows scan projects the branch-head SNAPSHOT's
+    schema, and ``union_by_name`` evolves only the table metadata -- no new
+    snapshot -- so the scan cannot see the just-added column and pyiceberg's
+    positional cast dies. Not self-healing: next run's union is a no-op and
+    the head still references the old schema, wedging the table's merge
+    until something writes a snapshot.
+    """
+    t = _make_table(tmp_path, "newcol")                  # no etimad anywhere yet
+    _merge_iceberg_single_commit(t, _drift_delta(), _schema(), "m")
+    t.refresh()
+    got = t.scan().to_arrow()
+    assert got.num_rows == 2
+    row0 = got.filter(pc.equal(got["id"], 0)).to_pydict()
+    assert row0["name"] == ["v0"]
+    assert row0["etimad"] == [10]                        # populated, not null-dropped
 
 
 def test_unsupported_strategy_raises(tmp_path):
