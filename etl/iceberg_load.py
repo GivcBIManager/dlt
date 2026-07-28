@@ -1242,6 +1242,108 @@ def _sort_by_hash(tbl: pa.Table, hash_col: str) -> pa.Table:
     return tbl.sort_by([(hash_col, "ascending")])
 
 
+def _upsert_in_memory_lookup(
+    table, data: pa.Table, join_col: str, update_matched: bool, label: str = "",
+) -> None:
+    """Single-key upsert whose matched-rows lookup runs in memory, not in a scan.
+
+    pyiceberg's ``table.upsert`` finds matched rows with
+    ``scan(row_filter=In(key, <every delta key>))``, and the scan re-translates,
+    re-binds and re-compiles that predicate for EVERY data file
+    (``_task_to_record_batches``) -- O(files x delta_keys) pure-Python literal
+    churn that dwarfs the actual I/O on a big delta (165k keys x 34 files took
+    367s on delivery_charge, blowing the commit watchdog; the aborted work then
+    grew the next delta, so the table could never catch up). Reading the key
+    column per file with NO row filter skips that machinery entirely, and
+    ``pc.is_in`` gives the same matched/new split from the two key sets.
+
+    The write side deliberately keeps pyiceberg's own primitives: ``overwrite``
+    with an ``In`` over the CHANGED keys plus ``append`` -- the delete path
+    binds its predicate ONCE (not per file), and its metrics pruning
+    short-circuits ``In`` lists over ``IN_PREDICATE_LIMIT``, so it never had
+    the per-file cost.
+
+    Everything else mirrors ``table.upsert`` exactly: duplicate-delta refusal
+    (same message -- the run log patterns on it), duplicate-stored abort (via
+    ``get_rows_to_update``), unchanged-row elision, only-matched files read in
+    full, and one transaction so the merge stays a single physical commit.
+    """
+    from pyiceberg.expressions import AlwaysTrue
+    from pyiceberg.io.pyarrow import ArrowScan, schema_to_pyarrow
+    from pyiceberg.schema import Schema
+    from pyiceberg.table import upsert_util
+
+    if upsert_util.has_duplicate_rows(data, [join_col]):
+        raise ValueError(
+            "Duplicate rows found in source dataset based on the key columns. "
+            "No upsert executed"
+        )
+
+    key_schema = Schema(table.schema().find_field(join_col))
+
+    def _read(task, projection: Schema) -> pa.Table:
+        return ArrowScan(
+            table_metadata=table.metadata, io=table.io,
+            projected_schema=projection, row_filter=AlwaysTrue(),
+        ).to_table(tasks=[task])
+
+    def _cast_like(values, target_type: pa.DataType):
+        # Stored keys read back Arrow-large (binary -> large_binary etc.) while
+        # the delta carries the plain type; is_in needs them aligned.
+        return values if values.type.equals(target_type) else values.cast(target_type)
+
+    stored_key_type = schema_to_pyarrow(key_schema).field(join_col).type
+    delta_keys = _cast_like(data.column(join_col), stored_key_type)
+
+    tasks = list(table.scan().plan_files())
+    matched_tasks = []
+    matched_key_parts: list[pa.ChunkedArray] = []
+    for task in tasks:
+        stored = _read(task, key_schema).column(join_col)
+        mask = pc.is_in(stored, value_set=delta_keys)
+        if pc.any(mask).as_py():
+            matched_tasks.append(task)
+            matched_key_parts.append(stored.filter(mask))
+
+    if matched_key_parts:
+        matched_keys = pa.chunked_array(
+            [chunk for part in matched_key_parts for chunk in part.chunks])
+        unmatched = pc.invert(pc.is_in(
+            _cast_like(data.column(join_col), matched_keys.type),
+            value_set=matched_keys))
+        rows_to_insert = data.filter(unmatched)
+    else:
+        rows_to_insert = data
+
+    rows_to_update = None
+    if update_matched and matched_tasks:
+        target_parts = []
+        for task in matched_tasks:  # full read of ONLY the files with matches
+            full = _read(task, table.schema())
+            keys = _cast_like(full.column(join_col), delta_keys.type)
+            target_parts.append(full.filter(pc.is_in(keys, value_set=delta_keys)))
+        rows_to_update = upsert_util.get_rows_to_update(
+            data, pa.concat_tables(target_parts), [join_col])
+
+    n_upd = rows_to_update.num_rows if rows_to_update is not None else 0
+    log.info("[%s] merge lookup: %d/%d data files hold matched keys; "
+             "%d row(s) to update, %d to insert",
+             label or "?", len(matched_tasks), len(tasks), n_upd,
+             rows_to_insert.num_rows)
+
+    if n_upd == 0 and rows_to_insert.num_rows == 0:
+        return  # nothing changed -- commit nothing, like table.upsert's elision
+
+    with table.transaction() as tx:
+        if n_upd:
+            tx.overwrite(
+                rows_to_update,
+                overwrite_filter=upsert_util.create_match_filter(
+                    rows_to_update, [join_col]))
+        if rows_to_insert.num_rows:
+            tx.append(rows_to_insert)
+
+
 def _merge_join_cols(table, data, composite: list[str], hash_col: str) -> list[str]:
     """Join on the single hash column when BOTH the stored table and the delta
     carry it (hash-ready) -- pyiceberg then takes the fast In path. Otherwise the
@@ -1345,6 +1447,19 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
     )
 
     join_cols = _merge_join_cols(table, normalized, join_cols, hash_col)
+
+    # A single-column key (merge_hash, or a parent table's unique column) takes
+    # the in-memory lookup: ``table.upsert``'s matched-rows scan re-binds its
+    # In(<every delta key>) predicate once per data file, which is what kept
+    # delivery_charge's 165k-row delta from ever fitting the commit watchdog.
+    # Composite keys keep pyiceberg's upsert unchanged (their Or(And(EqualTo))
+    # filter has different, pre-existing costs -- and they disappear as tables
+    # become hash-ready).
+    if len(join_cols) == 1:
+        _upsert_in_memory_lookup(
+            table, normalized, join_cols[0],
+            update_matched=(strategy == "upsert"), label=load_table_name)
+        return
 
     table.upsert(
         df=normalized,
