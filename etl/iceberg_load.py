@@ -1454,7 +1454,15 @@ def _upsert_in_memory_lookup(
     matched_tasks = []
     matched_key_parts: list[pa.ChunkedArray] = []
     for task in tasks:
-        stored = _read(task, key_schema).column(join_col)
+        # Normalize to the canonical key type as each file is read. ArrowScan
+        # reports each file's OWN Arrow width (the same divergence the concat
+        # target below has to absorb), and `is_in` tolerates the mismatch, so
+        # an uncast `stored` only fails later -- at the chunked_array below,
+        # which demands every chunk share one type ("Array chunks must all be
+        # same type"). dlt classified that as transient and retried it until
+        # the job exhausted max_retry_count.
+        stored = _cast_like(_read(task, key_schema).column(join_col),
+                            stored_key_type)
         mask = pc.is_in(stored, value_set=delta_keys)
         if pc.any(mask).as_py():
             matched_tasks.append(task)

@@ -226,3 +226,117 @@ def test_insert_only_leaves_matched_rows_alone(table):
     after = _rows(table)
     assert after[1] == before[1]      # matched row untouched
     assert after[555] == ("new", 5)   # unmatched row inserted
+
+
+# --------------------------------------------------------------------------- #
+# Mixed per-file Arrow widths
+# --------------------------------------------------------------------------- #
+# ArrowScan reports each data file's OWN Arrow width, so one Iceberg `binary`
+# key reads back as `binary` from some files and `large_binary` from others
+# (files written by different dlt/pyarrow versions). The lookup collects the
+# matched keys of every file into one chunked_array, which demands a single
+# type -- doc and docl died on "Array chunks must all be same type", retried as
+# transient until max_retry_count was exhausted. The int64 key above cannot
+# diverge, so these use a binary key written at both widths.
+
+BKEY = "merge_hash"
+
+
+@pytest.fixture
+def binary_key_table(tmp_path):
+    """Binary-keyed table whose data files disagree on the key's Arrow width."""
+    from pyiceberg.catalog.sql import SqlCatalog
+
+    warehouse = tmp_path / "wh"
+    warehouse.mkdir()
+    catalog = SqlCatalog(
+        "t", uri=f"sqlite:///{tmp_path}/cat.db", warehouse=f"file://{warehouse}")
+    catalog.create_namespace("ns")
+
+    schema = pa.schema([
+        pa.field(BKEY, pa.binary(), nullable=False),
+        pa.field("branch_id", pa.int32(), nullable=False),
+        pa.field("payload", pa.string()),
+    ])
+    tbl = catalog.create_table("ns.b", schema=schema)
+
+    def _file(lo, key_type):
+        keys = pa.array([bytes([i]) * 16 for i in range(lo, lo + 5)], pa.binary())
+        return pa.table(
+            {
+                BKEY: keys.cast(key_type),
+                "branch_id": pa.array([1] * 5, pa.int32()),
+                "payload": pa.array([f"v{i}" for i in range(lo, lo + 5)], pa.string()),
+            },
+            schema=pa.schema([schema.field(BKEY).with_type(key_type),
+                              schema.field("branch_id"), schema.field("payload")]),
+        )
+
+    tbl.append(_file(0, pa.binary()))          # narrow file
+    tbl.append(_file(10, pa.large_binary()))   # wide file -- the divergence
+    return tbl
+
+
+def _brows(tbl) -> dict[bytes, str]:
+    t = tbl.scan().to_arrow()
+    return {r[BKEY]: r["payload"] for r in t.select([BKEY, "payload"]).to_pylist()}
+
+
+def _bdelta(tbl, rows: list[tuple[bytes, str]], key_type) -> pa.Table:
+    """A delta shaped like the table, with the key forced to ``key_type``."""
+    from pyiceberg.io.pyarrow import schema_to_pyarrow
+
+    schema = schema_to_pyarrow(tbl.schema())
+    schema = schema.set(schema.get_field_index(BKEY),
+                        schema.field(BKEY).with_type(key_type))
+    return pa.table(
+        {
+            BKEY: pa.array([k for k, _ in rows], pa.binary()).cast(key_type),
+            "branch_id": pa.array([1] * len(rows), pa.int32()),
+            "payload": pa.array([p for _, p in rows], pa.string()),
+        },
+        schema=schema,
+    )
+
+
+@pytest.mark.parametrize("delta_key_type", [pa.binary(), pa.large_binary()])
+def test_update_spanning_files_of_differing_key_width(binary_key_table, delta_key_type):
+    """Matched keys from a narrow and a wide file must collect into one array.
+
+    Parametrized on the delta's own width too: whichever side the delta comes
+    in as, the stored keys have to be normalized before they are chunked.
+    """
+    tbl = binary_key_table
+    before = _brows(tbl)
+    k_narrow, k_wide = bytes([1]) * 16, bytes([11]) * 16
+    delta = _bdelta(tbl, [(k_narrow, "UPD-narrow"), (k_wide, "UPD-wide")],
+                     delta_key_type)
+
+    _upsert_in_memory_lookup(tbl, delta, BKEY, update_matched=True, label="b")
+
+    after = _brows(tbl)
+    assert len(after) == len(before)          # no rows lost across either file
+    assert after[k_narrow] == "UPD-narrow"
+    assert after[k_wide] == "UPD-wide"
+    for k, v in before.items():
+        if k not in (k_narrow, k_wide):
+            assert after[k] == v
+
+
+def test_insert_split_is_correct_across_differing_key_width(binary_key_table):
+    """The matched/unmatched split drives inserts, so it must survive the cast."""
+    tbl = binary_key_table
+    before = _brows(tbl)
+    # Match in BOTH files, so the split is computed from the mixed-width
+    # collection rather than from a single file's chunks.
+    k_narrow, k_wide, k_new = bytes([2]) * 16, bytes([12]) * 16, bytes([99]) * 16
+    delta = _bdelta(tbl, [(k_narrow, "UPD-n"), (k_wide, "UPD-w"), (k_new, "INS")],
+                    pa.binary())
+
+    _upsert_in_memory_lookup(tbl, delta, BKEY, update_matched=True, label="b")
+
+    after = _brows(tbl)
+    assert len(after) == len(before) + 1      # exactly one insert, not three
+    assert after[k_narrow] == "UPD-n"
+    assert after[k_wide] == "UPD-w"
+    assert after[k_new] == "INS"
