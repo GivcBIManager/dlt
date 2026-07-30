@@ -1242,6 +1242,121 @@ def _sort_by_hash(tbl: pa.Table, hash_col: str) -> pa.Table:
     return tbl.sort_by([(hash_col, "ascending")])
 
 
+def _delta_partition_filter(table, data: pa.Table):
+    """``In(<partition col>, <values in the delta>)`` for an identity-partitioned
+    table, or None when nothing can be pruned.
+
+    Restricted to identity transforms on a column the delta carries: the mapping
+    from a row's value to its file's partition is then the identity, so a file
+    whose partition value is absent from the delta cannot hold a delta key. Any
+    other transform (bucket, truncate) would need the source values hashed the
+    same way, and a partition column missing from the delta tells us nothing --
+    both fall back to the full plan. Returns None for an unpartitioned table too,
+    so callers keep today's behaviour.
+    """
+    from pyiceberg.expressions import And, In
+    from pyiceberg.transforms import IdentityTransform
+
+    spec = table.spec()
+    if not spec.fields:
+        return None
+
+    schema = table.schema()
+    predicates = []
+    for field in spec.fields:
+        if not isinstance(field.transform, IdentityTransform):
+            return None  # non-identity: value -> partition is not 1:1
+        name = schema.find_field(field.source_id).name
+        if name not in data.column_names:
+            return None  # delta cannot constrain this dimension
+        values = {v for v in data.column(name).to_pylist() if v is not None}
+        if not values:
+            return None
+        predicates.append(In(name, values))
+
+    expr = predicates[0]
+    for extra in predicates[1:]:
+        expr = And(expr, extra)
+    return expr
+
+
+def _rows_to_update(source: pa.Table, target: pa.Table, join_col: str) -> pa.Table:
+    """Vectorized drop-in for ``upsert_util.get_rows_to_update`` (single key).
+
+    pyiceberg compares matched rows in a pure-Python loop: per matched row it
+    slices BOTH tables to one row and calls ``.as_py()`` on every non-key column
+    until it finds a difference. Measured on claim_service_detail (74 columns)
+    that runs at ~2,700 rows/s, so bintran's 4.97M-row delta would spend ~30
+    minutes there before any I/O -- which is why the big-delta tables never
+    reached the ``merge lookup`` log line and were killed by the commit
+    watchdog, while every table that DID complete had <170k matched rows.
+
+    Same result, computed with Arrow kernels: align the matched pairs with one
+    inner join, then OR a per-column "differs" mask across them. Semantics are
+    pyiceberg's exactly -- two NULLs count as equal, one NULL as a difference,
+    rows come from the ORIGINAL (uncast) source, and a duplicated target key
+    raises the same error. Nested columns, which Arrow cannot compare with
+    ``not_equal``, keep the elementwise Python path.
+    """
+    from pyiceberg.table import upsert_util
+
+    if upsert_util.has_duplicate_rows(target, [join_col]):
+        raise ValueError("Target table has duplicate rows, aborting upsert")
+
+    empty = source.schema.empty_table()
+    if target.num_rows == 0 or source.num_rows == 0:
+        return empty
+
+    non_key = [c for c in source.column_names if c != join_col]
+    if not non_key:
+        return empty  # nothing outside the key can differ
+
+    # pyiceberg casts the source to the target's schema before joining (Arrow
+    # cannot join across differing types); the ROWS it returns still come from
+    # the original source, so cast a copy only for the comparison.
+    cast_source = source if source.schema.equals(target.schema) else source.cast(target.schema)
+
+    src_pos = pa.array(range(cast_source.num_rows), pa.int64())
+    tgt_pos = pa.array(range(target.num_rows), pa.int64())
+    matches = (
+        pa.table({join_col: cast_source.column(join_col), "__src": src_pos})
+        .join(pa.table({join_col: target.column(join_col), "__tgt": tgt_pos}),
+              keys=[join_col], join_type="inner")
+    )
+    if matches.num_rows == 0:
+        return empty
+
+    src_take = matches.column("__src").combine_chunks()
+    tgt_take = matches.column("__tgt").combine_chunks()
+    matched_source = cast_source.take(src_take)
+    matched_target = target.take(tgt_take)
+
+    differs = None
+    for name in non_key:
+        a, b = matched_source.column(name), matched_target.column(name)
+        if pa.types.is_null(a.type) and pa.types.is_null(b.type):
+            continue  # every value on both sides is NULL -> equal
+        if pa.types.is_nested(a.type) or pa.types.is_nested(b.type):
+            # not_equal has no kernel for list/struct/map (the same Arrow gap
+            # that made pyiceberg go row-by-row for EVERY column).
+            col = pa.array([x != y for x, y in zip(a.to_pylist(), b.to_pylist())],
+                           pa.bool_())
+        else:
+            # not_equal yields NULL if either side is NULL: fill those with True
+            # (one-sided NULL is a change), then force both-NULL back to False.
+            col = pc.if_else(
+                pc.and_(pc.is_null(a), pc.is_null(b)),
+                pa.scalar(False),
+                pc.fill_null(pc.not_equal(a, b), True),
+            )
+        differs = col if differs is None else pc.or_(differs, col)
+
+    if differs is None:
+        return empty
+    changed = pc.filter(src_take, pc.fill_null(differs, True))
+    return source.take(changed) if len(changed) else empty
+
+
 def _upsert_in_memory_lookup(
     table, data: pa.Table, join_col: str, update_matched: bool, label: str = "",
 ) -> None:
@@ -1257,11 +1372,25 @@ def _upsert_in_memory_lookup(
     column per file with NO row filter skips that machinery entirely, and
     ``pc.is_in`` gives the same matched/new split from the two key sets.
 
-    The write side deliberately keeps pyiceberg's own primitives: ``overwrite``
-    with an ``In`` over the CHANGED keys plus ``append`` -- the delete path
-    binds its predicate ONCE (not per file), and its metrics pruning
-    short-circuits ``In`` lists over ``IN_PREDICATE_LIMIT``, so it never had
-    the per-file cost.
+    The write side does NOT use ``tx.overwrite(rows, In(changed_keys))``. That
+    path re-plans the table and fully re-reads every planned file, duplicating
+    the read this function already did, and its pruning collapses on a big
+    delta: an ``In`` above ``IN_PREDICATE_LIMIT`` (200) makes the metrics
+    evaluator answer ROWS_MIGHT_MATCH for every file -- short-circuiting there
+    SKIPS pruning rather than making it cheap. doc's 1.02M changed rows thus
+    re-read all 7.6GB and blew the watchdog with nothing committed. Instead each
+    matched file is rewritten in place from the copy already in hand and the
+    commit swaps exactly those files (see the rewrite loop below).
+
+    The file PLAN is pruned to the branch partitions the delta actually carries
+    (``_delta_partition_filter``). These tables are partitioned by
+    ``branch_id`` (identity) and a staged delta covers one branch -- or the few
+    grouped into one dlt run -- so an unpruned plan reads every other branch's
+    files for nothing: appointments held 763 files / 19GB across 8 branches, and
+    a 16MB single-branch delta was scanning all of it. Pruning is exact for an
+    identity partition (a file's rows are all one branch), so the matched/insert
+    split is unchanged -- only the files never holding a candidate key are
+    skipped.
 
     Everything else mirrors ``table.upsert`` exactly: duplicate-delta refusal
     (same message -- the run log patterns on it), duplicate-stored abort (via
@@ -1295,7 +1424,15 @@ def _upsert_in_memory_lookup(
     stored_key_type = schema_to_pyarrow(key_schema).field(join_col).type
     delta_keys = _cast_like(data.column(join_col), stored_key_type)
 
-    tasks = list(table.scan().plan_files())
+    part_filter = _delta_partition_filter(table, data)
+    tasks = list(
+        table.scan().plan_files() if part_filter is None
+        else table.scan(row_filter=part_filter).plan_files()
+    )
+    if part_filter is not None:
+        log.info("[%s] merge plan: %d data file(s) after partition pruning (%s)",
+                 label or "?", len(tasks), part_filter)
+
     matched_tasks = []
     matched_key_parts: list[pa.ChunkedArray] = []
     for task in tasks:
@@ -1316,30 +1453,119 @@ def _upsert_in_memory_lookup(
         rows_to_insert = data
 
     rows_to_update = None
+    replaced: list[tuple[object, list]] = []
+    commit_uuid = None
     if update_matched and matched_tasks:
-        target_parts = []
+        # Concat target schema: the table's own Arrow schema, every field made
+        # nullable. ArrowScan reports each file's OWN Arrow types, not the
+        # projected schema's, so files written by different dlt/pyarrow versions
+        # read back with different widths for the same Iceberg column -- docl
+        # holds 84 files with `cost_updated: string` and 326 with
+        # `large_string`. concat_tables demands byte-identical schemas and
+        # raised "Schema at index 21 was different", which dlt classified as
+        # transient and retried until the commit watchdog abandoned the table.
+        # Casting each part to the table's canonical schema unifies both the
+        # width and any per-file nullability. Only get_rows_to_update consumes
+        # this table and it returns rows taken from `data`, so the relaxation
+        # cannot reach the committed rows.
+        target_schema = pa.schema(
+            [f.with_nullable(True) for f in schema_to_pyarrow(table.schema())]
+        )
+        # SURGICAL REWRITE. ``tx.overwrite(rows, In(changed_keys))`` cannot be
+        # used for a large scattered delta: its delete step re-plans the table
+        # and FULLY RE-READS every planned file (pyiceberg table/__init__.py --
+        # ArrowScan per file, then df.filter(preserve_row_filter)), on top of
+        # the read this loop already did. doc's 1.02M changed rows sit in 124 of
+        # 359 files, so the range bound spans nearly the whole key space, prunes
+        # almost nothing, and the commit re-read 7.6GB -- 54 minutes, past the
+        # watchdog, with nothing committed.
+        #
+        # Instead each matched file is read ONCE here and its replacement is
+        # written immediately: survivors (rows this delta does not change) plus
+        # the updated rows. The commit then swaps exactly those files. Files
+        # holding matched keys whose values are all IDENTICAL are left alone --
+        # a rewrite that changes nothing is pure cost.
+        #
+        # Row conservation is exact per file: `full` splits into survivors and
+        # the rows whose key is in `changed`, and `upd` carries exactly one row
+        # per changed key (the delta is duplicate-free, checked above), so
+        # len(survivors) + len(upd) == len(full).
+        import itertools
+        import uuid as _uuid
+
+        from pyiceberg.io.pyarrow import _dataframe_to_data_files
+
+        def _align(tbl: pa.Table) -> pa.Table:
+            return tbl if tbl.schema.equals(target_schema) else tbl.cast(target_schema)
+
+        commit_uuid = _uuid.uuid4()
+        counter = itertools.count(0)
+        upd_parts: list[pa.Table] = []
+        seen_keys: set = set()
+
         for task in matched_tasks:  # full read of ONLY the files with matches
             full = _read(task, table.schema())
             keys = _cast_like(full.column(join_col), delta_keys.type)
-            target_parts.append(full.filter(pc.is_in(keys, value_set=delta_keys)))
-        rows_to_update = upsert_util.get_rows_to_update(
-            data, pa.concat_tables(target_parts), [join_col])
+            in_delta = pc.is_in(keys, value_set=delta_keys)
+            matched_rows = _align(full.filter(in_delta))
+            if matched_rows.num_rows == 0:
+                continue
+
+            # A key stored in two different files would make the per-file
+            # rewrites disagree (each would keep its own updated copy), where
+            # pyiceberg's predicate delete removed both. The key is unique by
+            # construction, so treat a collision as corruption and abort with
+            # pyiceberg's own message rather than write divergent rows.
+            file_keys = set(matched_rows.column(join_col).to_pylist())
+            if seen_keys & file_keys:
+                raise ValueError("Target table has duplicate rows, aborting upsert")
+            seen_keys |= file_keys
+
+            # Compare only the delta rows belonging to THIS file.
+            src_keys = _cast_like(data.column(join_col),
+                                  matched_rows.column(join_col).type)
+            src_subset = data.filter(
+                pc.is_in(src_keys, value_set=matched_rows.column(join_col)))
+            upd = _rows_to_update(src_subset, matched_rows, join_col)
+            if upd.num_rows == 0:
+                continue  # every matched row is unchanged: do not rewrite the file
+
+            upd = _align(upd)
+            upd_parts.append(upd)
+            changed = _cast_like(upd.column(join_col), keys.type)
+            survivors = _align(full.filter(pc.invert(pc.is_in(keys, value_set=changed))))
+            new_content = pa.concat_tables([survivors, upd])
+            if new_content.num_rows != full.num_rows:  # invariant, not a guess
+                raise RuntimeError(
+                    f"merge rewrite would change row count for {label or '?'}: "
+                    f"{full.num_rows} -> {new_content.num_rows}")
+            replaced.append((task.file, list(_dataframe_to_data_files(
+                table_metadata=table.metadata, df=new_content, io=table.io,
+                write_uuid=commit_uuid, counter=counter))))
+
+        rows_to_update = pa.concat_tables(upd_parts) if upd_parts else None
 
     n_upd = rows_to_update.num_rows if rows_to_update is not None else 0
+    rewritten = len(replaced)
     log.info("[%s] merge lookup: %d/%d data files hold matched keys; "
-             "%d row(s) to update, %d to insert",
-             label or "?", len(matched_tasks), len(tasks), n_upd,
+             "%d row(s) to update in %d file(s), %d to insert",
+             label or "?", len(matched_tasks), len(tasks), n_upd, rewritten,
              rows_to_insert.num_rows)
 
     if n_upd == 0 and rows_to_insert.num_rows == 0:
         return  # nothing changed -- commit nothing, like table.upsert's elision
 
     with table.transaction() as tx:
-        if n_upd:
-            tx.overwrite(
-                rows_to_update,
-                overwrite_filter=upsert_util.create_match_filter(
-                    rows_to_update, [join_col]))
+        if rewritten:
+            # Swap only the rewritten files. _OverwriteFiles keeps every
+            # manifest whose entries are untouched and rewrites just the ones
+            # referencing a deleted file, so the rest of the table is carried
+            # forward by reference -- no re-read, no re-write.
+            with tx.update_snapshot().overwrite(commit_uuid=commit_uuid) as ow:
+                for old_file, new_files in replaced:
+                    ow.delete_data_file(old_file)
+                    for new_file in new_files:
+                        ow.append_data_file(new_file)
         if rows_to_insert.num_rows:
             tx.append(rows_to_insert)
 
