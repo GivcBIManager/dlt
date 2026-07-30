@@ -56,6 +56,12 @@ from . import types_map
 
 log = logging.getLogger("etl.load")
 
+# Arrow type of the derived merge-hash column on the batch side (see
+# ``_merge_hash_array``). Iceberg stores it as ``binary`` but reads it back as
+# ``large_binary``, so anything joining a stored hash against a computed one has
+# to cast to this first.
+_MERGE_HASH_TYPE = pa.binary()
+
 # Hint for every timestamp column the pipeline *generates* (insert_at /
 # Recorded_updated_at data columns + the etl_control / etl_run_log time columns).
 # dlt defaults timestamp columns to ``timezone=True`` and, at write time,
@@ -522,8 +528,20 @@ def _existing_insert_at(
             return None
         if existing.num_rows == 0:
             return None
-        return existing.rename_columns(
+        existing = existing.rename_columns(
             [insert_col if n == insert_norm else n for n in existing.column_names])
+        # The stored hash reads back Arrow-large (Iceberg binary -> large_binary)
+        # while `_merge_hash_array` produces plain binary on the batch side. The
+        # carry-forward join keys on this column and Arrow will not join across
+        # the two types ("Incompatible data types for corresponding join field
+        # keys"), so align it here -- the same alignment `_cast_like` does for
+        # the merge path's key.
+        idx = existing.schema.get_field_index(hash_norm)
+        col = existing.column(idx)
+        if not col.type.equals(_MERGE_HASH_TYPE):
+            existing = existing.set_column(
+                idx, hash_norm, col.cast(_MERGE_HASH_TYPE))
+        return existing
 
     # --- composite path (unchanged from today) ---
     key_norms = [k.lower() for k in join_keys]
@@ -1210,7 +1228,7 @@ def _merge_hash_array(table: pa.Table, key_cols: list[str]) -> pa.Array:
                     "using reference serializer", exc)
         digests = [hashlib.blake2b(b, digest_size=16).digest()
                    for b in _serialize_keys(table, key_cols)]
-        return pa.array(digests, type=pa.binary())
+        return pa.array(digests, type=_MERGE_HASH_TYPE)
 
     out = []
     for i in range(table.num_rows):
@@ -1225,7 +1243,7 @@ def _merge_hash_array(table: pa.Table, key_cols: list[str]) -> pa.Array:
                      b"\x00" + struct.pack(">I", ln))
             h.update(payload[a:b])
         out.append(h.digest())
-    return pa.array(out, type=pa.binary())
+    return pa.array(out, type=_MERGE_HASH_TYPE)
 
 
 def _append_merge_hash(tbl: pa.Table, key_cols: list[str], hash_col: str) -> pa.Table:

@@ -271,14 +271,16 @@ def _build_incremental_query(
 
     We split it into a UNION ALL of two *disjoint* branches:
 
-      * new rows     -> WHERE date >= wm                         (uses date index)
-      * updated rows -> WHERE cdc > wm AND (date < wm OR date IS NULL)
+      * new rows     -> WHERE date >= wm            (uses date index)
+      * updated rows -> WHERE cdc > wm AND date < wm
 
-    The branches are disjoint (a row is "new" XOR "updated-but-old"), so UNION
-    ALL needs no dedup, and rows with a NULL date that were updated are still
-    captured. The new-rows branch becomes an index range scan immediately; the
-    updated-rows branch becomes one too once ``cdc_column`` is indexed (the OR
-    form could not use that index even if it existed).
+    The date column is NOT NULL on every source table, so the two branches
+    together cover every row and are disjoint (a row is "new" XOR
+    "updated-but-old") - UNION ALL needs no dedup. An earlier form also OR'd in
+    ``date IS NULL`` on the updated branch; that was dead weight and blocked the
+    date index on that branch. The new-rows branch becomes an index range scan
+    immediately; the updated-rows branch becomes one too once ``cdc_column`` is
+    indexed (the OR form could not use that index even if it existed).
 
     The cdc/date column references come from ``shape``, so this is identical for
     a plain table (``t.<col>``) and a helper-driven one (``h.<col>``).
@@ -311,9 +313,7 @@ def _build_incremental_query(
     date_wm_sql = format_watermark(date_wm)
     new_rows = f"{base} WHERE {date_pred}{ceil}"
     updated_old = (
-        f"{base} WHERE {cdc_pred} "
-        f"AND ({shape.date_ref} < {date_wm_sql} "
-        f"OR {shape.date_ref} IS NULL)"
+        f"{base} WHERE {cdc_pred} AND {shape.date_ref} < {date_wm_sql}"
     )
     return f"{new_rows}\nUNION ALL\n{updated_old}"
 
