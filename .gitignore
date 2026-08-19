@@ -22,7 +22,9 @@ venv/
 # secrets / per-host config stay local (edited by the GUI on each host)
 .dlt/secrets.toml
 .dlt/config.toml
-tables.json
+# tables.json plus the scratch/backup copies kept beside it (tables.json.temp,
+# tables.json.<stamp>.bak) -- all per-host, none of it belongs in the repo.
+tables.json*
 
 # GUI server console logs
 gui-server.log
