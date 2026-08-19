@@ -1,75 +1,81 @@
 {# Parsed progress/summary dashboard. Rendered by static/runparse.js
    (createLogDash), which detects the log's command type and shows one of the
-   sections below. Included by run.html (live tail) and logs.html (whole-file). #}
-<div id="run-dash" class="run-dash" hidden>
+   sections below. Included by run.html (live tail), logs.html (whole log file)
+   and the Monitor's flow-run tab (Dagster event stream).
+
+   Every id is prefixed with `p` so one page can host several instances --
+   include it as {% with p = 'fr-' %}{% include "_dash.html" %}{% endwith %} and
+   build the matching parser with createLogDash({prefix: "fr-"}). #}
+{% set p = p | default('', true) %}
+<div id="{{ p }}run-dash" class="run-dash" hidden>
 
   {# ---- oracle_to_iceberg pipeline ---- #}
-  <div id="rd-pipeline" hidden>
+  <div id="{{ p }}rd-pipeline" hidden>
     <div class="rd-overall">
       <div class="rd-overall-top">
-        <span id="rd-stage" class="rd-stage">starting</span>
+        <span id="{{ p }}rd-stage" class="rd-stage">starting</span>
         <span class="rd-metrics">
-          <i class="fa-regular fa-clock"></i> <span id="rd-elapsed">0:00:00</span>
-          <span class="rd-sep">·</span> <span id="rd-rows">0 rows</span>
-          <span class="rd-sep">·</span> <span id="rd-mem">rss —</span>
-          <span id="rd-fail" class="rd-fail" hidden></span>
+          <i class="fa-regular fa-clock"></i> <span id="{{ p }}rd-elapsed">0:00:00</span>
+          <span class="rd-sep">·</span> <span id="{{ p }}rd-rows">0 rows</span>
+          <span class="rd-sep">·</span> <span id="{{ p }}rd-mem">rss —</span>
+          <span id="{{ p }}rd-fail" class="rd-fail" hidden></span>
         </span>
       </div>
-      <div class="rd-bar"><div id="rd-bar-fill" class="rd-bar-fill"></div><span id="rd-bar-label" class="rd-bar-label"></span></div>
+      <div class="rd-bar"><div id="{{ p }}rd-bar-fill" class="rd-bar-fill"></div><span id="{{ p }}rd-bar-label" class="rd-bar-label"></span></div>
     </div>
-    <div class="rd-section-head"><span>Tables</span><span id="rd-branch-strip" class="rd-branch-strip"></span></div>
+    <div class="rd-section-head"><span>Tables</span><span id="{{ p }}rd-branch-strip" class="rd-branch-strip"></span></div>
     <div class="table-wrap rd-tablewrap">
       <table class="rd-table">
         <thead><tr><th>Table</th><th>Extract (branches)</th><th>Load</th><th class="num">Rows</th><th>Issue</th></tr></thead>
-        <tbody id="rd-tbody"></tbody>
+        <tbody id="{{ p }}rd-tbody"></tbody>
       </table>
     </div>
-    <details id="rd-issues-box" class="rd-issues" hidden>
-      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="rd-issue-count">0</span>)</summary>
-      <div id="rd-issues"></div>
+    <details id="{{ p }}rd-issues-box" class="rd-issues" hidden>
+      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="{{ p }}rd-issue-count">0</span>)</summary>
+      <div id="{{ p }}rd-issues"></div>
     </details>
   </div>
 
   {# ---- dq_check reconciliation ---- #}
-  <div id="rd-dq" hidden>
+  <div id="{{ p }}rd-dq" hidden>
     <div class="rd-overall">
       <div class="rd-overall-top">
-        <span id="dq-title" class="rd-stage">DQ reconciliation</span>
+        <span id="{{ p }}dq-title" class="rd-stage">DQ reconciliation</span>
         <span class="rd-metrics">
-          <i class="fa-regular fa-clock"></i> <span id="dq-elapsed">0:00:00</span>
-          <span class="rd-sep">·</span> <span id="dq-tallies"></span>
+          <i class="fa-regular fa-clock"></i> <span id="{{ p }}dq-elapsed">0:00:00</span>
+          <span class="rd-sep">·</span> <span id="{{ p }}dq-tallies"></span>
         </span>
       </div>
-      <div class="rd-bar"><div id="dq-bar-fill" class="rd-bar-fill"></div><span id="dq-bar-label" class="rd-bar-label"></span></div>
-      <div id="dq-scope" class="rd-scope muted"></div>
+      <div class="rd-bar"><div id="{{ p }}dq-bar-fill" class="rd-bar-fill"></div><span id="{{ p }}dq-bar-label" class="rd-bar-label"></span></div>
+      <div id="{{ p }}dq-scope" class="rd-scope muted"></div>
     </div>
     <div class="table-wrap rd-tablewrap">
       <table class="rd-table">
         <thead><tr><th>Table</th><th>Branch</th><th class="num">Ora</th><th class="num">Ice</th><th class="num">Cnt Δ</th><th class="num">Hash Δ</th><th class="num">%</th><th>Status</th></tr></thead>
-        <tbody id="dq-tbody"></tbody>
+        <tbody id="{{ p }}dq-tbody"></tbody>
       </table>
     </div>
-    <details id="dq-issues-box" class="rd-issues" hidden>
-      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="dq-issue-count">0</span>)</summary>
-      <div id="dq-issues"></div>
+    <details id="{{ p }}dq-issues-box" class="rd-issues" hidden>
+      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="{{ p }}dq-issue-count">0</span>)</summary>
+      <div id="{{ p }}dq-issues"></div>
     </details>
   </div>
 
   {# ---- snapshot_diff / fresh_run / custom / unknown ---- #}
-  <div id="rd-generic" hidden>
+  <div id="{{ p }}rd-generic" hidden>
     <div class="rd-overall">
       <div class="rd-overall-top">
-        <span id="gen-title" class="rd-stage">Log summary</span>
+        <span id="{{ p }}gen-title" class="rd-stage">Log summary</span>
         <span class="rd-metrics">
-          <i class="fa-regular fa-clock"></i> <span id="gen-elapsed">—</span>
-          <span class="rd-sep">·</span> <span id="gen-status"></span>
+          <i class="fa-regular fa-clock"></i> <span id="{{ p }}gen-elapsed">—</span>
+          <span class="rd-sep">·</span> <span id="{{ p }}gen-status"></span>
         </span>
       </div>
     </div>
-    <div id="gen-body" class="rd-genbody"></div>
-    <details id="gen-issues-box" class="rd-issues" hidden>
-      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="gen-issue-count">0</span>)</summary>
-      <div id="gen-issues"></div>
+    <div id="{{ p }}gen-body" class="rd-genbody"></div>
+    <details id="{{ p }}gen-issues-box" class="rd-issues" hidden>
+      <summary><i class="fa-solid fa-triangle-exclamation"></i> Issues (<span id="{{ p }}gen-issue-count">0</span>)</summary>
+      <div id="{{ p }}gen-issues"></div>
     </details>
   </div>
 

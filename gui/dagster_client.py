@@ -233,6 +233,89 @@ def flow_runs(limit: int = 50) -> list[dict[str, Any]]:
     return _runs_from_payload(results)
 
 
+ACTIVE_RUN_STATUSES = ("QUEUED", "NOT_STARTED", "STARTING", "STARTED", "CANCELING")
+
+# Dagster's step status vocabulary, mapped to the GUI's pill classes.
+_STEP_PILL = {"IN_PROGRESS": "running", "SUCCESS": "success", "FAILURE": "failed",
+              "SKIPPED": "skipped", "CANCELED": "stopped"}
+
+
+def _step_from_stats(stat: dict[str, Any]) -> dict[str, Any]:
+    """One ``stepStats`` entry reshaped for the GUI's step timeline."""
+    start, end = stat.get("startTime"), stat.get("endTime")
+    status = stat.get("status") or "IN_PROGRESS"
+    return {
+        "step_key": stat.get("stepKey"),
+        "status": status,
+        "pill": _STEP_PILL.get(status, "running"),
+        "start_time": start,
+        "end_time": end,
+        "duration_s": round(end - start, 1) if (start and end and end >= start) else None,
+        "attempts": len(stat.get("attempts") or []) or 1,
+        "materializations": len(stat.get("materializations") or []),
+    }
+
+
+def _detail_from_payload(node: dict[str, Any]) -> dict[str, Any]:
+    """Reshape a ``runOrError`` Run node into the flow-run detail row.
+
+    Steps are ordered by start time (unstarted last) so the timeline reads
+    top-to-bottom in execution order, which is what the DAG's topological order
+    produces for a flow.
+    """
+    steps = [_step_from_stats(s) for s in (node.get("stepStats") or [])]
+    steps.sort(key=lambda s: (s["start_time"] is None, s["start_time"] or 0))
+    stats = node.get("stats") or {}
+    done = sum(1 for s in steps if s["status"] in ("SUCCESS", "FAILURE", "SKIPPED", "CANCELED"))
+    return {
+        "run_id": node.get("runId"),
+        "job": node.get("jobName"),
+        "status": node.get("status"),
+        "start_time": node.get("startTime"),
+        "end_time": node.get("endTime"),
+        "launch_time": stats.get("launchTime"),
+        "enqueued_time": stats.get("enqueuedTime"),
+        "steps": steps,
+        "steps_done": done,
+        "steps_running": sum(1 for s in steps if s["status"] == "IN_PROGRESS"),
+        "steps_failed": sum(1 for s in steps if s["status"] == "FAILURE"),
+        "steps_total": len(steps),
+        "error": None,
+    }
+
+
+def run_detail(run_id: str) -> dict[str, Any]:
+    """Live per-step progress for one run (the Monitor's flow-run timeline).
+
+    ``stepStats`` is the cheap live view Dagster keeps per run: one entry per
+    step that has started, with its status, timings and retry attempts. Steps
+    that have not started yet simply are not there, so the caller supplies the
+    planned total (the flow's node count) to turn this into a progress bar.
+    """
+    q = """
+    query RunDetail($runId: ID!) {
+      runOrError(runId: $runId) {
+        __typename
+        ... on Run {
+          runId jobName status startTime endTime
+          stats { ... on RunStatsSnapshot { launchTime enqueuedTime } }
+          stepStats { stepKey status startTime endTime attempts { startTime } materializations { __typename } }
+        }
+        ... on RunNotFoundError { message }
+        ... on PythonError { message }
+      }
+    }"""
+    res = _query(q, {"runId": run_id})
+    empty = {"run_id": run_id, "status": None, "steps": [], "steps_done": 0,
+             "steps_running": 0, "steps_failed": 0, "steps_total": 0}
+    if "errors" in res:
+        return {**empty, "error": _first_error(res)}
+    node = (res.get("data", {}) or {}).get("runOrError") or {}
+    if node.get("__typename") != "Run":
+        return {**empty, "error": node.get("message", "run not found")}
+    return _detail_from_payload(node)
+
+
 def _fmt_event(ev: dict[str, Any]) -> Optional[str]:
     """One log line per MessageEvent; None for empty/non-message events."""
     msg = ev.get("message")

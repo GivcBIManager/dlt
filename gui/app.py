@@ -37,6 +37,7 @@ import flow_naming  # noqa: E402
 import iceberg_browser  # noqa: E402
 import iceberg_maintenance  # noqa: E402
 import pipelines_store  # noqa: E402
+import run_insights  # noqa: E402
 import security  # noqa: E402
 import smtp_config  # noqa: E402
 import tables_store  # noqa: E402
@@ -469,15 +470,89 @@ def api_dagster_flow_status():
     return jsonify(_publicise_dagster_links(dagster_client.flow_status()))
 
 
+# Live step progress costs one extra GraphQL round trip per run, so the run
+# list enriches only the runs that are actually moving (normally one).
+_MAX_ACTIVE_DETAIL = 3
+
+
+def _node_label(node: dict, pipelines: dict) -> str:
+    """Human label for a flow node -- mirrors orchestrator.build's asset naming."""
+    kind = node.get("kind", "pipeline")
+    if kind == "dbt":
+        dbt = node.get("dbt") or {}
+        return f"dbt {dbt.get('dbt_command', 'run')} {dbt.get('select', '')}".strip()
+    if kind == "command":
+        return f"custom: {(node.get('command') or '')[:40]}"
+    pipeline = pipelines.get(node.get("pipeline_id")) or {}
+    return pipeline.get("name") or node.get("node_id", "")
+
+
+def _flow_plan(flow: dict, pipelines: dict) -> list[dict]:
+    """The flow's nodes as a step plan: what Dagster will run, in dep order."""
+    return [{"node_id": n["node_id"], "kind": n.get("kind", "pipeline"),
+             "label": _node_label(n, pipelines), "deps": n.get("deps", [])}
+            for n in flow.get("nodes", [])]
+
+
+def _merge_run_steps(plan: list[dict], steps: list[dict]) -> list[dict]:
+    """Join the flow's planned nodes to Dagster's per-step stats.
+
+    An asset's step key is its asset key path joined with ``__`` (see
+    ``orchestrator.assets.asset_key``), so the node id is its last segment.
+    Planned nodes Dagster has not started yet have no stats and come back
+    PENDING -- that is the difference between "5 of 9 steps" and "5 steps".
+    """
+    by_node = {(s.get("step_key") or "").rsplit("__", 1)[-1]: s for s in steps}
+    merged = []
+    for node in plan:
+        stat = by_node.pop(node["node_id"], None)
+        merged.append({**node, **(stat or {}),
+                       "status": (stat or {}).get("status", "PENDING"),
+                       "pill": (stat or {}).get("pill", "pending")})
+    # Steps Dagster ran that no longer match a saved node (the flow was edited
+    # after the run) still belong in the timeline rather than vanishing.
+    for step_key, stat in by_node.items():
+        merged.append({"node_id": step_key, "kind": "step",
+                       "label": stat.get("step_key"), "deps": [], **stat})
+    return merged
+
+
 @app.get("/api/flow-runs")
 @api
 def api_flow_runs():
     limit = min(request.args.get("limit", 50, type=int), 200)
     runs = dagster_client.flow_runs(limit=limit)
-    names = {f["id"]: f["name"] for f in flows_store.load_flows()}
+    flows = {f["id"]: f for f in flows_store.load_flows()}
+    active = 0
     for r in runs:
-        r["flow_name"] = names.get(r["flow_id"]) or r["job"]
+        flow = flows.get(r["flow_id"]) or {}
+        r["flow_name"] = flow.get("name") or r["job"]
+        r["steps_planned"] = len(flow.get("nodes") or []) or None
+        r["active"] = r.get("status") in dagster_client.ACTIVE_RUN_STATUSES
+        if r["active"] and active < _MAX_ACTIVE_DETAIL:
+            active += 1
+            d = dagster_client.run_detail(r["run_id"])
+            r["progress"] = {k: d.get(k) for k in
+                             ("steps_done", "steps_running", "steps_failed", "steps_total")}
+            r["progress"]["running"] = [s["step_key"] for s in d.get("steps", [])
+                                        if s.get("status") == "IN_PROGRESS"]
     return jsonify(_publicise_dagster_links(runs))
+
+
+@app.get("/api/flow-runs/<run_id>/detail")
+@api
+def api_flow_run_detail(run_id):
+    """Per-step progress for one run, joined to the flow's node plan."""
+    detail = dagster_client.run_detail(run_id)
+    flow_id = flow_naming.flow_id_from_job(detail.get("job") or "")
+    flow = flows_store.get_flow(flow_id) or {}
+    pipelines = {p["id"]: p for p in pipelines_store.load_pipelines()}
+    plan = _flow_plan(flow, pipelines) if flow else []
+    detail["flow_name"] = flow.get("name") or detail.get("job")
+    detail["steps"] = _merge_run_steps(plan, detail.get("steps", []))
+    detail["steps_total"] = len(detail["steps"]) or detail.get("steps_total", 0)
+    detail["run_link"] = dagster_client.run_link(run_id)
+    return jsonify(_publicise_dagster_links([detail])[0])
 
 
 @app.get("/api/flow-runs/<run_id>/log")
@@ -643,6 +718,20 @@ def api_ib_aggregate(table):
 def api_ib_system(table):
     limit = request.args.get("limit", 200, type=int)
     return jsonify(iceberg_browser.read_system_table(table, limit=min(limit, 1000)))
+
+
+@app.get("/api/insights/run-log")
+@api
+def api_run_insights():
+    """Aggregated etl_run_log analytics for the Monitor's Insights tab."""
+    days = request.args.get("days", run_insights.DEFAULT_DAYS, type=int)
+    return jsonify(run_insights.insights(
+        days=days,
+        branch=request.args.get("branch", "").strip(),
+        table=request.args.get("table", "").strip(),
+        load_mode=request.args.get("load_mode", "").strip(),
+        status=request.args.get("status", "").strip(),
+    ))
 
 
 @app.get("/api/iceberg/runs")

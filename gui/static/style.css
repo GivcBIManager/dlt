@@ -634,6 +634,80 @@ tr.clickable { cursor: pointer; }
 .run-badge.ok { background: var(--success-light); color: #047857; }
 .run-badge.failed { background: var(--error-light); color: #b91c1c; }
 .run-badge.warn { background: var(--warning-light); color: #b45309; }
+.run-badge.running { background: #dbeafe; color: #1d4ed8; }
+.run-badge.gray { background: var(--surface-container-highest); color: var(--text-muted); }
+
+/* ===================== Insights dashboard (Monitor) ===================== */
+/* Stat tiles: label, value, then an optional sub-line carrying a meter,
+ * sparkline or badges. Exactly one tile is the hero (the number the dashboard
+ * leads with) -- see static/insights.js. */
+.stat-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px; margin-bottom: 18px;
+}
+.stat-tile {
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+}
+.stat-tile .stat-label { font-size: .7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.stat-tile .stat-value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; color: var(--text-primary); }
+.stat-tile .stat-value small { font-size: .85rem; font-weight: 600; color: var(--text-muted); }
+.stat-tile .stat-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11.5px; }
+.stat-tile.hero { grid-column: span 2; background: var(--surface-low); border-color: var(--border); }
+.stat-tile.hero .stat-value { font-size: 3rem; font-weight: 700; letter-spacing: -.02em; }
+@media (max-width: 700px) { .stat-tile.hero { grid-column: span 1; } .stat-tile.hero .stat-value { font-size: 2.2rem; } }
+
+.viz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.viz-card {
+  background: var(--surface); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg); padding: 14px 16px 12px; box-shadow: var(--shadow-sm); min-width: 0;
+}
+.viz-card.wide { grid-column: 1 / -1; }
+.viz-head h3 { font-size: .92rem; font-weight: 700; margin: 0; }
+.viz-head p { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 10px; }
+.viz-body { min-width: 0; }
+.viz-body > .viz { display: block; width: 100%; height: auto; overflow: visible; }
+#ins-panels { transition: opacity .18s ease; }
+/* Hold the previous render while refetching -- never a skeleton flash. */
+#ins-panels.viz-loading { opacity: .55; pointer-events: none; }
+
+.viz-tick { font-size: 10.5px; fill: #898781; font-family: 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
+.viz-cat { font-size: 11px; fill: var(--text-primary); font-family: 'Inter', sans-serif; }
+.viz-label { font-size: 11px; font-weight: 700; fill: var(--text-primary); font-family: 'Inter', sans-serif; }
+.viz-cell { font-size: 10px; font-weight: 700; fill: var(--text-primary); font-family: 'Inter', sans-serif; }
+.viz-cell.on-dark { fill: #fff; }
+.viz-center { font-size: 22px; font-weight: 700; fill: var(--text-primary); font-family: 'Inter', sans-serif; }
+.viz-mark { cursor: default; }
+.viz-mark:hover { opacity: .82; }
+
+.viz-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 8px; }
+.viz-legend.col { flex-direction: column; align-items: stretch; gap: 5px; margin: 0; min-width: 168px; }
+.viz-key { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-muted); }
+.viz-key i { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.viz-key i.tick { width: 2px; height: 12px; border-radius: 0; background: #52514e; }
+.viz-key b { margin-left: auto; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.viz-key em { font-style: normal; color: var(--text-light); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.viz-scale { display: inline-flex; gap: 0; }
+.viz-scale i { width: 16px; height: 10px; }
+.viz-scale-label { font-size: 11px; color: var(--text-muted); }
+.viz-donut-wrap { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.viz-donut { width: 172px; height: 172px; flex-shrink: 0; }
+.viz-spark { width: 110px; height: 26px; }
+.viz-meter { display: inline-block; width: 96px; height: 8px; background: var(--surface-container-highest); border-radius: var(--radius-full); overflow: hidden; }
+.viz-meter-fill { display: block; height: 100%; border-radius: var(--radius-full); }
+.viz-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--text-muted); font-size: .85rem; background: var(--surface-low); border-radius: var(--radius-md); }
+.viz-empty.ok { color: #047857; background: var(--success-light); }
+.viz-twin { margin-top: 10px; }
+.viz-twin > summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
+.viz-twin .table-wrap { max-height: 280px; margin-top: 8px; }
+
+/* Monitor: flow-run progress panel */
+#fr-run-panel.raw-hidden .console { display: none; }
+#fr-panel-body { display: flex; flex-direction: column; }
+#fr-panel-body .console { margin-top: 14px; max-height: 320px; }
+#fr-meta { gap: 8px; }
+.panel-head h2 #fr-run-id { font-family: var(--mono); font-weight: 500; }
 
 /* ===================== Responsive ===================== */
 @media (max-width: 900px) {

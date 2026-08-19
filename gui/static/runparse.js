@@ -2,11 +2,20 @@
  * the Monitor "Log files" tab (whole-file). Detects the log's command type from
  * the runner header ("# command : ...", falling back to characteristic lines) and
  * routes parsing + rendering to a per-type view. Public API is unchanged:
- *   createLogDash(opts) -> { reset(), feed(chunk), flush(), render(), load(text), get dash() }
+ *   createLogDash(opts) -> { reset(), feed(chunk), flush(), render(), load(text),
+ *                            hasContent(), get dash() }
  *   opts.branchHint : () => number  best guess of total branches (Run page only)
+ *   opts.prefix     : string        id prefix of this instance's _dash.html markup
+ *
+ * The prefix is what lets one page host two independent dashboards (the Monitor
+ * page renders one for the selected log file and one for the selected flow run):
+ * every element id in _dash.html is written `{{p}}rd-...`, and every lookup here
+ * goes through E() rather than el(), so two instances never share a node.
  */
 function createLogDash(opts = {}) {
   const branchHint = opts.branchHint || (() => 0);
+  const prefix = opts.prefix || "";
+  const E = (id) => el(prefix + id);
 
   const HDR = {
     command: /^#\s*command\s*:\s*(.+)$/,
@@ -42,10 +51,10 @@ function createLogDash(opts = {}) {
   }
 
   const views = {
-    pipeline: makePipelineView({ branchHint }),
-    dq: makeDqView(),
-    snapshot: makeGenericView("snapshot"),
-    generic: makeGenericView("generic"),
+    pipeline: makePipelineView({ branchHint, E }),
+    dq: makeDqView(E),
+    snapshot: makeGenericView("snapshot", E),
+    generic: makeGenericView("generic", E),
   };
 
   let type = null, active = null, meta = freshMeta(), lineBuf = "";
@@ -75,11 +84,13 @@ function createLogDash(opts = {}) {
   }
   function flush() { if (lineBuf) { feedLine(lineBuf); lineBuf = ""; } }
 
+  function hasContent() { return !!(active && active.hasContent()); }
+
   function render() {
-    const box = el("run-dash");
+    const box = E("run-dash");
     if (!box) return;
-    for (const id of ["rd-pipeline", "rd-dq", "rd-generic"]) { const s = el(id); if (s) s.hidden = true; }
-    if (!active || !active.hasContent()) { box.hidden = true; return; }
+    for (const id of ["rd-pipeline", "rd-dq", "rd-generic"]) { const s = E(id); if (s) s.hidden = true; }
+    if (!hasContent()) { box.hidden = true; return; }
     box.hidden = false;
     active.render(meta, { elapsedFromTs, stripPrefix });
   }
@@ -92,7 +103,8 @@ function createLogDash(opts = {}) {
   function load(text) { reset(); feed(text || ""); flush(); render(); }
 
   reset();
-  return { reset, feed, flush, render, load, get dash() { return active && active.model ? active.model() : null; } };
+  return { reset, feed, flush, render, load, hasContent,
+           get dash() { return active && active.model ? active.model() : null; } };
 }
 
 /* ------------------------------------------------------------------ pipeline */
@@ -100,6 +112,7 @@ function createLogDash(opts = {}) {
  * the final summary rows. Renders into the #rd-pipeline section. */
 function makePipelineView(opts = {}) {
   const branchHint = opts.branchHint || (() => 0);
+  const E = opts.E || el;
   const RE = {
     ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
     prog: /PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+([^|]+?)\s+\|\s+tables\s+(\d+)\/(\d+)\s+\|\s+extract\s+(\d+)\/(\d+)(?:\s+(\d+)\s+failed)?\s+\|\s+rows=([\d,]+)\s+\|\s+rss=([^( ]+)\(peak\s+([^)]+)\)\s+arrow=(\S+)/,
@@ -201,7 +214,7 @@ function makePipelineView(opts = {}) {
   }
   function hasContent() { return !!dash && (dash.started || dash.tables.size > 0 || dash.issues.length > 0); }
   function render(meta) {
-    el("rd-pipeline").hidden = false;
+    E("rd-pipeline").hidden = false;
     const bt = branchTotal();
     // The PROGRESS heartbeat only ticks every ~5s; the per-unit extract lines are
     // fresher, so show whichever count is further along.
@@ -212,25 +225,25 @@ function makePipelineView(opts = {}) {
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
     const failTotal = dash.unitsFailed || [...dash.tables.values()].reduce((a, t) => a + extractCounts(t).fail, 0);
 
-    el("rd-stage").textContent = stageLabel(dash.stage) || (exited ? "done" : "starting");
-    el("rd-stage").className = "rd-stage " + stageClass(dash.stage || (exited ? "done" : ""));
-    el("rd-elapsed").textContent = dash.elapsed || elapsedFromTs();
-    el("rd-rows").textContent = fmtNum(dash.rows) + " rows";
-    el("rd-mem").textContent = dash.rss ? `rss ${dash.rss} (peak ${dash.rssPeak})` : "rss —";
-    const fEl = el("rd-fail"); fEl.hidden = !failTotal; fEl.textContent = `${failTotal} failed`;
-    el("rd-bar-fill").style.width = pct + "%";
-    el("rd-bar-fill").className = "rd-bar-fill" + (exited && meta.exit ? " err" : (failTotal ? " has-fail" : ""));
-    el("rd-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%` + (dash.tablesTotal ? ` · tables ${dash.tablesDone}/${dash.tablesTotal}` : "");
+    E("rd-stage").textContent = stageLabel(dash.stage) || (exited ? "done" : "starting");
+    E("rd-stage").className = "rd-stage " + stageClass(dash.stage || (exited ? "done" : ""));
+    E("rd-elapsed").textContent = dash.elapsed || elapsedFromTs();
+    E("rd-rows").textContent = fmtNum(dash.rows) + " rows";
+    E("rd-mem").textContent = dash.rss ? `rss ${dash.rss} (peak ${dash.rssPeak})` : "rss —";
+    const fEl = E("rd-fail"); fEl.hidden = !failTotal; fEl.textContent = `${failTotal} failed`;
+    E("rd-bar-fill").style.width = pct + "%";
+    E("rd-bar-fill").className = "rd-bar-fill" + (exited && meta.exit ? " err" : (failTotal ? " has-fail" : ""));
+    E("rd-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%` + (dash.tablesTotal ? ` · tables ${dash.tablesDone}/${dash.tablesTotal}` : "");
 
     // Each branch extracts every table once, so a branch chip's total is the
     // table count (bt is branches-per-table, the denominator for table rows).
     const tpb = dash.tablesTotal || dash.tables.size || 0;
-    el("rd-branch-strip").innerHTML = [...dash.branches.entries()].sort().map(([k, b]) => {
+    E("rd-branch-strip").innerHTML = [...dash.branches.entries()].sort().map(([k, b]) => {
       const cls = b.fail ? "err" : (tpb && b.ok >= tpb ? "done" : "");
       return `<span class="rd-bchip ${cls}" title="${esc(k)}: ${b.ok} ok${b.fail ? `, ${b.fail} failed` : ""}">${esc(k)} ${b.ok}${tpb ? `/${tpb}` : ""}</span>`;
     }).join("");
 
-    el("rd-tbody").innerHTML = [...dash.tables.entries()].map(([name, t]) => {
+    E("rd-tbody").innerHTML = [...dash.tables.entries()].map(([name, t]) => {
       const ec = extractCounts(t);
       const ebTot = bt || ec.ok || 0;
       const eCount = ec.ok;
@@ -245,10 +258,10 @@ function makePipelineView(opts = {}) {
         <td>${issue}</td></tr>`;
     }).join("") || `<tr><td colspan="5" class="muted">Waiting for table activity…</td></tr>`;
 
-    const ibox = el("rd-issues-box");
+    const ibox = E("rd-issues-box");
     ibox.hidden = dash.issues.length === 0;
-    el("rd-issue-count").textContent = dash.issues.length;
-    el("rd-issues").innerHTML = dash.issues.slice(-60).reverse().map(i =>
+    E("rd-issue-count").textContent = dash.issues.length;
+    E("rd-issues").innerHTML = dash.issues.slice(-60).reverse().map(i =>
       `<div class="rd-issue ${i.level}"><span class="rd-itime">${esc(i.ts)}</span> ${esc(i.text)}</div>`).join("");
   }
   function reset() { dash = fresh(); }
@@ -259,7 +272,7 @@ function makePipelineView(opts = {}) {
 /* ------------------------------------------------------------------------ dq */
 /* dq_check: DQ run (scope), DQ-PROGRESS (overall), DQ-UNIT (per table×branch),
  * WARNING/ERROR (issues). Renders into the #rd-dq section. */
-function makeDqView() {
+function makeDqView(E = el) {
   const RE = {
     scope: /DQ run\s+(\S+).*?branches=(\[[^\]]*\]).*?tables=(\d+).*?window=(.+?)\s+\|\s+hash=(\w+)/,
     prog: /DQ-PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+units\s+(\d+)\/(\d+)\s+\|\s+ok\s+(\d+)\s+tol\s+(\d+)\s+mismatch\s+(\d+)\s+err\s+(\d+)/,
@@ -319,32 +332,32 @@ function makeDqView() {
   }
   function hasContent() { return !!m && (m.started || m.units.size > 0 || m.issues.length > 0); }
   function render(meta) {
-    el("rd-dq").hidden = false;
+    E("rd-dq").hidden = false;
     const units = [...m.units.values()];
     const done = m.done || units.length;
     const total = m.total || (m.tablesTotal * (m.branches.length || 1)) || units.length;
     const exited = meta && meta.exit != null;
     const pct = total ? Math.min(100, Math.round(done / total * 100)) : (exited ? 100 : 0);
 
-    el("dq-elapsed").textContent = m.elapsed || elapsedFromTs();
+    E("dq-elapsed").textContent = m.elapsed || elapsedFromTs();
     const chip = (n, label, cls) => n ? `<span class="rd-tally ${cls}">${n} ${label}</span>` : "";
-    el("dq-tallies").innerHTML =
+    E("dq-tallies").innerHTML =
       chip(m.ok || units.filter(u => u.status === "OK").length, "ok", "ok") +
       chip(m.tol || units.filter(u => u.status === "WITHIN_TOLERANCE").length, "tol", "warn") +
       chip(m.mismatch || units.filter(u => u.status === "MISMATCH").length, "mismatch", "err") +
       chip(m.err || units.filter(u => u.status === "ERROR").length, "err", "err");
-    el("dq-bar-fill").style.width = pct + "%";
+    E("dq-bar-fill").style.width = pct + "%";
     const anyBad = (m.mismatch || units.some(u => u.status === "MISMATCH")) || (m.err || units.some(u => u.status === "ERROR"));
-    el("dq-bar-fill").className = "rd-bar-fill" + (anyBad ? " has-fail" : "");
-    el("dq-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%`;
-    el("dq-scope").textContent = m.started
+    E("dq-bar-fill").className = "rd-bar-fill" + (anyBad ? " has-fail" : "");
+    E("dq-bar-label").textContent = `${done}/${total || "?"} units · ${pct}%`;
+    E("dq-scope").textContent = m.started
       ? `branches: ${m.branches.join(", ") || "all"} · tables: ${m.tablesTotal || "?"} · hash: ${m.hash || "?"} · window: ${m.window || "?"}`
       : "";
 
     units.sort((a, b) => (SEV[a.status] ?? 9) - (SEV[b.status] ?? 9) ||
       (b.delta || 0) - (a.delta || 0) || a.table.localeCompare(b.table));
     const cell = (v) => v == null ? "—" : fmtNum(v);
-    el("dq-tbody").innerHTML = units.map(u => `<tr>
+    E("dq-tbody").innerHTML = units.map(u => `<tr>
       <td class="mono">${esc(u.table)}</td>
       <td class="mono">${esc(u.branch)}</td>
       <td class="num">${cell(u.ora)}</td>
@@ -355,10 +368,10 @@ function makeDqView() {
       <td>${pill(u.status)}</td></tr>`).join("") ||
       `<tr><td colspan="8" class="muted">Waiting for DQ units…</td></tr>`;
 
-    const ibox = el("dq-issues-box");
+    const ibox = E("dq-issues-box");
     ibox.hidden = m.issues.length === 0;
-    el("dq-issue-count").textContent = m.issues.length;
-    el("dq-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
+    E("dq-issue-count").textContent = m.issues.length;
+    E("dq-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
       `<div class="rd-issue ${i.level}">${esc(i.text)}</div>`).join("");
   }
   reset();
@@ -368,7 +381,7 @@ function makeDqView() {
 /* ------------------------------------------------------------------- generic */
 /* snapshot_diff / fresh_run / custom / unknown: a meta strip + key lines +
  * (snapshot mode) the Updated/Inserted/Deleted counts + an issues feed. */
-function makeGenericView(mode) {
+function makeGenericView(mode, E = el) {
   let m;
   function reset() {
     m = { keyLines: [], issues: [], snap: {}, hasSnap: false };
@@ -397,13 +410,13 @@ function makeGenericView(mode) {
     return !!m && (m.hasSnap || m.keyLines.length > 0 || m.issues.length > 0);
   }
   function render(meta, helpers) {
-    el("rd-generic").hidden = false;
-    el("gen-title").textContent = meta.command
+    E("rd-generic").hidden = false;
+    E("gen-title").textContent = meta.command
       ? meta.command.replace(/^.*?([\w.]+\.py|fresh_run\S*)/, "$1").split(" ")[0] || "Log summary"
       : "Log summary";
     const elapsed = helpers.elapsedFromTs(meta);
-    el("gen-elapsed").textContent = elapsed || "—";
-    el("gen-status").innerHTML = meta.exit == null ? `<span class="pill running">running</span>`
+    E("gen-elapsed").textContent = elapsed || "—";
+    E("gen-status").innerHTML = meta.exit == null ? `<span class="pill running">running</span>`
       : pill(meta.exit === 0 ? "finished" : "failed") + ` <small>rc=${meta.exit}</small>`;
 
     let body = "";
@@ -423,12 +436,12 @@ function makeGenericView(mode) {
         `<div class="mono">${esc(k)}</div>`).join("") + `</div>`;
     }
     if (!body) body = `<div class="muted">No structured summary for this log — see the raw log.</div>`;
-    el("gen-body").innerHTML = body;
+    E("gen-body").innerHTML = body;
 
-    const ibox = el("gen-issues-box");
+    const ibox = E("gen-issues-box");
     ibox.hidden = m.issues.length === 0;
-    el("gen-issue-count").textContent = m.issues.length;
-    el("gen-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
+    E("gen-issue-count").textContent = m.issues.length;
+    E("gen-issues").innerHTML = m.issues.slice(-60).reverse().map(i =>
       `<div class="rd-issue ${i.level}">${esc(i.text)}</div>`).join("");
   }
   reset();

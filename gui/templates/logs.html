@@ -7,6 +7,7 @@
 
 <div class="row-flex" style="margin-bottom:16px">
   <button class="btn tab primary" data-tab="files">Log files</button>
+  <button class="btn tab" data-tab="insights"><i class="fa-solid fa-chart-pie"></i> Insights</button>
   <button class="btn tab" data-tab="flowruns">Flow runs</button>
   <button class="btn tab" data-tab="dq">DQ results</button>
   <button class="btn tab" data-tab="runs">Runs</button>
@@ -49,27 +50,76 @@
   </div>
 </section>
 
-<section data-panel="flowruns" hidden>
-  <div class="panel" id="fr-log-panel" hidden>
+<section data-panel="insights" hidden>
+  <div class="panel">
     <div class="panel-head">
-      <h2 id="fr-log-title">—</h2>
-      <a class="btn sm ghost" id="fr-dagster-link" target="_blank" rel="noopener">
-        <i class="fa-solid fa-arrow-up-right-from-square"></i> Dagster UI</a>
+      <h2><i class="fa-solid fa-chart-pie"></i> ETL run insights</h2>
+      <button class="btn sm ghost" id="ins-refresh">↻</button>
     </div>
-    <div id="fr-log" class="console">—</div>
+    <div class="filter-bar" id="ins-bar"></div>
+    <div class="banner error" id="ins-error" role="status" hidden></div>
+    <div id="ins-panels">
+      <div class="stat-row" id="ins-kpi"></div>
+      <div class="viz-grid" id="ins-charts"></div>
+      <div class="viz-grid">
+        <div class="viz-card wide">
+          <div class="viz-head"><h3>Recent failures</h3><p>Newest failed table×branch loads with the error the run reported.</p></div>
+          <div id="ins-fail"></div>
+        </div>
+        <div class="viz-card wide">
+          <div class="viz-head"><h3>Slowest single loads</h3><p>The individual table×branch loads that took longest.</p></div>
+          <div id="ins-slow"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section data-panel="flowruns" hidden>
+  <div class="panel" id="fr-run-panel" hidden>
+    <div class="panel-head">
+      <h2><span id="fr-title">—</span> <small class="mono" id="fr-run-id"></small> <span id="fr-status"></span></h2>
+      <div class="row-flex">
+        <button class="btn sm ghost" id="fr-toggle-raw"><i class="fa-solid fa-terminal"></i> Raw log</button>
+        <a class="btn sm ghost" id="fr-dagster-link" target="_blank" rel="noopener">
+          <i class="fa-solid fa-arrow-up-right-from-square"></i> Dagster UI</a>
+      </div>
+    </div>
+
+    <div id="fr-panel-body">
+      <div class="rd-overall">
+        <div class="rd-overall-top">
+          <span class="rd-metrics" id="fr-meta"></span>
+        </div>
+        <div class="rd-bar"><div id="fr-bar-fill" class="rd-bar-fill"></div><span id="fr-bar-label" class="rd-bar-label"></span></div>
+      </div>
+
+      <div class="rd-section-head" style="margin:14px 0 6px"><span>Steps</span></div>
+      <div class="table-wrap rd-tablewrap">
+        <table class="rd-table">
+          <thead><tr><th>Step</th><th>Kind</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead>
+          <tbody id="fr-steps"></tbody>
+        </table>
+      </div>
+
+      {# the running command's own parsed progress -- second dashboard on this page #}
+      <div style="margin-top:14px">
+        {% with p = 'fr-' %}{% include "_dash.html" %}{% endwith %}
+      </div>
+
+      <div id="fr-banner" class="banner warn" role="status" hidden></div>
+      <div id="fr-log" class="console">—</div>
+    </div>
   </div>
 
   <div class="panel" style="margin-top:18px">
     <div class="panel-head">
       <h2>Scheduled flow runs <small id="fr-stat" class="muted"></small></h2>
-      <div class="row-flex">
-        <label class="checkbox" style="margin:0"><input type="checkbox" id="fr-auto"><span>auto-refresh</span></label>
-        <button class="btn sm ghost" id="fr-refresh">↻</button>
-      </div>
+      <button class="btn sm ghost" id="fr-refresh">↻</button>
     </div>
     <div class="table-wrap" style="max-height:340px">
       <table>
-        <thead><tr><th>Flow</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr></thead>
+        <thead><tr><th>Flow</th><th>Status</th><th>Progress</th><th>Started</th><th>Duration</th><th></th></tr></thead>
         <tbody id="fr-list"></tbody>
       </table>
     </div>
@@ -116,6 +166,9 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='charts.js') }}"></script>
+<script src="{{ url_for('static', filename='insights.js') }}"></script>
+<script src="{{ url_for('static', filename='flowruns.js') }}"></script>
 <script>
 let curFile = null, filePoller = null, filesTimer = null;
 // The file list (name, size, mtime) changes far more slowly than a log's
@@ -271,10 +324,14 @@ const controlView = SysTable({
   pillCols: ["status"], numCols: ["row_count","duration_ms"],
 });
 
+// Tabs own their pollers: leaving the Flow runs tab stops its timers, so a
+// Monitor page parked on another tab costs nothing.
 function showTab(tab) {
   $$(".tab").forEach(b => b.classList.toggle("primary", b.dataset.tab === tab));
   $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== tab);
-  if (tab === "flowruns") frLoadRuns();
+  if (tab !== "flowruns") flowRuns.deactivate();
+  if (tab === "flowruns") flowRuns.activate();
+  if (tab === "insights" && !insightsView.data) insightsView.load();
   if (tab === "runs") runsView.load();
   if (tab === "dq") dqView.load();
   if (tab === "runlog") runlogView.load();
@@ -327,7 +384,7 @@ async function openFile(name) {
   if (!el("file-content").textContent) el("file-content").textContent = "(empty)";
   // Summary-first: when a parsed summary is available, collapse the raw log by
   // default (the "Raw log" button reveals it). Fall back to raw when there's none.
-  el("file-panel").classList.toggle("raw-hidden", !el("run-dash").hidden);
+  el("file-panel").classList.toggle("raw-hidden", fileDash.hasContent());
   if (el("auto").checked) filePoller.start();
 }
 async function purgeLogs() {
@@ -444,70 +501,12 @@ const runsView = (function () {
   return { load };
 })();
 
-// ---------- Flow runs (Dagster scheduled/run-now jobs) ----------
-const FR_ACTIVE = new Set(["QUEUED", "NOT_STARTED", "STARTING", "STARTED", "CANCELING"]);
-let frRuns = [], frSel = null, frCursor = null, frStatus = null, frTimer = null, frBusy = false;
-
-function frPill(s) {
-  const cls = s === "SUCCESS" ? "ok" : (s === "FAILURE" ? "failed" : "warn");
-  return `<span class="run-badge ${cls}">${esc(s || "—")}</span>`;
-}
-async function frLoadRuns() {
-  try {
-    frRuns = await apiGet("/api/flow-runs?limit=50");
-    el("fr-stat").textContent = frRuns.length ? `${frRuns.length} runs` : "";
-    el("fr-list").innerHTML = frRuns.map(r => `
-      <tr class="clickable ${r.run_id === frSel ? "selected" : ""}" data-r="${esc(r.run_id)}" tabindex="0" role="button">
-        <td>${esc(r.flow_name)}</td>
-        <td>${frPill(r.status)}</td>
-        <td class="mono">${r.start_time ? fmtDate(new Date(r.start_time * 1000).toISOString()) : "—"}</td>
-        <td class="mono">${r.end_time && r.start_time ? fmtDur((r.end_time - r.start_time) * 1000) : "—"}</td>
-        <td>${r.run_link ? `<a href="${esc(r.run_link)}" target="_blank" rel="noopener">↗</a>` : ""}</td>
-      </tr>`).join("") ||
-      `<tr><td colspan="5" class="muted">No flow runs yet (is Dagster running?).</td></tr>`;
-    $$("#fr-list tr.clickable").forEach(tr => tr.onclick = () => frOpen(tr.dataset.r));
-  } catch (e) { err(e.message); }
-}
-function frOpen(runId) {
-  frSel = runId; frCursor = null; frStatus = null;
-  const run = frRuns.find(r => r.run_id === runId);
-  el("fr-log-panel").hidden = false;
-  el("fr-log-title").textContent = run ? `${run.flow_name} — ${runId.slice(0, 8)}` : runId;
-  el("fr-dagster-link").href = (run && run.run_link) || "#";
-  el("fr-log").textContent = "";
-  $$("#fr-list tr.clickable").forEach(tr => tr.classList.toggle("selected", tr.dataset.r === runId));
-  frTail();
-}
-async function frTail() {
-  if (!frSel || frBusy) return;
-  frBusy = true;
-  try {
-    // Drain: keep fetching while the server says there is more.
-    for (let i = 0; i < 20; i++) {
-      const r = await apiGet(`/api/flow-runs/${encodeURIComponent(frSel)}/log?cursor=${encodeURIComponent(frCursor || "")}`);
-      if (r.error) { el("fr-log").textContent += `\n[${r.error}]`; break; }
-      const c = el("fr-log");
-      const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-      if (r.chunk) {
-        if (c.textContent === "—") c.textContent = "";
-        c.textContent += r.chunk;
-      }
-      if (atBottom) c.scrollTop = c.scrollHeight;
-      frCursor = r.cursor; frStatus = r.status;
-      if (!r.has_more) break;
-    }
-  } catch (e) { err(e.message); }
-  finally { frBusy = false; }
-}
-el("fr-refresh").onclick = frLoadRuns;
-el("fr-auto").onchange = (e) => {
-  clearInterval(frTimer);
-  if (e.target.checked)
-    frTimer = setInterval(() => {
-      frLoadRuns();
-      if (frSel && (frStatus === null || FR_ACTIVE.has(frStatus))) frTail();
-    }, 3000);
-};
+// ---------- Flow runs / Insights ----------
+// Both tabs live in their own static modules (static/flowruns.js,
+// static/insights.js); this page only wires their buttons.
+el("fr-refresh").onclick = () => flowRuns.refresh();
+el("fr-toggle-raw").onclick = () => el("fr-run-panel").classList.toggle("raw-hidden");
+el("ins-refresh").onclick = () => insightsView.load();
 
 $$(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
 el("toggle-raw").onclick = () => el("file-panel").classList.toggle("raw-hidden");
