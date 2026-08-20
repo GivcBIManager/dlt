@@ -84,8 +84,8 @@ function vizBarPath(x, y, w, h, dir = "up") {
   return `M${x},${y}h${w - r}q${r},0 ${r},${r}v${h - 2 * r}q0,${r} -${r},${r}h-${w - r}Z`;
 }
 
-function vizSvg(height, body, cls = "") {
-  return `<svg class="viz ${cls}" viewBox="0 0 ${VIZ_BOX.w} ${height}" role="img" ` +
+function vizSvg(height, body, cls = "", width = VIZ_BOX.w) {
+  return `<svg class="viz ${cls}" viewBox="0 0 ${width} ${height}" role="img" ` +
     `preserveAspectRatio="xMidYMid meet">${body}</svg>`;
 }
 
@@ -114,15 +114,33 @@ function vizPadL(max, fmt = vizCompact, ticks = 4) {
   return Math.min(120, Math.max(VIZ_BOX.padL, Math.round(longest * 6.1) + 12));
 }
 
+// Right-hand gutter for a secondary axis: same sizing rule as vizPadL, plus the
+// standard right padding so the last tick label is not flush to the card edge.
+function vizPadR(max, fmt = vizCompact, ticks = 4) {
+  const a = vizAxisSteps(max, ticks, fmt);
+  let longest = 0;
+  for (let i = 0; i <= a.ticks; i++) longest = Math.max(longest, String(fmt(a.step * i)).length);
+  return Math.min(110, Math.round(longest * 6.1) + 16);
+}
+
 // Y gridlines + tick labels. Returns { body, y(v) } so the caller maps values.
-function vizYAxis(max, plot, fmt = vizCompact, ticks = 4) {
+// opts.side "right" prints the ticks in the right gutter; opts.grid false skips
+// the gridlines, which is what a *secondary* axis wants -- two sets of
+// gridlines at different scales cross-hatch the plot and mean nothing.
+function vizYAxis(max, plot, fmt = vizCompact, ticks = 4, opts = {}) {
+  const right = opts.side === "right";
+  const grid = opts.grid !== false && !right;
   const a = vizAxisSteps(max, ticks, fmt);
   const y = (v) => plot.y1 - (a.top ? (v / a.top) * (plot.y1 - plot.y0) : 0);
   let body = "";
   for (let i = 0; i <= a.ticks; i++) {
     const v = a.step * i, yy = y(v);
-    body += `<line x1="${plot.x0}" y1="${yy}" x2="${plot.x1}" y2="${yy}" stroke="${VIZ.grid}" stroke-width="1"/>` +
-      `<text x="${plot.x0 - 8}" y="${yy + 4}" text-anchor="end" class="viz-tick">${vizEsc(fmt(v))}</text>`;
+    if (grid) {
+      body += `<line x1="${plot.x0}" y1="${yy}" x2="${plot.x1}" y2="${yy}" stroke="${VIZ.grid}" stroke-width="1"/>`;
+    }
+    body += right
+      ? `<text x="${plot.x1 + 8}" y="${yy + 4}" text-anchor="start" class="viz-tick">${vizEsc(fmt(v))}</text>`
+      : `<text x="${plot.x0 - 8}" y="${yy + 4}" text-anchor="end" class="viz-tick">${vizEsc(fmt(v))}</text>`;
   }
   return { body, y, top: a.top };
 }
@@ -146,12 +164,28 @@ function vizEmpty(height, msg = "No data in this window") {
 }
 
 /* A legend is always present for >= 2 series: identity must never be
- * colour-alone. Rendered as HTML (not SVG) so it wraps with the card. */
-function vizLegend(series) {
+ * colour-alone. Rendered as HTML (not SVG) so it wraps with the card.
+ * A dotted series gets a dotted swatch and a dual-axis series says which axis
+ * it reads, so the legend alone is enough to decode the plot. */
+function vizLegend(series, opts = {}) {
   if (!series || series.length < 2) return "";
-  return `<div class="viz-legend">` + series.map(s =>
-    `<span class="viz-key"><i style="background:${s.color}"></i>${vizEsc(s.label)}</span>`).join("") + `</div>`;
+  return `<div class="viz-legend">` + series.map(s => {
+    const side = opts.dual ? ` <em class="viz-axis-tag">${s.axis === "right" ? "right" : "left"}</em>` : "";
+    const swatch = s.dash
+      ? `<i class="dotted" style="--viz-key-color:${s.color}"></i>`
+      : `<i style="background:${s.color}"></i>`;
+    return `<span class="viz-key">${swatch}${vizEsc(s.label)}${side}</span>`;
+  }).join("") + `</div>`;
 }
+
+// A dotted stroke reads as "sampled/derived over time". Round caps turn each
+// 1-unit dash into a true dot.
+const VIZ_DOT_DASH = `stroke-dasharray="1 5" stroke-linecap="round"`;
+
+// Point markers make each plotted bucket findable on a solid line. Past this
+// many points they merge into a band and stop being marks at all, so a dense
+// series keeps the line and only its endpoint dot.
+const VIZ_MARKER_MAX = 60;
 
 /* ------------------------------------------------------- columns (stacked) */
 /* opts: { rows, x, series:[{key,label,color}], fmt, height, labelTop } */
@@ -207,49 +241,85 @@ function vizColumns(rows, opts = {}) {
 }
 
 /* ------------------------------------------------------------------- lines */
-/* opts: { rows, x, series:[{key,label,color}], fmt, height } */
+/* opts: { x, series:[{key,label,color,dash,axis}], fmt, fmtRight, height }
+ *
+ * A series with `axis: "right"` is measured against a second, independently
+ * scaled y axis in the right gutter -- that is how "duration vs number of
+ * records" plots two incomparable units on one timeline. Only the LEFT axis
+ * draws gridlines (see vizYAxis) and the legend tags which side each series
+ * reads, so the pairing is never guesswork. `dash: true` draws the series
+ * dotted. */
 function vizLines(rows, opts = {}) {
   const fmt = opts.fmt || vizCompact;
+  const fmtRight = opts.fmtRight || vizCompact;
   const height = opts.height || 230;
   const series = opts.series || [];
   if (!rows.length) return vizEmpty(height);
   // null is a gap in the line, not a zero: a day with no timed load must not
   // draw a dive to the axis. (Number(null) is 0, so test before converting.)
   const val = (row, key) => row[key] == null ? NaN : Number(row[key]);
-  let max = 0;
-  rows.forEach(r => series.forEach(s => { const v = val(r, s.key); if (Number.isFinite(v)) max = Math.max(max, v); }));
-  const plot = { x0: vizPadL(max || 1, fmt), x1: VIZ_BOX.w - VIZ_BOX.padR, y0: VIZ_BOX.padT, y1: height - VIZ_BOX.padB };
-  const axis = vizYAxis(max || 1, plot, fmt);
+  const isRight = (s) => s.axis === "right";
+  const dual = series.some(isRight);
+  const peak = (list) => {
+    let max = 0;
+    rows.forEach(r => list.forEach(s => {
+      const v = val(r, s.key); if (Number.isFinite(v)) max = Math.max(max, v);
+    }));
+    return max || 1;
+  };
+  const maxL = peak(series.filter(s => !isRight(s)));
+  const maxR = dual ? peak(series.filter(isRight)) : 1;
+  const plot = {
+    x0: vizPadL(maxL, fmt),
+    x1: VIZ_BOX.w - (dual ? vizPadR(maxR, fmtRight) : VIZ_BOX.padR),
+    y0: VIZ_BOX.padT, y1: height - VIZ_BOX.padB,
+  };
+  const axisL = vizYAxis(maxL, plot, fmt);
+  const axisR = dual ? vizYAxis(maxR, plot, fmtRight, 4, { side: "right" }) : null;
+  const axisFor = (s) => (isRight(s) ? axisR : axisL);
+  const fmtFor = (s) => (isRight(s) ? fmtRight : fmt);
   const band = (plot.x1 - plot.x0) / rows.length;
   const px = (i) => plot.x0 + band * (i + 0.5);
 
   let marks = "";
   series.forEach((s, si) => {
+    const axis = axisFor(s), sfmt = fmtFor(s);
     const pts = rows.map((r, i) => ({ i, v: val(r, s.key) })).filter(p => Number.isFinite(p.v));
     if (!pts.length) return;
     const d = pts.map((p, k) => `${k ? "L" : "M"}${px(p.i).toFixed(1)},${axis.y(p.v).toFixed(1)}`).join("");
-    if (series.length === 1) {  // single series: a 10% wash under the line
+    // A single solid series gets a 10% wash under the line. A dotted one does
+    // not: the fill would read as a solid area and defeat the dotted stroke.
+    if (series.length === 1 && !s.dash) {
       marks += `<path d="${d}L${px(pts[pts.length - 1].i).toFixed(1)},${plot.y1}L${px(pts[0].i).toFixed(1)},${plot.y1}Z" fill="${s.color}" opacity=".1"/>`;
     }
-    marks += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    marks += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" ` +
+      (s.dash ? VIZ_DOT_DASH : `stroke-linecap="round"`) + `/>`;
+    // Each point gets a ringed dot; the 2px surface ring is what keeps two
+    // series legible where they cross. The endpoint is drawn larger below, so
+    // it is left out here rather than drawn over.
+    if (s.marker && pts.length <= VIZ_MARKER_MAX) {
+      marks += pts.slice(0, -1).map(p =>
+        `<circle cx="${px(p.i).toFixed(1)}" cy="${axis.y(p.v).toFixed(1)}" r="3" ` +
+        `fill="${s.color}" stroke="${VIZ.surface}" stroke-width="2"/>`).join("");
+    }
     const last = pts[pts.length - 1];
     // End marker: >= 8px with a 2px surface ring so crossings stay legible.
     marks += `<circle cx="${px(last.i).toFixed(1)}" cy="${axis.y(last.v).toFixed(1)}" r="4" fill="${s.color}" stroke="${VIZ.surface}" stroke-width="2"/>`;
-    marks += `<text x="${(px(last.i) - 8).toFixed(1)}" y="${(axis.y(last.v) - 9 - si * 13).toFixed(1)}" text-anchor="end" class="viz-label">${vizEsc(fmt(last.v))}</text>`;
+    marks += `<text x="${(px(last.i) - 8).toFixed(1)}" y="${(axis.y(last.v) - 9 - si * 13).toFixed(1)}" text-anchor="end" class="viz-label">${vizEsc(sfmt(last.v))}</text>`;
   });
 
   // One wide invisible hit band per x position: the tooltip target is the
   // column, not the 8px dot.
   const hits = rows.map((r, i) => {
-    const tip = series.map(s => `${s.label}: ${fmt(r[s.key])}`).join("\n");
+    const tip = series.map(s => `${s.label}: ${fmtFor(s)(r[s.key])}`).join("\n");
     return `<g class="viz-mark"><title>${vizEsc(r[opts.x])}\n${vizEsc(tip)}</title>` +
       `<rect x="${plot.x0 + band * i}" y="${plot.y0}" width="${band}" height="${plot.y1 - plot.y0}" fill="transparent"/></g>`;
   }).join("");
 
-  const body = axis.body + marks + hits +
+  const body = axisL.body + (axisR ? axisR.body : "") + marks + hits +
     `<line x1="${plot.x0}" y1="${plot.y1}" x2="${plot.x1}" y2="${plot.y1}" stroke="${VIZ.axis}" stroke-width="1"/>` +
     vizXLabels(rows.map(r => r[opts.x]), plot, band);
-  return vizSvg(height, body) + vizLegend(series);
+  return vizSvg(height, body) + vizLegend(series, { dual });
 }
 
 /* --------------------------------------------------------- horizontal bars */
@@ -339,15 +409,26 @@ function vizDonut(slices, opts = {}) {
 
 /* ----------------------------------------------------------------- heatmap */
 /* Magnitude on a grid -> one-hue sequential ramp, with a scale legend.
- * opts: { rows, cols, value(row,col) -> number|null, fmt, rowLabel, colLabel } */
+ * opts: { value(row,col) -> number|null, fmt, valueLabel, width }
+ *
+ * `width` widens the viewBox beyond the standard chart box. A heat map with
+ * many columns and few rows is short and wide, so on a full-width card it can
+ * afford a bigger canvas -- and the extra column width is what keeps the
+ * per-cell value printable instead of colour-only (see the `cw > 34` test). */
 function vizHeat(rows, cols, opts = {}) {
   const fmt = opts.fmt || vizCompact;
   if (!rows.length || !cols.length) return vizEmpty(160);
   const labelW = 132, top = 16, cell = 26, gap = GAP;
-  const width = VIZ_BOX.w, cw = Math.max(14, (width - labelW - 10) / cols.length);
-  // Column names are long and the columns are narrow, so the bottom band has to
-  // fit steeply angled labels without clipping them.
-  const height = top + rows.length * cell + 52;
+  const width = opts.width || VIZ_BOX.w;
+  const cw = Math.max(14, (width - labelW - 10) / cols.length);
+  // Column names are long and the columns are narrow, so they are set at -35°
+  // and the bottom band is sized to whatever the longest one actually needs --
+  // a fixed band clipped every name past ~13 characters, which is most table
+  // names here. sin(35°) ~ 0.57 of a ~5.6px glyph is the vertical run per char.
+  const NAME_MAX = 22;
+  const longest = Math.min(NAME_MAX, Math.max(...cols.map(c => String(c).length)));
+  const bottom = 22 + Math.round(longest * 3.2);
+  const height = top + rows.length * cell + bottom;
   let max = 0;
   rows.forEach(r => cols.forEach(c => { const v = opts.value(r, c); if (Number.isFinite(v)) max = Math.max(max, v); }));
   const step = (v) => {
@@ -375,13 +456,17 @@ function vizHeat(rows, cols, opts = {}) {
   }).join("") + cols.map((c, ci) => {
     const x = labelW + ci * cw + (cw - gap) / 2;
     const y = top + rows.length * cell + 14;
-    const name = String(c).length > 13 ? String(c).slice(0, 12) + "…" : String(c);
-    return `<text x="${x}" y="${y}" text-anchor="end" class="viz-tick" transform="rotate(-35 ${x} ${y})">${vizEsc(name)}</text>`;
+    const full = String(c);
+    const name = full.length > NAME_MAX ? full.slice(0, NAME_MAX - 1) + "…" : full;
+    // The tooltip carries the untruncated name, so a clipped label never hides
+    // which table a column is.
+    return `<g class="viz-mark"><title>${vizEsc(full)}</title>` +
+      `<text x="${x}" y="${y}" text-anchor="end" class="viz-tick" transform="rotate(-35 ${x} ${y})">${vizEsc(name)}</text></g>`;
   }).join("");
   const scale = `<div class="viz-legend"><span class="viz-scale-label">${vizEsc(opts.valueLabel || "value")}</span>` +
     `<span class="viz-scale">${VIZ.seq.map(c => `<i style="background:${c}"></i>`).join("")}</span>` +
     `<span class="viz-scale-label">0 → ${vizEsc(fmt(max))}</span></div>`;
-  return vizSvg(height, body, "viz-heat") + scale;
+  return vizSvg(height, body, "viz-heat", width) + scale;
 }
 
 /* ---------------------------------------------------------------- meter/spark */

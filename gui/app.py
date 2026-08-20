@@ -729,6 +729,7 @@ def api_run_insights():
         days=days,
         branch=request.args.get("branch", "").strip(),
         table=request.args.get("table", "").strip(),
+        table_type=request.args.get("table_type", "").strip(),
         load_mode=request.args.get("load_mode", "").strip(),
         status=request.args.get("status", "").strip(),
     ))

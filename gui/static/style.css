@@ -623,13 +623,7 @@ tr.clickable { cursor: pointer; }
 .extra-arg .ea-val, .extra-arg .ea-custom { padding: .35rem .6rem; width: 100%; }
 .extra-arg .ea-del { padding: .2rem .55rem; line-height: 1; }
 
-/* Monitor: per-run rollup cards */
-.run-card { background: var(--surface-container); border: 1px solid var(--border-soft); border-radius: var(--radius-md); padding: 8px 12px; margin-bottom: 8px; }
-.run-card > summary { cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; list-style: none; }
-.run-card > summary::-webkit-details-marker { display: none; }
-.run-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.run-rows { font-weight: 700; }
-.run-detail { margin-top: 10px; }
+/* Status count badges -- shared by the Insights tiles and the Flow runs list. */
 .run-badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-full); font-size: 11px; font-weight: 700; }
 .run-badge.ok { background: var(--success-light); color: #047857; }
 .run-badge.failed { background: var(--error-light); color: #b91c1c; }
@@ -638,36 +632,73 @@ tr.clickable { cursor: pointer; }
 .run-badge.gray { background: var(--surface-container-highest); color: var(--text-muted); }
 
 /* ===================== Insights dashboard (Monitor) ===================== */
-/* Stat tiles: label, value, then an optional sub-line carrying a meter,
- * sparkline or badges. Exactly one tile is the hero (the number the dashboard
- * leads with) -- see static/insights.js. */
+/* Stat tiles: label, value, then a sub-line carrying a meter, sparkline, badges
+ * or a three-up statistics strip. The row is a FIXED four-column grid, not an
+ * auto-fit one: the tab renders exactly eight tiles, and four-by-four is the
+ * only arrangement where both rows end flush with the charts below them. */
 .stat-row {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 14px; margin-bottom: 18px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px; margin-bottom: 20px;
 }
 .stat-tile {
   background: var(--surface); border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-sm);
-  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
 }
 .stat-tile .stat-label { font-size: .7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
 .stat-tile .stat-value { font-size: 1.55rem; font-weight: 700; line-height: 1.15; color: var(--text-primary); }
 .stat-tile .stat-value small { font-size: .85rem; font-weight: 600; color: var(--text-muted); }
-.stat-tile .stat-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11.5px; }
-.stat-tile.hero { grid-column: span 2; background: var(--surface-low); border-color: var(--border); }
-.stat-tile.hero .stat-value { font-size: 3rem; font-weight: 700; letter-spacing: -.02em; }
-@media (max-width: 700px) { .stat-tile.hero { grid-column: span 1; } .stat-tile.hero .stat-value { font-size: 2.2rem; } }
+/* A floor on the sub-line, so a tile whose sub is one short muted sentence is
+ * exactly as tall as one carrying a meter or a stats strip. */
+.stat-tile .stat-sub {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  font-size: 11.5px; margin-top: auto; min-height: 30px;
+}
+/* p50 / p95 / max under a duration tile: three equal columns so the three
+ * duration tiles line up with each other digit for digit. */
+.stat-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; }
+.stat-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.stat-stat em { font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--text-light); }
+@media (max-width: 1180px) { .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .stat-row { grid-template-columns: minmax(0, 1fr); } }
 
+/* A section is a titled band of same-shaped cards. The column count is explicit
+ * per section (cols-1/2/3) rather than auto-fit, because auto-fit decides the
+ * count from the available width and then leaves the last row half-empty. */
+.viz-section { margin-top: 22px; }
+/* The sections stack; each one owns the grid for its own cards. Stated on the
+ * id so a stale cached template that still puts .viz-grid on this node cannot
+ * turn the sections themselves into grid items and lay them out side by side. */
+#ins-charts { display: block; }
+#ins-charts > .viz-section:first-child { margin-top: 0; }
+.viz-section-head {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--text-muted); margin: 0 0 10px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
 .viz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.viz-grid.cols-1 { grid-template-columns: minmax(0, 1fr); }
+.viz-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.viz-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .viz-grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 820px) {
+  .viz-grid.cols-2, .viz-grid.cols-3 { grid-template-columns: minmax(0, 1fr); }
+}
 .viz-card {
   background: var(--surface); border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg); padding: 14px 16px 12px; box-shadow: var(--shadow-sm); min-width: 0;
+  border-radius: var(--radius-lg); padding: 14px 16px 12px; box-shadow: var(--shadow-sm);
+  min-width: 0; display: flex; flex-direction: column;
 }
 .viz-card.wide { grid-column: 1 / -1; }
 .viz-head h3 { font-size: .92rem; font-weight: 700; margin: 0; }
-.viz-head p { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 10px; }
-.viz-body { min-width: 0; }
+/* Two lines of room whether or not this card's sub-line wraps: the chart bodies
+ * in a row then start at the same y, which is what makes the row read as one. */
+.viz-head p { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 10px; min-height: 28px; }
+/* Cards in a row stretch to the tallest; the body takes the slack and centres
+ * its chart in it rather than leaving a gap under a short one. */
+.viz-body { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; }
 .viz-body > .viz { display: block; width: 100%; height: auto; overflow: visible; }
+.viz-note { margin-bottom: 16px; }
 #ins-panels { transition: opacity .18s ease; }
 /* Hold the previous render while refetching -- never a skeleton flash. */
 #ins-panels.viz-loading { opacity: .55; pointer-events: none; }
@@ -686,18 +717,56 @@ tr.clickable { cursor: pointer; }
 .viz-key { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-muted); }
 .viz-key i { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .viz-key i.tick { width: 2px; height: 12px; border-radius: 0; background: #52514e; }
+/* A dotted series gets a dotted swatch, so the legend matches the stroke. */
+.viz-key i.dotted {
+  width: 18px; height: 2px; border-radius: 0; background: none;
+  background-image: radial-gradient(circle, var(--viz-key-color) 1px, transparent 1.2px);
+  background-size: 5px 2px; background-repeat: repeat-x;
+}
+/* Which y axis a series reads, on a dual-axis chart. */
+.viz-axis-tag {
+  font-style: normal; font-size: 9.5px; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--text-light); margin-left: 2px;
+}
 .viz-key b { margin-left: auto; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .viz-key em { font-style: normal; color: var(--text-light); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 .viz-scale { display: inline-flex; gap: 0; }
 .viz-scale i { width: 16px; height: 10px; }
 .viz-scale-label { font-size: 11px; color: var(--text-muted); }
-.viz-donut-wrap { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.viz-donut-wrap { display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap; }
 .viz-donut { width: 172px; height: 172px; flex-shrink: 0; }
 .viz-spark { width: 110px; height: 26px; }
 .viz-meter { display: inline-block; width: 96px; height: 8px; background: var(--surface-container-highest); border-radius: var(--radius-full); overflow: hidden; }
 .viz-meter-fill { display: block; height: 100%; border-radius: var(--radius-full); }
 .viz-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 24px; color: var(--text-muted); font-size: .85rem; background: var(--surface-low); border-radius: var(--radius-md); }
 .viz-empty.ok { color: #047857; background: var(--success-light); }
+/* Collapsible duration tree: table type -> table -> branch. Depth is carried by
+ * indent AND by weight/size, so a row's level is readable without counting
+ * pixels; the numeric columns stay in one line down the table at every level,
+ * which is the whole reason this is one table and not nested ones. */
+.tree-wrap { max-height: 620px; }
+.tree-table { width: 100%; }
+.tree-table td:first-child, .tree-table th:first-child { white-space: nowrap; }
+.tree-row.hidden { display: none; }
+.tree-row[data-toggle] { cursor: pointer; }
+.tree-row[data-toggle]:hover > td { background: var(--surface-container); }
+.tree-row[data-toggle]:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.tree-twisty {
+  display: inline-block; width: 12px; margin-right: 6px; text-align: center;
+  color: var(--text-muted); font-style: normal; transition: transform .12s ease;
+}
+.tree-twisty::before { content: "\25B8"; }        /* right-pointing triangle */
+.tree-twisty.leaf::before { content: ""; }
+.tree-row[aria-expanded="true"] > td > .tree-twisty { transform: rotate(90deg); }
+.tree-label { font-weight: 600; }
+.tree-count { margin-left: 8px; font-size: 10.5px; color: var(--text-light); }
+.lvl-type > td { background: var(--surface-low); }
+.lvl-type > td:first-child { font-size: .78rem; text-transform: uppercase; letter-spacing: .5px; }
+.lvl-table > td:first-child { padding-left: 26px; }
+.lvl-branch > td:first-child { padding-left: 56px; }
+.lvl-branch > td { color: var(--text-muted); }
+.lvl-branch .tree-label { font-weight: 500; }
+
 .viz-twin { margin-top: 10px; }
 .viz-twin > summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
 .viz-twin .table-wrap { max-height: 280px; margin-top: 8px; }

@@ -3,7 +3,9 @@
 Owns a SQLAlchemy engine to the ``oasis_meta`` database and four tables under
 ``PostgresConfig.schema`` (default ``etl_meta``). Naive local wall-clock times
 are stored as ``TIMESTAMP WITHOUT TIME ZONE`` (no timezone tagging needed here,
-unlike Iceberg). All DDL is idempotent (CREATE ... IF NOT EXISTS via checkfirst).
+unlike Iceberg). All DDL is idempotent: tables via ``create_all(checkfirst=True)``
+and, for tables that already exist, any newly-defined column via an additive
+``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` (see ``_add_missing_columns``).
 """
 from __future__ import annotations
 
@@ -60,6 +62,16 @@ def _etl_run_log_table(md: MetaData, schema: str) -> Table:
         Column("start_time", TIMESTAMP(timezone=False)),
         Column("end_time", TIMESTAMP(timezone=False)),
         Column("duration_ms", BigInteger), Column("status", String),
+        # The run splits into two measurable phases and the Insights tab charts
+        # them apart: ``read`` is the Oracle extract + stage of this (table,
+        # branch); ``load`` is the Iceberg commit of the table this unit belongs
+        # to (one commit covers every branch of the table, so its elapsed time
+        # is stamped on each of that table's units). ``total`` is read + load.
+        # ``duration_ms`` stays exactly what it always was -- the read phase --
+        # so nothing that already reads it changes meaning.
+        Column("read_duration_ms", BigInteger),
+        Column("load_duration_ms", BigInteger),
+        Column("total_duration_ms", BigInteger),
         Column("attempts", BigInteger), Column("write_disposition", String),
         Column("load_status", String), Column("error_details", String),
         Column("schema_discrepancy", String),
@@ -110,7 +122,33 @@ class MetaStore:
         with self.engine.begin() as conn:
             conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.cfg.schema}"'))
         self.md.create_all(self.engine, checkfirst=True)
+        self._add_missing_columns()
         log.info("metastore schema '%s' ready", self.cfg.schema)
+
+    def _add_missing_columns(self) -> None:
+        """Add columns this build knows about to already-created tables.
+
+        ``create_all(checkfirst=True)`` skips a table that exists, so a column
+        added to a definition here would never reach an older deployment -- and
+        every INSERT names all columns, so it would fail outright. Additive-only
+        by design: nothing is dropped, retyped or backfilled (the new column
+        reads NULL for rows written before it existed).
+        """
+        from sqlalchemy import inspect
+
+        inspector = inspect(self.engine)
+        with self.engine.begin() as conn:
+            for table in self.md.tables.values():
+                existing = {c["name"] for c in
+                            inspector.get_columns(table.name, schema=table.schema)}
+                for col in table.columns:
+                    if col.name in existing:
+                        continue
+                    ddl = col.type.compile(self.engine.dialect)
+                    conn.execute(text(
+                        f'ALTER TABLE "{table.schema}"."{table.name}" '
+                        f'ADD COLUMN IF NOT EXISTS "{col.name}" {ddl}'))
+                    log.info("metastore: added column %s.%s", table.name, col.name)
 
     def _upsert(self, table: Table, rows: list[dict], key_cols: list[str]) -> None:
         """Insert ``rows``, or update in place on a ``key_cols`` conflict.

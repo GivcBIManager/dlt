@@ -38,6 +38,7 @@ import logging
 import struct
 import sys
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -217,6 +218,12 @@ class TableLoadPlan:
     schema_diffs: dict = field(default_factory=dict)
     load_status: str = "PENDING"     # SUCCESS | FAILED | SKIPPED
     load_error: Optional[str] = None
+    # Wall-clock of the write phase for this table: staged parquet -> Iceberg
+    # commit. Measured for the whole table (one commit covers all its branches),
+    # then stamped on each of the table's run-log rows so the Insights tab can
+    # separate "time spent reading Oracle" from "time spent writing the lake".
+    # None when the table never reached the write phase (skipped / no rows).
+    load_duration_ms: Optional[int] = None
     # A commit that hung past the watchdog: the pipeline is poisoned (a daemon
     # worker is still stuck inside it) and must be rebuilt before the next table.
     load_timed_out: bool = False
@@ -899,6 +906,11 @@ def _log_rows(plans: list[TableLoadPlan], settings: Settings, run_id: str) -> li
         load_mode = "SNAPSHOT" if plan.tdef.is_snapshot else settings.mode
         for r in plan.success + plan.failed:
             diff = plan.schema_diffs.get(r.branch)
+            # read = this unit's own Oracle extract; load = the table's Iceberg
+            # commit (shared by every branch of the table, see
+            # TableLoadPlan.load_duration_ms); total = the two phases summed.
+            read_ms = r.duration_ms
+            load_ms = plan.load_duration_ms
             rows.append({
                 "pipeline_run_id": run_id,
                 "table_name": r.table,
@@ -908,6 +920,9 @@ def _log_rows(plans: list[TableLoadPlan], settings: Settings, run_id: str) -> li
                 "start_time": r.start_time,
                 "end_time": r.end_time,
                 "duration_ms": r.duration_ms,
+                "read_duration_ms": read_ms,
+                "load_duration_ms": load_ms,
+                "total_duration_ms": (read_ms or 0) + load_ms if load_ms is not None else read_ms,
                 "status": r.status,
                 "attempts": r.attempts,
                 "write_disposition": plan.disposition,
@@ -1914,6 +1929,11 @@ def _load_one_table(
     # Label the peak-memory window: this is where the staged parquet is read
     # back into Arrow and committed to Iceberg.
     monitor.begin_load(tdef.dataset_table_name)
+    # The write phase starts here, so the timer does too -- a monotonic clock,
+    # not now_local(), so a clock step mid-load cannot produce a negative
+    # duration. Set in `finally` so a FAILED or timed-out load still reports how
+    # long it burned before giving up (that is exactly the number worth seeing).
+    load_started = time.monotonic()
     try:
         if plan.disposition == "replace":
             # Full rebuild: one size-budgeted branch group per dlt run (first group
@@ -1998,6 +2018,7 @@ def _load_one_table(
         # Persist any per-branch watermarks that committed before the failure.
         control.save()
     finally:
+        plan.load_duration_ms = int((time.monotonic() - load_started) * 1000)
         monitor.end_load(tdef.dataset_table_name)
         monitor.record_table_loaded(plan.load_status)
     return plan

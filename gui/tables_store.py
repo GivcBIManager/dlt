@@ -113,6 +113,27 @@ def load_raw() -> dict[str, Any]:
     return json.loads(TABLES_JSON.read_text(encoding="utf-8"))
 
 
+def dataset_categories() -> dict[str, str]:
+    """``{iceberg_table_name: "masters" | "transactions" | "snapshots"}``.
+
+    The run log records only ``table_name`` (the normalized dataset name), so
+    anything that wants to cut metrics by table *type* -- the Insights tab does
+    -- resolves it through this map. Derived from tables.json rather than stored
+    per run-log row, so it also classifies rows written before a table was
+    (re)categorized, and re-reads the file rather than caching: tables.json is
+    editable from the Tables page and a stale map would silently mislabel.
+    """
+    doc = load_raw()
+    out: dict[str, str] = {}
+    for category in CATEGORIES:
+        for entry in doc.get(category) or []:
+            if isinstance(entry, dict):
+                name = _dataset_name(entry)
+                if name:
+                    out[name] = category
+    return out
+
+
 def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]:
     where = f"{category}[{idx}]"
     errs: list[str] = []
