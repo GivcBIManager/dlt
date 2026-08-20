@@ -36,9 +36,14 @@ gui-server.err.log
 # dg CLI cache/telemetry
 .dg/
 
-# dbt generated artifacts (profiles.yml is generated from app config)
-dbt/profiles.yml
-dbt/target/
-dbt/logs/
-dbt/dbt_packages/
-dbt/.user.yml
+# The dbt project is per-host working state, like tables.json and .dlt/: models,
+# tests and macros are authored through the GUI's Models page, profiles.yml is
+# generated from app config, and target/ logs/ dbt_packages/ are build output.
+#
+# dbt_project.yml is the exception and stays tracked: dbt refuses to start
+# without it and, unlike profiles.yml, nothing generates it -- ignoring it would
+# leave a fresh clone unable to run dbt at all. The pattern has to be `dbt/*`
+# rather than `dbt/`, because git does not descend into an excluded directory
+# and a negation inside one would never be reached.
+dbt/*
+!dbt/dbt_project.yml
