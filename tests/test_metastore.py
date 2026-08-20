@@ -11,6 +11,24 @@ def test_ensure_schema_is_idempotent(pg_meta):
     pg_meta.ensure_schema()  # second call must not raise
 
 
+def test_ensure_schema_adds_a_missing_column(pg_meta):
+    """A table created by an older build gains newly-defined columns."""
+    from sqlalchemy import text
+
+    schema = pg_meta.cfg.schema
+    with pg_meta.engine.begin() as conn:
+        conn.execute(text(
+            f'ALTER TABLE "{schema}".etl_dq_results DROP COLUMN row_count_delta_pct'))
+    pg_meta.ensure_schema()
+    cols = {c["name"] for c in
+            inspect(pg_meta.engine).get_columns("etl_dq_results", schema=schema)}
+    assert "row_count_delta_pct" in cols
+    # and the insert that names every column works again
+    pg_meta.append_dq_results([{"pipeline_run_id": "dq1", "table_name": "t",
+                                "branch_id": "1", "row_count_delta_pct": 0.5,
+                                "status": "WITHIN_TOLERANCE"}])
+
+
 def test_control_state_upsert_and_read(pg_meta):
     pg_meta.upsert_control_state([{
         "table_name": "customers", "branch_id": "1",

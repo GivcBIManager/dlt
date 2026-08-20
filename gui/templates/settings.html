@@ -96,8 +96,8 @@ const GROUPS = [
     ]},
   { icon: "fa-scale-balanced", title: "Data quality", blurb: "Oracle ↔ Iceberg reconciliation tolerance.",
     keys: [
-      { k: "dq_hash_delta_tolerance_pct", label: "Hash-delta tolerance", unit: "%",
-        help: "Row-hash drift within this percent reports WITHIN_TOLERANCE instead of MISMATCH (0 = strict). Row-count drift is always a hard mismatch." },
+      { k: "dq_hash_delta_tolerance_pct", label: "Delta tolerance", unit: "%",
+        help: "Drift within this percent of the Oracle rows reports WITHIN_TOLERANCE instead of MISMATCH (0 = strict). Covers both the row-count delta and the row-hash delta — the larger of the two decides." },
     ]},
 ];
 

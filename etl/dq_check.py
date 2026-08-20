@@ -237,40 +237,55 @@ class HashDelta:
         return self.only_in_oracle + self.only_in_iceberg + self.mismatch
 
 
-def _hash_delta_pct(hash: Optional[HashDelta]) -> Optional[float]:
-    """Percent of Oracle hashed rows that diverged (None when undefined).
+def _delta_pct(delta: Optional[int], base: Optional[int]) -> Optional[float]:
+    """``|delta|`` as a percent of ``base`` (None when the ratio is undefined).
 
-    ``0.0`` for a clean hash, ``None`` when no hash ran or when Oracle hashed 0
-    rows yet a delta exists (an undefined ratio -- treated as a mismatch upstream).
+    ``0.0`` for a clean delta, ``None`` when there is no delta to measure at all
+    or when ``base`` is 0 yet a delta exists (an undefined ratio -- treated as a
+    mismatch by ``classify_status``).
     """
+    if delta is None:
+        return None
+    if delta == 0:
+        return 0.0
+    if not base or base <= 0:
+        return None
+    return 100.0 * abs(delta) / base
+
+
+def _hash_delta_pct(hash: Optional[HashDelta]) -> Optional[float]:
+    """Percent of Oracle hashed rows that diverged (None when undefined)."""
     if hash is None:
         return None
-    if hash.total_delta == 0:
-        return 0.0
-    if hash.oracle_rows <= 0:
-        return None
-    return 100.0 * hash.total_delta / hash.oracle_rows
+    return _delta_pct(hash.total_delta, hash.oracle_rows)
 
 
 def classify_status(
     row_count_delta: Optional[int],
+    oracle_row_count: Optional[int],
     hash: Optional[HashDelta],
     tolerance_pct: float,
-) -> tuple[str, Optional[float]]:
-    """Return ``(status, hash_delta_pct)`` for a completed unit.
+) -> tuple[str, Optional[float], Optional[float]]:
+    """Return ``(status, row_count_delta_pct, hash_delta_pct)`` for a unit.
 
-    ERROR is decided by the caller (a check that could not complete). Row-count
-    drift is a hard MISMATCH (zero tolerance). Hash drift is tolerated up to
-    ``tolerance_pct`` percent of the Oracle hashed rows -> WITHIN_TOLERANCE.
+    ERROR is decided by the caller (a check that could not complete). Both drifts
+    -- row-count and row-hash -- are measured as a percent of the unit's Oracle
+    rows and tolerated up to ``tolerance_pct`` -> WITHIN_TOLERANCE; whichever is
+    larger decides, and either one above the tolerance is a MISMATCH. A drift
+    whose ratio is undefined (Oracle contributed 0 rows) is always a MISMATCH.
     """
-    pct = _hash_delta_pct(hash)
-    if row_count_delta not in (None, 0):
-        return STATUS_MISMATCH, pct
-    if hash is None or hash.total_delta == 0:
-        return STATUS_OK, pct
-    if pct is None:  # oracle_rows == 0 with delta > 0 -> undefined ratio
-        return STATUS_MISMATCH, None
-    return (STATUS_WITHIN_TOLERANCE if pct <= tolerance_pct else STATUS_MISMATCH), pct
+    count_pct = _delta_pct(row_count_delta, oracle_row_count)
+    hash_pct = _hash_delta_pct(hash)
+    # None/0 deltas are not drift: a missing count leaves that side unmeasured.
+    drifts = ([count_pct] if row_count_delta else []) + (
+        [hash_pct] if hash is not None and hash.total_delta else [])
+    if not drifts:
+        return STATUS_OK, count_pct, hash_pct
+    if any(p is None for p in drifts):  # base 0 with a delta -> undefined ratio
+        return STATUS_MISMATCH, count_pct, hash_pct
+    status = (STATUS_WITHIN_TOLERANCE if max(drifts) <= tolerance_pct
+              else STATUS_MISMATCH)
+    return status, count_pct, hash_pct
 
 
 def _dedupe_by_key(kh: pa.Table) -> pa.Table:
@@ -678,6 +693,7 @@ class DqResult:
     iceberg_row_count: Optional[int] = None
     hash: Optional[HashDelta] = None
     hash_delta_pct: Optional[float] = None
+    row_count_delta_pct: Optional[float] = None
     cols_only_oracle: list[str] = field(default_factory=list)
     cols_only_iceberg: list[str] = field(default_factory=list)
     status: str = "OK"
@@ -803,8 +819,9 @@ def check_unit(
                 res.iceberg_row_count = _lake_window_count(static_table, branch.id, win)
 
         # ---- status -----------------------------------------------------------
-        res.status, res.hash_delta_pct = classify_status(
-            res.row_count_delta, res.hash, settings.dq_hash_delta_tolerance_pct)
+        res.status, res.row_count_delta_pct, res.hash_delta_pct = classify_status(
+            res.row_count_delta, res.oracle_row_count, res.hash,
+            settings.dq_hash_delta_tolerance_pct)
     except Exception as exc:  # noqa: BLE001 - isolate per-unit failures
         res.status = "ERROR"
         res.error = f"{type(exc).__name__}: {exc}"
@@ -884,14 +901,19 @@ class _DqProgress:
     def _n(v) -> str:
         return "-" if v is None else str(v)
 
+    @staticmethod
+    def _p(v) -> str:
+        return "-" if v is None else f"{v:.2f}"
+
     def _unit_line(self, res: "DqResult") -> str:
         h = res.hash
-        pct = "-" if res.hash_delta_pct is None else f"{res.hash_delta_pct:.2f}"
         return (f"DQ-UNIT {res.table}/{res.branch} | "
                 f"ora={self._n(res.oracle_row_count)} ice={self._n(res.iceberg_row_count)} "
-                f"cnt={self._n(res.row_count_delta)} | "
+                f"cnt={self._n(res.row_count_delta)} "
+                f"cntpct={self._p(res.row_count_delta_pct)} | "
                 f"match={self._n(h.matched if h else None)} "
-                f"delta={self._n(h.total_delta if h else None)} pct={pct} | {res.status}")
+                f"delta={self._n(h.total_delta if h else None)} "
+                f"pct={self._p(res.hash_delta_pct)} | {res.status}")
 
     def _heartbeat_line(self, elapsed: float) -> str:
         with self._lock:
@@ -1006,6 +1028,7 @@ def _result_rows(results: list[DqResult], settings: Settings, run_id: str) -> li
             "oracle_row_count": r.oracle_row_count,
             "iceberg_row_count": r.iceberg_row_count,
             "row_count_delta": r.row_count_delta,
+            "row_count_delta_pct": r.row_count_delta_pct,
             "hash_columns": h.columns if h else None,
             "oracle_hashed_rows": h.oracle_rows if h else None,
             "iceberg_hashed_rows": h.iceberg_rows if h else None,
@@ -1042,6 +1065,7 @@ _DQ_HINTS = {
     "oracle_row_count": {"data_type": "bigint"},
     "iceberg_row_count": {"data_type": "bigint"},
     "row_count_delta": {"data_type": "bigint"},
+    "row_count_delta_pct": {"data_type": "double"},
     "hash_columns": {"data_type": "bigint"},
     "oracle_hashed_rows": {"data_type": "bigint"},
     "iceberg_hashed_rows": {"data_type": "bigint"},
@@ -1074,9 +1098,9 @@ def write_results_postgres(results: list[DqResult], settings: Settings, run_id: 
 def render_summary(results: list[DqResult], do_hash: bool) -> str:
     """A compact, aligned console table of the per-(table, branch) results."""
     results = sorted(results, key=lambda r: (r.table, r.branch))
-    headers = ["TABLE", "BRANCH", "ORA_ROWS", "ICE_ROWS", "CNT_DELTA"]
+    headers = ["TABLE", "BRANCH", "ORA_ROWS", "ICE_ROWS", "CNT_DELTA", "CNT%"]
     if do_hash:
-        headers += ["MATCH", "ONLY_ORA", "ONLY_ICE", "MISMATCH", "HASH_DELTA", "TOL%"]
+        headers += ["MATCH", "ONLY_ORA", "ONLY_ICE", "MISMATCH", "HASH_DELTA", "HASH%"]
     headers += ["STATUS"]
 
     def cell(v) -> str:
@@ -1092,7 +1116,7 @@ def render_summary(results: list[DqResult], do_hash: bool) -> str:
     table = [headers]
     for r in results:
         row = [r.table, r.branch, cell(r.oracle_row_count), cell(r.iceberg_row_count),
-               cell(r.row_count_delta)]
+               cell(r.row_count_delta), pct_cell(r.row_count_delta_pct)]
         if do_hash:
             h = r.hash
             row += [cell(h.matched if h else None), cell(h.only_in_oracle if h else None),

@@ -276,7 +276,7 @@ function makeDqView(E = el) {
   const RE = {
     scope: /DQ run\s+(\S+).*?branches=(\[[^\]]*\]).*?tables=(\d+).*?window=(.+?)\s+\|\s+hash=(\w+)/,
     prog: /DQ-PROGRESS\s+(\d+:\d\d:\d\d)\s+\|\s+units\s+(\d+)\/(\d+)\s+\|\s+ok\s+(\d+)\s+tol\s+(\d+)\s+mismatch\s+(\d+)\s+err\s+(\d+)/,
-    unit: /DQ-UNIT\s+([^/\s]+)\/([^\s|]+)\s+\|\s+ora=(\S+)\s+ice=(\S+)\s+cnt=(\S+)\s+\|\s+match=(\S+)\s+delta=(\S+)\s+pct=(\S+)\s+\|\s+(\S+)/,
+    unit: /DQ-UNIT\s+([^/\s]+)\/([^\s|]+)\s+\|\s+ora=(\S+)\s+ice=(\S+)\s+cnt=(\S+)\s+cntpct=(\S+)\s+\|\s+match=(\S+)\s+delta=(\S+)\s+pct=(\S+)\s+\|\s+(\S+)/,
     ts: /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d{3}/,
   };
   const SEV = { ERROR: 0, MISMATCH: 1, WITHIN_TOLERANCE: 2, OK: 3, SKIPPED: 4 };
@@ -312,8 +312,9 @@ function makeDqView(E = el) {
       m.units.set(key, {
         table: g[1], branch: g[2],
         ora: num(g[3]), ice: num(g[4]), cnt: num(g[5]),
-        match: num(g[6]), delta: num(g[7]),
-        pct: g[8] === "-" ? null : Number(g[8]), status: g[9],
+        cntPct: g[6] === "-" ? null : Number(g[6]),
+        match: num(g[7]), delta: num(g[8]),
+        pct: g[9] === "-" ? null : Number(g[9]), status: g[10],
       });
       return;
     }
@@ -357,16 +358,18 @@ function makeDqView(E = el) {
     units.sort((a, b) => (SEV[a.status] ?? 9) - (SEV[b.status] ?? 9) ||
       (b.delta || 0) - (a.delta || 0) || a.table.localeCompare(b.table));
     const cell = (v) => v == null ? "—" : fmtNum(v);
+    const pctCell = (v) => v == null ? "—" : v.toFixed(2) + "%";
     E("dq-tbody").innerHTML = units.map(u => `<tr>
       <td class="mono">${esc(u.table)}</td>
       <td class="mono">${esc(u.branch)}</td>
       <td class="num">${cell(u.ora)}</td>
       <td class="num">${cell(u.ice)}</td>
       <td class="num">${cell(u.cnt)}</td>
+      <td class="num">${pctCell(u.cntPct)}</td>
       <td class="num">${cell(u.delta)}</td>
-      <td class="num">${u.pct == null ? "—" : u.pct.toFixed(2) + "%"}</td>
+      <td class="num">${pctCell(u.pct)}</td>
       <td>${pill(u.status)}</td></tr>`).join("") ||
-      `<tr><td colspan="8" class="muted">Waiting for DQ units…</td></tr>`;
+      `<tr><td colspan="9" class="muted">Waiting for DQ units…</td></tr>`;
 
     const ibox = E("dq-issues-box");
     ibox.hidden = m.issues.length === 0;

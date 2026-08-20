@@ -24,6 +24,9 @@ Examples
     # scope to branches/tables, counts only (skip the hash pull)
     python dq_check.py --branch jazan,khamis --tables APPOINTMENTS --no-hash
 
+    # scope to table types (masters / transactions / snapshots)
+    python dq_check.py --category masters,snapshots
+
     # explicit window, also dump a CSV, don't write the Postgres table
     python dq_check.py --since 2026-06-01 --until 2026-06-23 --csv exports --no-write
 
@@ -56,11 +59,43 @@ def _parse_date(value: str | None) -> dt.date | None:
     return datetime.strptime(value.strip(), "%Y-%m-%d").date()
 
 
+# Table types, as they are keyed in tables.json. 'both' means what it means for
+# oracle_to_iceberg --category (masters + transactions, snapshots excluded), so a
+# spec can carry the same value for either script.
+ALL_CATEGORIES = (config.CATEGORY_MASTER, config.CATEGORY_TRANSACTION,
+                  config.CATEGORY_SNAPSHOT)
+_CATEGORY_ALIASES = {
+    "all": ALL_CATEGORIES,
+    "both": (config.CATEGORY_MASTER, config.CATEGORY_TRANSACTION),
+}
+
+
+def _parse_categories(value: str | None) -> set[str]:
+    """Expand a --category list into tables.json category names (empty = all)."""
+    known = set(ALL_CATEGORIES)
+    out: set[str] = set()
+    for token in _parse_list(value):
+        name = token.lower()
+        if name in _CATEGORY_ALIASES:
+            out.update(_CATEGORY_ALIASES[name])
+        elif name in known:
+            out.add(name)
+        else:
+            raise ValueError(
+                f"unknown table type {token!r}; choose from "
+                f"{', '.join(ALL_CATEGORIES)} (or 'all' / 'both')")
+    return out or known
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--branch", help="comma/space separated branch keys (default: all)")
     p.add_argument("--tables", help="comma/space separated table object names (default: all)")
+    p.add_argument("--category", help="comma/space separated table types to check: "
+                                      "masters, transactions, snapshots "
+                                      "('all' = the three, 'both' = masters + "
+                                      "transactions; default: all)")
     p.add_argument("--tables-file", default="tables.json", help="path to tables.json")
 
     p.add_argument("--since", help="window lower bound YYYY-MM-DD "
@@ -114,14 +149,20 @@ def main(argv: list[str]) -> int:
     else:
         branches = list(all_branches.values())
 
+    try:
+        categories = _parse_categories(args.category)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+
     table_filter = {t.upper() for t in _parse_list(args.tables)}
+    tables = [t for t in all_tables if t.category in categories]
     if table_filter:
-        tables = [t for t in all_tables if t.object_name.upper() in table_filter]
-        if not tables:
-            log.error("No tables matched %s", sorted(table_filter))
-            return 2
-    else:
-        tables = all_tables
+        tables = [t for t in tables if t.object_name.upper() in table_filter]
+    if not tables and (table_filter or args.category):
+        log.error("No tables matched types=%s tables=%s",
+                  sorted(categories), sorted(table_filter) or "(all)")
+        return 2
 
     year = args.year or datetime.now().year
     since = _parse_date(args.since) or dt.date(year, 1, 1)
@@ -135,9 +176,11 @@ def main(argv: list[str]) -> int:
     control = ControlStore(MetaStore(settings.postgres)).load().as_dict()
     run_id = f"dq-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
 
-    log.info("DQ run %s | %s | branches=%s | tables=%d | window=%s..%s | hash=%s",
+    log.info("DQ run %s | %s | branches=%s | types=%s | tables=%d | "
+             "window=%s..%s | hash=%s",
              run_id, "SELF-TEST" if args.self_test else settings.destination_bucket_url,
-             [b.key for b in branches], len(tables), since,
+             [b.key for b in branches],
+             [c for c in ALL_CATEGORIES if c in categories], len(tables), since,
              until or "(per-branch watermark)", not args.no_hash)
 
     results = dq_check.run_dq(

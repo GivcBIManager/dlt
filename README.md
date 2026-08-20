@@ -366,6 +366,24 @@ same row set:
    rows are bucketed into `matched` / `only_in_oracle` / `only_in_iceberg` /
    `hash_mismatch`. This catches content drift a bare count would miss.
 
+### Status: OK / WITHIN_TOLERANCE / MISMATCH
+
+Both deltas are also expressed as a **percent of the unit's Oracle rows**
+(`row_count_delta_pct`, `hash_delta_pct`) and compared against the
+`dq_hash_delta_tolerance_pct` setting (default **10%**, editable in
+Settings → Data quality):
+
+| Result | Status |
+| --- | --- |
+| both deltas 0 | `OK` |
+| the larger of the two drifts ≤ tolerance | `WITHIN_TOLERANCE` |
+| either drift > tolerance | `MISMATCH` |
+| a drift with an undefined ratio (Oracle contributed 0 rows) | `MISMATCH` |
+
+Set the tolerance to `0` for strict reconciliation, where any drift at all is a
+`MISMATCH`. Note that most real drift moves **both** numbers: rows missing from
+the lake widen the count delta *and* land in `only_in_oracle`.
+
 ### Window: YTD → last run
 
 The window runs from `--since` (default **Jan 1 of the current year** — YTD) up to
@@ -401,6 +419,10 @@ python dq_check.py
 # Counts only (skip the heavier hash pull), scoped to branches/tables
 python dq_check.py --branch jazan,khamis --tables APPOINTMENTS --no-hash
 
+# Scope to table types: masters, transactions, snapshots
+# ('all' = the three, 'both' = masters + transactions, as in oracle_to_iceberg)
+python dq_check.py --category masters,snapshots
+
 # Explicit window, also dump a CSV, and don't write the Postgres table
 python dq_check.py --since 2026-06-01 --until 2026-06-23 --csv exports --no-write
 
@@ -408,8 +430,10 @@ python dq_check.py --since 2026-06-01 --until 2026-06-23 --csv exports --no-writ
 python dq_check.py --self-test
 ```
 
-Branches run in parallel (one Oracle connection each); the process exits non-zero
-if any unit is `MISMATCH` or `ERROR`, so it drops into CI/cron cleanly. `--help`
+Branches run in parallel (one Oracle connection each). A `MISMATCH` is a
+*successful* check that found drift — it is recorded and reported, and the run
+still exits 0; only a genuine `ERROR` (a check that could not complete) exits
+non-zero, so cron/CI flags broken checks rather than drifting data. `--help`
 lists every flag.
 
 ### Result table — `etl_dq_results`

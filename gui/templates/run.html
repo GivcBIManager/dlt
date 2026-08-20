@@ -29,6 +29,12 @@
     </div>
 
     <div data-grp="dq_check" hidden>
+      <label>Table types <small>(none = all)</small></label>
+      <div class="row-flex" id="dq-categories">
+        <div class="checkbox"><input type="checkbox" class="dq-cat" id="dq_cat_masters" value="masters" checked><label for="dq_cat_masters">masters</label></div>
+        <div class="checkbox"><input type="checkbox" class="dq-cat" id="dq_cat_transactions" value="transactions" checked><label for="dq_cat_transactions">transactions</label></div>
+        <div class="checkbox"><input type="checkbox" class="dq-cat" id="dq_cat_snapshots" value="snapshots" checked><label for="dq_cat_snapshots">snapshots</label></div>
+      </div>
       <div class="form-row">
         <div><label>Since (YYYY-MM-DD)</label><input id="since" placeholder="default: Jan 1"></div>
         <div><label>Until (YYYY-MM-DD)</label><input id="until" placeholder="default: watermark"></div>
@@ -195,6 +201,7 @@ function buildSpec() {
     spec.self_test = el("self_test_o").checked;
     spec.no_progress = el("no_progress").checked;
   } else if (script === "dq_check") {
+    spec.categories = dqCategories();
     spec.since = el("since").value;
     spec.until = el("until").value;
     spec.csv = el("csv").value;
@@ -241,24 +248,41 @@ async function refreshPreview() {
 
 // matchFilter is provided globally by app.js.
 
-// Category only applies to Ingest; data_validation has no category -> all.
-function currentCategory() {
-  return el("script").value === "oracle_to_iceberg" ? el("category").value : "both";
+const ALL_CATEGORIES = ["masters", "transactions", "snapshots"];
+
+// data_validation picks any combination of table types (none ticked = all).
+function dqCategories() {
+  return $$(".dq-cat").filter(c => c.checked).map(c => c.value);
+}
+
+// Normalize a stored value (list, "a,b", or the Ingest-style 'all'/'both' alias)
+// into concrete table types; unknown entries are dropped.
+function toCategories(v) {
+  const raw = Array.isArray(v) ? v : String(v || "").split(",");
+  return raw.map(s => s.trim().toLowerCase()).filter(Boolean)
+    .flatMap(c => c === "all" ? ALL_CATEGORIES
+                : c === "both" ? ["masters", "transactions"] : [c])
+    .filter(c => ALL_CATEGORIES.includes(c));
+}
+
+// Which table types the form currently targets — drives the table picker.
+// Ingest is a single select where 'both' means masters + transactions.
+function currentCategories() {
+  if (el("script").value === "dq_check")
+    return dqCategories().length ? dqCategories() : ALL_CATEGORIES;
+  const cat = el("category").value;
+  return cat === "both" ? ["masters", "transactions"] : [cat];
 }
 
 function tablePool() {
-  const cat = currentCategory();
-  const pool = cat === "masters" ? TABLES_BY_CAT.masters
-             : cat === "transactions" ? TABLES_BY_CAT.transactions
-             : cat === "snapshots" ? TABLES_BY_CAT.snapshots
-             : [...TABLES_BY_CAT.masters, ...TABLES_BY_CAT.transactions];
+  const pool = currentCategories().flatMap(c => TABLES_BY_CAT[c] || []);
   return [...new Set(pool)].filter(Boolean).sort();
 }
 
 function updateTableHint() {
-  const cat = currentCategory();
+  const cats = currentCategories();
   el("table-hint").textContent =
-    `${tablePool().length} ${cat === "both" ? "" : cat + " "}table(s) available` +
+    `${tablePool().length} ${cats.length === 1 ? cats[0] + " " : ""}table(s) available` +
     (selTables.size ? ` · ${selTables.size} selected` : "");
 }
 
@@ -413,6 +437,7 @@ function resetBuilder() {
   el("category").value = "both";
   ["self_test_o", "no_progress", "no_hash", "no_write", "no_progress_d", "self_test_d"]
     .forEach(id => el(id).checked = false);
+  $$(".dq-cat").forEach(c => c.checked = true);   // default: every table type
   ["since", "until", "csv", "custom", "branch-search", "table-search"]
     .forEach(id => el(id).value = "");
   el("log_level").value = "INFO";
@@ -582,6 +607,9 @@ function loadSpec(spec) {
     el("self_test_o").checked = !!spec.self_test;
     el("no_progress").checked = !!spec.no_progress;
   } else if (script === "dq_check") {
+    // A spec saved before table types existed has no `categories` -> all ticked.
+    const cats = toCategories(spec.categories ?? spec.category);
+    $$(".dq-cat").forEach(c => c.checked = !cats.length || cats.includes(c.value));
     el("since").value = spec.since || "";
     el("until").value = spec.until || "";
     el("csv").value = spec.csv || "";
@@ -628,8 +656,9 @@ $$("input, select, textarea").forEach(node => {
   node.addEventListener("input", refreshPreview);
   node.addEventListener("change", refreshPreview);
 });
-// Category drives which tables are suggested; the search box filters them live.
+// Table types drive which tables are suggested; the search box filters them live.
 el("category").addEventListener("change", () => tablePicker.sync());
+$$(".dq-cat").forEach(c => c.addEventListener("change", () => tablePicker.sync()));
 el("extra-arg-add").addEventListener("change", () => {
   addExtraArg(el("extra-arg-add").value);
   el("extra-arg-add").value = "";

@@ -347,9 +347,10 @@ class Settings:
     # 1 = the pre-parallel strictly-serial behavior.
     load_workers: int = 2
 
-    # DQ: tolerate row-hash drift up to this percent of a (table, branch)'s
-    # Oracle hashed rows before flagging MISMATCH; at or below it the status is
-    # WITHIN_TOLERANCE. Row-count drift is always a hard MISMATCH.
+    # DQ: tolerate drift up to this percent of a (table, branch)'s Oracle rows
+    # before flagging MISMATCH; at or below it the status is WITHIN_TOLERANCE.
+    # Applies to both measured deltas -- row-count and row-hash -- and the larger
+    # of the two decides. (0 = strict / no tolerance.)
     dq_hash_delta_tolerance_pct: float = 10.0
 
     # local working state

@@ -7,12 +7,12 @@ from etl.dq_check import DqResult, HashDelta, _DqProgress, _fmt_elapsed
 
 
 def _unit(status, table="appointments", branch="jazan", ora=2000, ice=2000,
-          matched=1992, oo=8, pct=0.40):
+          matched=1992, oo=8, pct=0.40, cnt_pct=0.0):
     return DqResult(
         table=table, source_table="OASIS.APPT", branch=branch,
         oracle_row_count=ora, iceberg_row_count=ice,
         hash=HashDelta(matched=matched, only_in_oracle=oo, oracle_rows=ora, iceberg_rows=ice),
-        hash_delta_pct=pct, status=status)
+        hash_delta_pct=pct, row_count_delta_pct=cnt_pct, status=status)
 
 
 def test_fmt_elapsed():
@@ -23,8 +23,8 @@ def test_fmt_elapsed():
 def test_unit_line_format():
     p = _DqProgress(total=3, enabled=False)
     line = p._unit_line(_unit("WITHIN_TOLERANCE"))
-    assert line == ("DQ-UNIT appointments/jazan | ora=2000 ice=2000 cnt=0 | "
-                    "match=1992 delta=8 pct=0.40 | WITHIN_TOLERANCE")
+    assert line == ("DQ-UNIT appointments/jazan | ora=2000 ice=2000 cnt=0 "
+                    "cntpct=0.00 | match=1992 delta=8 pct=0.40 | WITHIN_TOLERANCE")
 
 
 def test_unit_line_handles_missing_hash():
@@ -32,7 +32,8 @@ def test_unit_line_handles_missing_hash():
     res = DqResult(table="m", source_table="OASIS.M", branch="b",
                    oracle_row_count=10, iceberg_row_count=10, hash=None,
                    hash_delta_pct=None, status="OK")
-    assert p._unit_line(res) == "DQ-UNIT m/b | ora=10 ice=10 cnt=0 | match=- delta=- pct=- | OK"
+    assert p._unit_line(res) == ("DQ-UNIT m/b | ora=10 ice=10 cnt=0 cntpct=- | "
+                                 "match=- delta=- pct=- | OK")
 
 
 def test_record_counts_and_heartbeat(caplog):

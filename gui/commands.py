@@ -14,6 +14,8 @@ from config import REPO_ROOT, SCRIPTS, python_executable
 
 SCRIPT_CHOICES = ["oracle_to_iceberg", "dq_check", "snapshot_diff", "fresh_run", "dbt", "custom"]
 DBT_COMMANDS = {"run", "test", "build", "compile", "debug"}
+# tables.json table types, as dq_check --category names them.
+DQ_CATEGORIES = ("masters", "transactions", "snapshots")
 
 
 def _split(value: str | None) -> list[str]:
@@ -101,6 +103,14 @@ def build_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
             argv.append("--no-progress")
 
     elif script == "dq_check":
+        # Table types: a list (Run page) or a comma string. Checking every type
+        # is the default, so a full selection stays off the command line.
+        cats = [c.strip().lower()
+                for c in _csv(spec.get("categories") or spec.get("category")).split(",")
+                if c.strip()]
+        if cats and "all" not in cats and set(cats) != set(DQ_CATEGORIES):
+            argv += ["--category", ",".join(cats)]
+            label_bits.append(",".join(cats))
         if spec.get("since"):
             argv += ["--since", str(spec["since"]).strip()]
         if spec.get("until"):
