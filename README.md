@@ -91,6 +91,25 @@ passes this dict straight through to pyiceberg's `load_catalog(**dict)`, which
 raises a validation error without it (the outer `iceberg_catalog_type` in
 `config.toml` is not sufficient by itself).
 
+**Provisioning the two databases.** Once those blocks exist, the setup scripts
+create everything *inside* the server for you — `setup.sh` / `setup.ps1` run a
+Postgres step that creates `oasis_catalog` and `oasis_meta` if missing and
+applies the `etl_meta` schema DDL. It is idempotent, so re-running it on a
+provisioned host changes nothing, and it can be run on its own:
+
+```bash
+python setup_postgres.py            # create what's missing, then verify
+python setup_postgres.py --check    # verify only; never creates a database
+```
+
+The step needs an account that can `CREATE DATABASE`; the catalog's own
+`iceberg_tables` / `iceberg_namespace_properties` are left to pyiceberg, which
+creates them on first use. A host that isn't configured yet (no
+`.dlt/secrets.toml`, or neither block present) is reported and skipped, not
+failed — as is an unreachable server, so the GUI still installs. Skip the step
+entirely with `./setup.sh --no-postgres` (`.\setup.ps1 -NoPostgres`, or
+`$OASIS_SKIP_POSTGRES=1`).
+
 **Cutover note:** the first run against a fresh `oasis_catalog` / `oasis_meta`
 pair must be a full `python oracle_to_iceberg.py --mode INITIAL` — there is no
 prior watermark state yet for an `INCREMENTAL` load to run against.
