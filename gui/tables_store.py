@@ -101,6 +101,7 @@ KNOWN_KEYS = {
     "where_value_of_initial_run",
     "where_value_max",
     "where_operator_max",
+    "incremental_cdc_only",
     "helper",
 }
 KNOWN_HELPER_KEYS = {"table", "join", "join_keys", "cdc_column", "where_date_column"}
@@ -181,6 +182,27 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
         val = entry.get(val_field)
         if val not in (None, "") and not _value_expr_is_safe(val):
             errs.append(f"{name}: '{val_field}' contains a disallowed SQL token (; -- /* */)")
+
+    # cdc-only reduces the incremental refresh to "WHERE <cdc> >= watermark",
+    # which needs a CDC source to compare against -- mirrors the same check in
+    # etl/config.load_table_defs.
+    cdc_only = entry.get("incremental_cdc_only")
+    if cdc_only not in (None, "", False):
+        if cdc_only is not True:
+            errs.append(f"{name}: 'incremental_cdc_only' must be true or false")
+        helper = entry.get("helper")
+        helper_cdc = (str(helper.get("cdc_column") or "").strip()
+                      if isinstance(helper, dict) else "")
+        if not str(entry.get("cdc_column") or "").strip() and not helper_cdc:
+            errs.append(
+                f"{name}: 'incremental_cdc_only' requires a 'cdc_column' "
+                f"(or a helper supplying one)"
+            )
+        if category == "snapshots":
+            errs.append(
+                f"{name}: 'incremental_cdc_only' does not apply to snapshots "
+                f"(they are copied in full every run)"
+            )
 
     for k in entry:
         if k not in KNOWN_KEYS:

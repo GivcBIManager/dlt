@@ -240,6 +240,8 @@ def build_query(
         and shape.cdc_ref is not None
     )
     if incremental_ready:
+        if tdef.incremental_cdc_only:
+            return _build_cdc_only_query(shape, base, cdc_wm)
         return _build_incremental_query(shape, base, cdc_wm, date_wm, ceiling_pred)
 
     # INITIAL (or INCREMENTAL with no prior watermark -> behave as initial).
@@ -261,6 +263,32 @@ def build_query(
     if where:
         base += " WHERE " + " AND ".join(where)
     return base
+
+
+def _build_cdc_only_query(
+    shape: _QueryShape,
+    base: str,
+    cdc_wm: Watermark,
+) -> str:
+    """Build the INCREMENTAL SELECT as a single CDC predicate.
+
+    Opt-in per table via ``incremental_cdc_only``::
+
+        SELECT t.* FROM <table> t
+         WHERE t.<cdc_column> >= TO_DATE('<wm>', 'YYYY-MM-DD HH24:MI:SS')
+
+    The default incremental form splits into a UNION ALL of a date branch and a
+    CDC branch (see ``_build_incremental_query``) because the CDC column is
+    unindexed on most source tables. Where the CDC column *is* indexed and is
+    stamped on every insert as well as every update, that split is pure
+    overhead: the CDC predicate alone already covers new and updated rows, so
+    the date branch, the ceiling and the UNION drop out.
+
+    The comparison is ``>=`` rather than ``>``: combined with the second-
+    precision TO_DATE literal it re-reads the boundary second rather than
+    risking a row stamped inside it, which the merge upsert absorbs.
+    """
+    return f"{base} WHERE {shape.cdc_ref} >= {format_watermark(cdc_wm)}"
 
 
 def _build_incremental_query(
@@ -852,7 +880,10 @@ def _watermarks_from_parquet(path: Path, tdef: TableDef) -> tuple[Watermark, Wat
     """
     cdc, date = Watermark(value=None), Watermark(value=None)
     cdc_col = tdef.cdc_capture_column
-    date_col = tdef.date_capture_column
+    # cdc-only runs filter by CDC alone, so their rows are a biased sample of
+    # the date column -- leave ``last_date`` where it is (see
+    # ``TableDef.tracks_date_watermark``).
+    date_col = tdef.date_capture_column if tdef.tracks_date_watermark else None
     # Dedupe: a table may use the same column for both CDC and date (e.g.
     # DELIVERY_LINES, where cdc_column == where_date_column == AMEND_LAST_DATE).
     # Passing the name twice to read_table yields a table with two identically
@@ -1145,7 +1176,7 @@ def _self_test_extraction(
             table = _synthetic_table(tdef, branch, settings)
             if tdef.cdc_capture_column:
                 r.new_cdc = _column_max_watermark(table, tdef.cdc_capture_column)
-            if tdef.date_capture_column:
+            if tdef.date_capture_column and tdef.tracks_date_watermark:
                 r.new_date = _column_max_watermark(table, tdef.date_capture_column)
             table = inject_columns(table, branch.id, settings, tdef)
             r.row_count = table.num_rows

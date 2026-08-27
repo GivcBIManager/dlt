@@ -128,6 +128,13 @@ class TableDef:
     # is an inline-view subquery source -- plain tables keep deriving their name
     # from the OWNER.TABLE identifier.
     name: Optional[str] = None
+    # Reduce the INCREMENTAL refresh to a single CDC predicate:
+    # ``WHERE <cdc> >= <watermark>`` -- no date branch, no UNION ALL, no
+    # ceiling. Use it for tables whose ``cdc_column`` is indexed and reliably
+    # stamped on every write, where the date-based "new rows" branch is pure
+    # overhead. Requires a CDC source (own ``cdc_column`` or a helper); the
+    # INITIAL load is unaffected.
+    incremental_cdc_only: bool = False
 
     # ----- derived identifiers ------------------------------------------------
     @property
@@ -184,6 +191,18 @@ class TableDef:
         if self.helper is not None:
             return HELPER_DATE_ALIAS if self.helper.where_date_column else None
         return self.where_date_column
+
+    @property
+    def tracks_date_watermark(self) -> bool:
+        """Whether ``last_date`` should advance from this run's rows.
+
+        In cdc-only mode the extract is filtered by CDC alone, so the rows it
+        returns are a biased sample of the date column: advancing ``last_date``
+        from them could push it past dates the run never covered, and turning
+        the flag back off would then skip those rows. Freezing the stored value
+        keeps the date watermark a safe (never-too-far) resume point.
+        """
+        return not self.incremental_cdc_only
 
     # ----- key handling -------------------------------------------------------
     @property
@@ -447,11 +466,20 @@ def load_table_defs(path: Path) -> list[TableDef]:
                 where_value_max=entry.get("where_value_max"),
                 where_operator_max=entry.get("where_operator_max"),
                 name=entry.get("name"),
+                incremental_cdc_only=bool(entry.get("incremental_cdc_only", False)),
             )
             if tdef.is_query and not (tdef.name or "").strip():
                 raise ValueError(
                     f"{category} entry uses a subquery source and requires a "
                     f"'name' (the Iceberg table name): {entry['table'][:80]}"
+                )
+            # cdc-only needs something to compare against; without a CDC source
+            # the incremental path never engages and the table would silently
+            # full-load every run instead of honouring the setting.
+            if tdef.incremental_cdc_only and not tdef.cdc_capture_column:
+                raise ValueError(
+                    f"{tdef.table}: 'incremental_cdc_only' requires a "
+                    f"'cdc_column' (or a helper supplying one)"
                 )
             defs.append(tdef)
     if not defs:
