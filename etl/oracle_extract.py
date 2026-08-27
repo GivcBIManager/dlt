@@ -136,13 +136,21 @@ def format_initial_value(raw: str) -> str:
 
 
 def format_watermark(wm: Watermark) -> str:
-    """Render a captured watermark back into a SQL literal."""
+    """Render a captured watermark back into a SQL literal.
+
+    Datetime watermarks are emitted as TO_DATE at second precision: any
+    fractional seconds are dropped, which only ever widens the incremental
+    window (``>=``/``>`` against a truncated bound can re-read the boundary
+    second, never skip it), and keeps the literal's type aligned with Oracle
+    DATE columns so the index on them stays usable.
+    """
     if wm.kind == "number":
         return wm.value
     if wm.kind == "string":
         return _sql_quote(wm.value)
     # datetime
-    return f"TO_TIMESTAMP('{wm.value}', 'YYYY-MM-DD HH24:MI:SS.FF6')"
+    value = str(wm.value).split(".", 1)[0]
+    return f"TO_DATE('{value}', 'YYYY-MM-DD HH24:MI:SS')"
 
 
 @dataclass
