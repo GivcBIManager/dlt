@@ -94,6 +94,12 @@
       </div>
     </div>
 
+    <div class="checkbox" style="margin-top:8px">
+      <input type="checkbox" id="f-cdconly">
+      <label for="f-cdconly">CDC-only incremental — <span class="mono">WHERE cdc &gt;= watermark</span> and nothing else</label>
+    </div>
+    <div class="hint" id="f-cdconly-hint"></div>
+
     <fieldset>
       <legend>Helper (borrowed CDC — optional)</legend>
       <div class="form-row">
@@ -140,6 +146,7 @@ function summarize(e) {
   if (e.where_date_column) bits.push(`date=${e.where_date_column}`);
   if (e.where_value_of_initial_run) bits.push(`from ${e.where_operator||""} ${e.where_value_of_initial_run}`);
   if (e.where_value_max) bits.push(`max ${e.where_operator_max||"<="} ${e.where_value_max}`);
+  if (e.incremental_cdc_only) bits.push("cdc-only");
   if (e.helper) bits.push(`helper=${e.helper.table}`);
   return bits.join(" · ");
 }
@@ -175,6 +182,15 @@ function renderAll() { renderList("masters"); renderList("transactions"); render
 // preserved and still editable. `id` is the input id; its toggle link is
 // `<id>-toggle`.
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Hint under the CDC-only toggle; the modal is only ever shown via openEdit,
+// which picks one of these, so the placeholder div starts empty.
+const CDCONLY_HINT =
+  "Skips the date branch, the window ceiling and the UNION ALL on incremental " +
+  "runs. Use only when the CDC column is indexed and stamped on inserts as well " +
+  "as updates. Needs a CDC column (own or helper); the initial load is unaffected.";
+const CDCONLY_HINT_NA =
+  "Not applicable to snapshots \u2014 they are copied in full every run.";
 
 function dateFieldSetMode(id, mode) {
   const input = el(id), toggle = el(id + "-toggle");
@@ -218,6 +234,11 @@ function openEdit(category, index) {
   dateFieldLoad("f-wval", e.where_value_of_initial_run);
   el("f-wopmax").value = e.where_operator_max || "";
   dateFieldLoad("f-wvalmax", e.where_value_max);
+  // Snapshots are copied in full every run, so there is no incremental to trim.
+  const cdcOnlyNA = category === "snapshots";
+  el("f-cdconly").checked = !cdcOnlyNA && !!e.incremental_cdc_only;
+  el("f-cdconly").disabled = cdcOnlyNA;
+  el("f-cdconly-hint").textContent = cdcOnlyNA ? CDCONLY_HINT_NA : CDCONLY_HINT;
   const hp = e.helper || {};
   el("f-h-table").value = hp.table || "";
   el("f-h-cdc").value = hp.cdc_column || "";
@@ -251,6 +272,8 @@ function applyEdit() {
   if (wval) e.where_value_of_initial_run = wval;
   if (wopmax) e.where_operator_max = wopmax;
   if (wvalmax) e.where_value_max = wvalmax;
+  // Written only when on, so untouched entries keep the key out of tables.json.
+  if (el("f-cdconly").checked) e.incremental_cdc_only = true;
 
   const hTable = el("f-h-table").value.trim();
   if (hTable) {
@@ -259,6 +282,10 @@ function applyEdit() {
     e.helper = { table: hTable, cdc_column: el("f-h-cdc").value.trim(), join };
     const hwd = el("f-h-wdate").value.trim();
     if (hwd) e.helper.where_date_column = hwd;
+  }
+
+  if (e.incremental_cdc_only && !cdc && !(e.helper || {}).cdc_column) {
+    return err("CDC-only incremental needs a CDC column (own or helper)");
   }
 
   const newCat = editing.category;
