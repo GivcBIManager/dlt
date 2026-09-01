@@ -332,6 +332,59 @@ class Settings:
     snapshot_expire_days: int = 7
     snapshot_min_to_keep: int = 1
 
+    # Orphan-file cleanup. pyiceberg's expire_snapshots drops snapshot metadata
+    # but NEVER the data files it strands, so every expiry leaks parquet that no
+    # snapshot references. Runs straight after expiry, inside the same
+    # maintenance pass. ``orphan_min_age_hours`` is the safety margin: a file
+    # younger than this is never deleted, so a commit in flight (written but not
+    # yet referenced) cannot be swept.
+    orphan_cleanup: bool = True
+    orphan_min_age_hours: float = 24.0
+
+    # Post-load compaction. Each load commits its rows as many sub-target files
+    # (a 32 MB commit can land as 46 files), and the per-partition count grows
+    # by roughly one file per run -- pyiceberg's 512 MB
+    # ``write.target-file-size-bytes`` never binds on a small delta, so no writer
+    # setting prevents this. Rewriting a partition once it exceeds
+    # ``compact_min_files`` small files is the only fix.
+    compaction: bool = False          # opt-in: rewrites data, so off by default
+    compact_min_files: int = 20       # small files in a partition before rewrite
+    compact_small_file_bytes: int = 32 * 1024 * 1024
+    # Guard against materialising a partition that will not fit in RAM. Two
+    # separate multipliers make the compressed on-disk size useless as a proxy:
+    #   1. ZSTD parquet on these wide tables decodes 16-24x (measured: a 1.3 GB
+    #      docl partition -> 26.6 GB of Arrow).
+    #   2. Peak RSS is ~3x the decoded size, because sort_by allocates a second
+    #      full copy and the parquet writer buffers on top of that (measured:
+    #      26.6 GB decoded -> 86 GB RSS).
+    # So the compactor samples rows to measure bytes-per-row, projects the
+    # decoded size, multiplies by COMPACT_PEAK_MULTIPLIER, and skips the
+    # partition if that exceeds ``compact_max_memory_bytes``. Set this from the
+    # RAM you are willing to give the run, not from the table's size on disk.
+    compact_max_memory_bytes: int = 48 * 1024 * 1024 * 1024     # PEAK RSS budget, the real limit
+    compact_sample_rows: int = 20_000                            # rows sampled to size a partition
+
+    # Target size of a written data file. pyiceberg bin-packs by DECODED Arrow
+    # bytes, not compressed bytes, so its 512 MB default yields only ~25 MB
+    # parquet on these ~20x-compressing wide tables -- which is why compaction
+    # plateaued there and started rewriting 34 files into 32 for no gain. 2 GiB
+    # decoded lands around 100 MB compressed. This is the ONE place the setting
+    # matters: it cannot stop a small delta from committing small files, but it
+    # does set the size compaction can consolidate up to.
+    write_target_file_size_bytes: int = 2 * 1024 * 1024 * 1024
+
+    # Skip a compaction batch that would not meaningfully reduce the file count:
+    # rewriting 34 files into 32 costs a full read+write of the data and buys
+    # nothing. A batch must cut the file count to at most this fraction.
+    compact_min_gain_ratio: float = 0.75
+
+    # Declared Iceberg sort order, applied to every managed table. NOTE: this is
+    # metadata only -- pyiceberg 0.11 hardcodes ``sort_order_id=None`` on write
+    # and never reorders rows, so the order is honoured by the COMPACTOR (which
+    # sorts explicitly) and advertised to other engines. Tightening min/max per
+    # file is what makes ClickHouse prune on the CDC column.
+    sort_order_columns: tuple = ("branch_id", "recorded_updated_at")
+
     # live progress heartbeat + peak-memory probe (background daemon thread)
     progress_enabled: bool = True
     progress_interval_s: float = 5.0
@@ -603,6 +656,18 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         snapshot_maintenance=bool(_cfg("etl.snapshot_maintenance", True)),
         snapshot_expire_days=int(_cfg("etl.snapshot_expire_days", 7)),
         snapshot_min_to_keep=int(_cfg("etl.snapshot_min_to_keep", 1)),
+        orphan_cleanup=bool(_cfg("etl.orphan_cleanup", True)),
+        orphan_min_age_hours=float(_cfg("etl.orphan_min_age_hours", 24.0)),
+        compaction=bool(_cfg("etl.compaction", False)),
+        compact_min_files=int(_cfg("etl.compact_min_files", 20)),
+        compact_small_file_bytes=int(
+            _cfg("etl.compact_small_file_bytes", 32 * 1024 * 1024)),
+        compact_max_memory_bytes=int(
+            _cfg("etl.compact_max_memory_bytes", 48 * 1024 * 1024 * 1024)),
+        compact_sample_rows=int(_cfg("etl.compact_sample_rows", 20_000)),
+        write_target_file_size_bytes=int(
+            _cfg("etl.write_target_file_size_bytes", 2 * 1024 * 1024 * 1024)),
+        compact_min_gain_ratio=float(_cfg("etl.compact_min_gain_ratio", 0.75)),
         progress_enabled=bool(_cfg("etl.progress_enabled", True)),
         progress_interval_s=float(_cfg("etl.progress_interval_s", 5.0)),
         load_batch_rows=int(_cfg("etl.load_batch_rows", 50_000)),

@@ -32,9 +32,11 @@ mirror of it for observability.
 from __future__ import annotations
 
 import datetime as dt
+import glob
 import hashlib
 import json
 import logging
+import os
 import struct
 import sys
 import threading
@@ -42,7 +44,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 import dlt
 import pyarrow as pa
@@ -1039,6 +1041,341 @@ def _squash_table_run_snapshots(settings: Settings, table_name: str, before_ids:
         log.warning("[%s] snapshot squash failed: %s", table_name, exc)
 
 
+def _local_dir(location: str) -> Optional[str]:
+    """Local filesystem directory for a table location, or None if not local.
+
+    Orphan cleanup enumerates files by walking the table's data directory, which
+    only works on a local mount. A remote warehouse (s3://, gs://) returns None
+    and the caller skips cleanup rather than guessing at a listing API.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(location)
+    if parsed.scheme in ("", "file"):
+        return os.path.realpath(parsed.path if parsed.scheme == "file" else location)
+    return None
+
+
+def _referenced_data_files(tbl) -> set[str]:
+    """Every data file reachable from ANY retained snapshot of ``tbl``.
+
+    Deliberately NOT just the current snapshot: snapshots inside the retention
+    window are still valid time-travel targets, and deleting their files would
+    turn a readable historical snapshot into a dangling reference. Manifest
+    entries are read with ``discard_deleted=False`` so a file that is logically
+    deleted in a later snapshot but still live in an earlier one is protected.
+    """
+    live: set[str] = set()
+    for snap in tbl.metadata.snapshots:
+        for manifest in snap.manifests(tbl.io):
+            for entry in manifest.fetch_manifest_entry(tbl.io, discard_deleted=False):
+                path = entry.data_file.file_path
+                if path.startswith("file://"):
+                    path = path[len("file://"):]
+                live.add(os.path.realpath(path))
+    return live
+
+
+def _delete_orphan_files(tbl, name: str, min_age_hours: float) -> tuple[int, int]:
+    """Delete data files under ``tbl``'s location that no snapshot references.
+
+    ``expire_snapshots`` unlinks snapshots but leaves their data files on disk
+    forever, so without this every retention pass leaks parquet -- measured at
+    27k files / 119 GB against a 61 GB live lake.
+
+    Only files older than ``min_age_hours`` are considered. A commit writes its
+    data files BEFORE it references them, so a young unreferenced file may
+    belong to a load in flight; the age floor is what makes this safe to run
+    concurrently with the pipeline.
+
+    Returns ``(files_deleted, bytes_deleted)``.
+    """
+    data_dir = _local_dir(tbl.location())
+    if data_dir is None:
+        log.debug("[%s] non-local warehouse; skipping orphan cleanup", name)
+        return (0, 0)
+    data_dir = os.path.join(data_dir, "data")
+    if not os.path.isdir(data_dir):
+        return (0, 0)
+
+    live = _referenced_data_files(tbl)
+    cutoff = time.time() - min_age_hours * 3600
+    n = nbytes = 0
+    for path in glob.glob(os.path.join(data_dir, "**", "*.parquet"), recursive=True):
+        if os.path.realpath(path) in live:
+            continue
+        try:
+            st = os.stat(path)
+            if st.st_mtime > cutoff:
+                continue  # may belong to a commit in flight
+            os.remove(path)
+        except FileNotFoundError:
+            continue  # raced with another sweep; nothing to do
+        except OSError as exc:
+            log.warning("[%s] could not delete orphan %s: %s", name, path, exc)
+            continue
+        n += 1
+        nbytes += st.st_size
+    return (n, nbytes)
+
+
+def _apply_sort_order(tbl, name: str, columns: Sequence[str]) -> bool:
+    """Declare ``columns`` as the table's sort order if it isn't already.
+
+    IMPORTANT: this is metadata only. pyiceberg 0.11 writes every data file with
+    ``sort_order_id=None`` and never reorders rows, so declaring an order does
+    NOT make the writer produce sorted files. It exists so the compactor (which
+    sorts explicitly) and other engines agree on the intended clustering.
+
+    Columns absent from the schema are skipped, so one shared setting works
+    across tables that don't all carry the CDC column.
+    """
+    from pyiceberg.transforms import IdentityTransform
+
+    present = [c for c in columns if c in tbl.schema().column_names]
+    if not present:
+        return False
+    current = [
+        tbl.schema().find_field(f.source_id).name for f in tbl.sort_order().fields
+    ]
+    if current == present:
+        return False
+    updater = tbl.update_sort_order()
+    for col in present:
+        updater = updater.asc(col, IdentityTransform())
+    updater.commit()
+    log.info("[%s] sort order set to (%s)", name, ", ".join(present))
+    return True
+
+
+# Peak RSS while rewriting a partition, as a multiple of its decoded Arrow size:
+# sort_by allocates a second full copy of the table and the parquet writer
+# buffers on top of that. Measured at ~3.2x (26.6 GB decoded -> 86 GB RSS) on
+# the widest table in this lake; 3 is the planning figure the size guard uses.
+COMPACT_PEAK_MULTIPLIER = 3
+
+
+def _sort_for_write(data, columns: Sequence[str]):
+    """Physically order ``data`` by ``columns`` before it is written.
+
+    pyiceberg 0.11 hardcodes ``sort_order_id=None`` in its writer and never
+    reorders rows, so a declared sort order alone changes nothing on disk. The
+    clustering that actually lets ClickHouse skip files -- tight per-file
+    min/max on the CDC column -- only happens if the rows are sorted HERE.
+    """
+    present = [c for c in columns if c in data.column_names]
+    if not present:
+        return data
+    return data.sort_by([(c, "ascending") for c in present])
+
+
+def _compact_table(settings: Settings, catalog, ident, name: str) -> tuple:
+    """Rewrite a table's small data files into fewer, larger, sorted ones.
+
+    Each load commits its rows as many sub-target files (a 32 MB commit has been
+    measured landing as 46 files), and the count per partition grows by roughly
+    one file per run. pyiceberg's 512 MB ``write.target-file-size-bytes`` never
+    binds on a small delta, so no writer setting prevents this -- rewriting is
+    the only fix.
+
+    Works in BATCHES OF FILES, not whole partitions. Rewriting a partition in
+    one ``overwrite`` is what the obvious implementation does, but it decodes
+    the entire partition into Arrow: on the widest table here a 1.3 GB partition
+    decoded to 26.6 GB and peaked at 86 GB RSS, which is an OOM on most boxes.
+    Batching bounds peak memory to ``compact_max_memory_bytes`` regardless of how
+    big the partition is, so the largest tables -- the ones that matter -- can
+    actually be compacted.
+
+    Each batch is swapped with ``update_snapshot().overwrite()``, which replaces
+    exactly the named data files and carries the rest of the table forward by
+    reference. That is atomic per batch: an interrupted run leaves the table on
+    a valid snapshot with some batches merged and the rest untouched.
+
+    Row conservation is structural -- a batch writes back exactly the rows it
+    read, checked per batch -- and the whole-table count is re-verified at the
+    end. Returns ``(batches_committed, files_removed)``.
+    """
+    import itertools
+    import uuid as _uuid
+
+    from pyiceberg.expressions import AlwaysTrue
+    from pyiceberg.io.pyarrow import (
+        ArrowScan,
+        _dataframe_to_data_files,
+        schema_to_pyarrow,
+    )
+
+    tbl = catalog.load_table(ident)
+    if not tbl.spec().fields:
+        log.debug("[%s] unpartitioned; skipping compaction", name)
+        return (0, 0)
+
+    # _dataframe_to_data_files bin-packs against the table PROPERTY, not any
+    # argument, so the property has to be on the table before the first write or
+    # the writer silently falls back to pyiceberg's 512 MB default -- which
+    # produced 32 output files where the plan expected 8, and made the no-gain
+    # guard compare a 2 GiB estimate against a 512 MB reality.
+    want = str(settings.write_target_file_size_bytes)
+    if tbl.properties.get("write.target-file-size-bytes") != want:
+        with tbl.transaction() as txn:
+            txn.set_properties(**{"write.target-file-size-bytes": want})
+        tbl = catalog.load_table(ident)
+
+    tasks = list(tbl.scan().plan_files())
+    rows_before = sum(t.file.record_count for t in tasks)
+
+    by_part: dict = {}
+    for task in tasks:
+        by_part.setdefault(tuple(task.file.partition), []).append(task)
+
+    # bytes-per-row, decoded: measured once per table from a real slice of rows,
+    # because the compressed size understates it 16-24x on these wide tables.
+    sample = tbl.scan(limit=settings.compact_sample_rows).to_arrow()
+    if not sample.num_rows:
+        return (0, 0)
+    bytes_per_row = sample.nbytes / sample.num_rows
+    del sample
+    budget_rows = max(
+        1, int(settings.compact_max_memory_bytes
+               / COMPACT_PEAK_MULTIPLIER / max(bytes_per_row, 1)))
+
+    # ArrowScan reports each data file's OWN Arrow types, not the projected
+    # schema's, so files written by different dlt/pyarrow versions come back
+    # with incompatible widths and nullability (string vs large_string, a
+    # required column read as optional) and pa.concat_tables refuses them.
+    # Casting every part to the table's canonical schema, relaxed to nullable,
+    # unifies both -- the same alignment the merge path performs.
+    target_schema = pa.schema(
+        [f.with_nullable(True) for f in schema_to_pyarrow(tbl.schema())]
+    )
+
+    def _read(task):
+        part = ArrowScan(
+            table_metadata=tbl.metadata, io=tbl.io,
+            projected_schema=tbl.schema(), row_filter=AlwaysTrue(),
+        ).to_table(tasks=[task])
+        return part if part.schema.equals(target_schema) else part.cast(target_schema)
+
+    batches_done = removed = 0
+    for key, part_tasks in sorted(by_part.items(), key=lambda kv: -len(kv[1])):
+        small = [t for t in part_tasks
+                 if t.file.file_size_in_bytes < settings.compact_small_file_bytes]
+        if len(small) < settings.compact_min_files:
+            continue
+
+        # Group the small files into batches that fit the row budget. Only the
+        # small ones are touched: a file already at target size would be read
+        # and rewritten for nothing.
+        small.sort(key=lambda t: t.file.record_count)
+        groups: list[list] = []
+        cur: list = []
+        cur_rows = 0
+        for t in small:
+            if cur and cur_rows + t.file.record_count > budget_rows:
+                groups.append(cur)
+                cur, cur_rows = [], 0
+            cur.append(t)
+            cur_rows += t.file.record_count
+        if cur:
+            groups.append(cur)
+
+        target_bytes = int(tbl.properties.get(
+            "write.target-file-size-bytes", settings.write_target_file_size_bytes))
+        for group in groups:
+            if len(group) < 2:
+                continue  # nothing to merge
+            expected = sum(t.file.record_count for t in group)
+
+            # Rewriting is only worth its full read+write if the batch actually
+            # collapses. Files already at the writer's target cannot be made
+            # bigger, and without this the compactor rewrites 34 files into 32
+            # on every run, forever.
+            est_out = max(1, round(expected * bytes_per_row / target_bytes))
+            if est_out > len(group) * settings.compact_min_gain_ratio:
+                log.debug("[%s] partition %s: batch of %d would yield ~%d "
+                          "file(s); no gain, skipped", name, key, len(group), est_out)
+                continue
+            parts = [_read(t) for t in group]
+            data = pa.concat_tables(parts)
+            del parts
+            if data.num_rows != expected:
+                log.warning("[%s] partition %s: read %d rows, manifests claim %d "
+                            "-- batch skipped", name, key, data.num_rows, expected)
+                del data
+                continue
+
+            data = _sort_for_write(data, settings.sort_order_columns)
+            commit_uuid = _uuid.uuid4()
+            new_files = list(_dataframe_to_data_files(
+                table_metadata=tbl.metadata, df=data, io=tbl.io,
+                write_uuid=commit_uuid, counter=itertools.count(0)))
+            del data
+
+            with tbl.transaction() as tx:
+                with tx.update_snapshot().overwrite(
+                        commit_uuid=commit_uuid) as ow:
+                    for t in group:
+                        ow.delete_data_file(t.file)
+                    for f in new_files:
+                        ow.append_data_file(f)
+
+            removed += len(group) - len(new_files)
+            batches_done += 1
+            log.info("[%s] partition %s: %d -> %d file(s), %d rows",
+                     name, key, len(group), len(new_files), expected)
+            tbl = catalog.load_table(ident)
+
+    if batches_done:
+        rows_after = sum(t.file.record_count for t in tbl.scan().plan_files())
+        if rows_after != rows_before:
+            raise RuntimeError(
+                f"[{name}] compaction changed the row count: {rows_before} -> "
+                f"{rows_after}. The table is readable at its new snapshot, but "
+                f"investigate before compacting it again.")
+    return (batches_done, removed)
+
+
+def apply_compaction(settings: Settings, tables: Optional[Sequence[str]] = None) -> None:
+    """Compact fragmented partitions across the dataset. Opt-in.
+
+    Unlike retention this REWRITES data, so it is gated on ``etl.compaction``
+    and should run only when no load is committing to the same tables. An
+    explicit ``tables`` list (the CLI) bypasses the gate. Best-effort per table:
+    one failure never stops the rest.
+    """
+    if not settings.compaction and tables is None:
+        return
+    try:
+        from dlt.common.libs.pyiceberg import get_catalog
+    except ImportError:
+        log.warning("pyiceberg unavailable; skipping compaction")
+        return
+    try:
+        catalog = get_catalog()
+        idents = catalog.list_tables(settings.dataset_name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not list Iceberg tables for compaction: %s", exc)
+        return
+
+    wanted = set(tables) if tables else None
+    tot_parts = tot_files = 0
+    for ident in idents:
+        name = ident[-1] if isinstance(ident, tuple) else str(ident).rsplit(".", 1)[-1]
+        if name.startswith("_dlt"):
+            continue
+        if wanted is not None and name not in wanted:
+            continue
+        try:
+            parts, files = _compact_table(settings, catalog, ident, name)
+            tot_parts += parts
+            tot_files += files
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[%s] compaction failed: %s", name, exc)
+    if tot_files:
+        log.info("compaction: %d partition(s) rewritten, %d fewer data file(s)",
+                 tot_parts, tot_files)
+
+
 def apply_snapshot_retention(settings: Settings) -> None:
     """Configure + enforce per-table snapshot retention (keep last N days).
 
@@ -1070,6 +1407,11 @@ def apply_snapshot_retention(settings: Settings) -> None:
         # honored by pyiceberg (TableProperties, 0.11.1).
         "write.metadata.delete-after-commit.enabled": "true",
         "write.metadata.previous-versions-max": "25",
+        # Bin-packing target for written data files. pyiceberg measures this in
+        # DECODED Arrow bytes, so the 512 MB default produces only ~25 MB
+        # parquet on these ~20x-compressing tables; see Settings for why that
+        # capped compaction.
+        "write.target-file-size-bytes": str(settings.write_target_file_size_bytes),
     }
 
     try:
@@ -1078,6 +1420,9 @@ def apply_snapshot_retention(settings: Settings) -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not list Iceberg tables for retention: %s", exc)
         return
+
+    total_orphans = 0
+    total_orphan_bytes = 0
 
     for ident in idents:
         name = ident[-1] if isinstance(ident, tuple) else str(ident).rsplit(".", 1)[-1]
@@ -1104,8 +1449,32 @@ def apply_snapshot_retention(settings: Settings) -> None:
                 log.info("[%s] retention applied: keep %dd, %d snapshot(s) remain",
                          name, settings.snapshot_expire_days,
                          len(list(tbl.snapshots())))
+                tbl = catalog.load_table(ident)  # re-read: snapshot list changed
+
+            # Declaring the sort order is a metadata-only commit, so do it under
+            # the same guard as the properties above -- _apply_sort_order is a
+            # no-op (no commit) once the order matches.
+            _apply_sort_order(tbl, name, settings.sort_order_columns)
+
+            # Orphan cleanup ALWAYS runs, not only when something was expired:
+            # every prior expiry (and every squash in _squash_run_snapshots)
+            # stranded files that are still on disk, so a steady-state run has a
+            # backlog to clear even when it expires nothing itself.
+            if settings.orphan_cleanup:
+                n, nbytes = _delete_orphan_files(
+                    tbl, name, settings.orphan_min_age_hours)
+                if n:
+                    total_orphans += n
+                    total_orphan_bytes += nbytes
+                    log.info("[%s] removed %d orphan data file(s), %.2f GB",
+                             name, n, nbytes / 2**30)
         except Exception as exc:  # noqa: BLE001
             log.warning("[%s] snapshot retention failed: %s", name, exc)
+
+    if total_orphans:
+        log.info("orphan cleanup: removed %d file(s), %.1f GB reclaimed",
+                 total_orphans, total_orphan_bytes / 2**30)
+
 
 
 def _table_pipeline_name(settings: Settings, tdef: TableDef) -> str:
