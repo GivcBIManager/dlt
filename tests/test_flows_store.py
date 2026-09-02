@@ -63,11 +63,24 @@ def test_validate_accepts_dbt_node():
     fs.validate_flow([DBT_NODE], known_pipeline_ids=set())  # must not raise
 
 
-def test_validate_rejects_dbt_without_select():
+@pytest.mark.parametrize("cmd", ["run", "test", "build"])
+@pytest.mark.parametrize("select", ["", "   ", None])
+def test_validate_accepts_dbt_node_without_select(cmd, select):
+    """An empty select is dbt's whole-project selector, not a missing field.
+
+    Flows used to reject it, so a flow node could only ever target one model;
+    running the whole project on a schedule was impossible.
+    """
     import flows_store as fs
-    bad = {"node_id": "d1", "kind": "dbt", "dbt": {"dbt_command": "run", "select": ""}, "deps": []}
-    with pytest.raises(ValueError, match="select"):
-        fs.validate_flow([bad], known_pipeline_ids=set())
+    node = {"node_id": "d1", "kind": "dbt",
+            "dbt": {"dbt_command": cmd, "select": select}, "deps": []}
+    fs.validate_flow([node], known_pipeline_ids=set())  # must not raise
+
+
+def test_validate_accepts_dbt_node_with_no_select_key_at_all():
+    import flows_store as fs
+    node = {"node_id": "d1", "kind": "dbt", "dbt": {"dbt_command": "run"}, "deps": []}
+    fs.validate_flow([node], known_pipeline_ids=set())  # must not raise
 
 
 def test_validate_rejects_dbt_bad_command():

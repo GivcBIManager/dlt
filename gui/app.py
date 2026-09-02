@@ -480,7 +480,8 @@ def _node_label(node: dict, pipelines: dict) -> str:
     kind = node.get("kind", "pipeline")
     if kind == "dbt":
         dbt = node.get("dbt") or {}
-        return f"dbt {dbt.get('dbt_command', 'run')} {dbt.get('select', '')}".strip()
+        cmd = dbt.get("dbt_command", "run")
+        return f"dbt {cmd} {dbt.get('select') or 'all models'}".strip()
     if kind == "command":
         return f"custom: {(node.get('command') or '')[:40]}"
     pipeline = pipelines.get(node.get("pipeline_id")) or {}

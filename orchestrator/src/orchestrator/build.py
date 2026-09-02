@@ -32,7 +32,7 @@ def _build_flow(flow: dict, pipelines: dict[str, dict]):
             dbt = node.get("dbt") or {}
             spec = {"script": "dbt", "dbt_command": dbt.get("dbt_command", "run"),
                     "select": dbt.get("select", "")}
-            name = f"dbt {spec['dbt_command']} {spec['select']}".strip()
+            name = f"dbt {spec['dbt_command']} {spec['select'] or 'all models'}".strip()
         elif kind == "command":
             cmd = (node.get("command") or "").strip()
             if not cmd:

@@ -48,3 +48,46 @@ def test_api_flow_run_log_passes_cursor(monkeypatch):
     r = gui_app.app.test_client().get("/api/flow-runs/r9/log?cursor=c0").get_json()
     assert seen == {"run_id": "r9", "cursor": "c0"}
     assert r["chunk"] == "x\n"
+
+
+# --- whole-project dbt nodes ------------------------------------------------ #
+def _saved(monkeypatch):
+    """Capture what add_flow receives, stubbing persistence + dagster reload."""
+    import app as gui_app
+    seen = {}
+
+    def fake_add(name, nodes, cron, tz, email, enabled=True, graph=None):
+        seen.update(name=name, nodes=nodes)
+        return {"id": "f1", "name": name, "nodes": nodes}
+
+    monkeypatch.setattr(gui_app.flows_store, "add_flow", fake_add)
+    monkeypatch.setattr(gui_app.dagster_client, "reload_location", lambda: None)
+    return gui_app.app.test_client(), seen
+
+
+def test_saving_a_whole_project_dbt_flow_succeeds(monkeypatch):
+    """The 'all models' choice posts select="" and must save, not 400."""
+    client, seen = _saved(monkeypatch)
+    resp = client.post("/api/flows", json={
+        "name": "nightly models", "cron": "0 3 * * *", "timezone": "UTC",
+        "nodes": [{"node_id": "m1", "kind": "dbt", "deps": [],
+                   "dbt": {"dbt_command": "run", "select": ""}},
+                  {"node_id": "t1", "kind": "dbt", "deps": ["m1"],
+                   "dbt": {"dbt_command": "test", "select": ""}}],
+    })
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert [n["dbt"]["select"] for n in seen["nodes"]] == ["", ""]
+
+
+def test_whole_project_node_label_says_all_models():
+    import app as gui_app
+    label = gui_app._node_label(
+        {"kind": "dbt", "dbt": {"dbt_command": "run", "select": ""}}, {})
+    assert label == "dbt run all models"
+
+
+def test_selected_model_node_label_names_the_model():
+    import app as gui_app
+    label = gui_app._node_label(
+        {"kind": "dbt", "dbt": {"dbt_command": "test", "select": "stg_products"}}, {})
+    assert label == "dbt test stg_products"

@@ -55,8 +55,10 @@ def validate_flow(nodes: list[dict[str, Any]], *, known_pipeline_ids: set[str]) 
             if (dbt.get("dbt_command") or "").strip() not in _DBT_NODE_COMMANDS:
                 raise ValueError(
                     f"Node {n['node_id']}: dbt command must be one of {sorted(_DBT_NODE_COMMANDS)}")
-            if not str(dbt.get("select") or "").strip():
-                raise ValueError(f"Node {n['node_id']}: dbt node needs a non-empty 'select'")
+            # An empty 'select' is the "whole project" selector: dbt with no
+            # --select runs/tests every model, which is what the dbt page has
+            # always done when no file is open. Flows used to reject it, so a
+            # flow could only ever target one model at a time.
         elif kind == "command":
             if not str(n.get("command") or "").strip():
                 raise ValueError(f"Node {n['node_id']}: command node needs a non-empty 'command'")

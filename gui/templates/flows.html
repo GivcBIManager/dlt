@@ -196,7 +196,12 @@ function applyCron(cron) {
 /* ---------- drawflow node building ---------- */
 function pipeOptions(sel){ return PIPELINES.map(p=>`<option value="${p.id}" ${sel===p.id?"selected":""}>${esc(p.name)}</option>`).join(""); }
 function selOptions(sel){
-  return [...DBT_MODELS.map(m=>`<option value="${esc(m.name)}" ${sel===m.name?"selected":""}>model: ${esc(m.name)}</option>`),
+  // "" is dbt's whole-project selector: no --select, so every model runs (or
+  // every test, for `test`). It leads because it is the common case for a
+  // scheduled flow -- rebuild everything, in dependency order, as dbt sees fit.
+  const all = `<option value="" ${!sel?"selected":""}>all models</option>`;
+  return [all,
+          ...DBT_MODELS.map(m=>`<option value="${esc(m.name)}" ${sel===m.name?"selected":""}>model: ${esc(m.name)}</option>`),
           ...DBT_TESTS.map(t=>`<option value="${esc(t.name)}" ${sel===t.name?"selected":""}>test: ${esc(t.name)}</option>`)].join("");
 }
 function cmdOptions(sel){ return ["run","test","build"].map(c=>`<option ${sel===c?"selected":""}>${c}</option>`).join(""); }
@@ -263,7 +268,9 @@ function collectNodes() {
     for (const inName in (n.inputs||{})) (n.inputs[inName].connections||[]).forEach(c => deps.push(idToNode[c.node]));
     const base = { node_id: idToNode[id], kind, deps };
     if (kind === "pipeline") base.pipeline_id = data.pipeline_id || (PIPELINES[0]||{}).id;
-    else if (kind === "dbt") base.dbt = { dbt_command: data.dbt_command||"run", select: data.select || (DBT_MODELS[0]||DBT_TESTS[0]||{}).name || "" };
+    // Keep an empty select empty -- it means "all models". Defaulting it to the
+    // first model silently narrowed the node to one arbitrary model.
+    else if (kind === "dbt") base.dbt = { dbt_command: data.dbt_command||"run", select: data.select || "" };
     else if (kind === "command") base.command = data.command||"";
     out.push(base);
   }
@@ -276,14 +283,14 @@ async function save() {
   if (!nodes.length) { err("Add at least one node"); return; }
   // Reject nodes that would save "successfully" then fail (or do nothing) at
   // schedule time -- most importantly a custom-command node with no command.
+  // A dbt node with no select is NOT one of them: that is the "all models"
+  // choice, which runs the whole project.
   const problems = [];
   nodes.forEach((n, i) => {
     if (n.kind === "command" && !String(n.command || "").trim())
       problems.push(`Node ${i + 1} (custom command) has no command`);
     if (n.kind === "pipeline" && !n.pipeline_id)
       problems.push(`Node ${i + 1} (pipeline) has no pipeline selected`);
-    if (n.kind === "dbt" && !String((n.dbt || {}).select || "").trim())
-      problems.push(`Node ${i + 1} (dbt) has no model/test selected`);
   });
   if (problems.length) { err(problems.join("; ")); return; }
   const body = { name: el("f-name").value.trim(), nodes, cron: cronFromForm(),

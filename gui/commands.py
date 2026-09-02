@@ -50,7 +50,10 @@ def _dbt_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
     if spec.get("full_refresh") and cmd in ("run", "build"):
         argv.append("--full-refresh")
     argv += _split(spec.get("extra"))
-    label = " ".join(["dbt", cmd] + ([sel] if sel and cmd != "debug" else []))
+    # No --select is dbt's whole-project selector; spell that out rather than
+    # leaving a bare "dbt run" that reads like a selection went missing.
+    scope = sel if sel else ("" if cmd in ("debug", "compile") else "all models")
+    label = " ".join(["dbt", cmd] + ([scope] if scope and cmd != "debug" else []))
     return argv, label
 
 

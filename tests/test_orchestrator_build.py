@@ -107,3 +107,27 @@ def test_same_slug_flows_do_not_cross_select(state_dir, monkeypatch):
     assert dg.AssetKey(["my_flow__s2", "n1"]) not in job1.asset_layer.selected_asset_keys
     assert dg.AssetKey(["my_flow__s2", "n1"]) in job2.asset_layer.selected_asset_keys
     assert dg.AssetKey(["my_flow__s1", "n1"]) not in job2.asset_layer.selected_asset_keys
+
+
+
+def test_build_all_defs_handles_whole_project_dbt_node(state_dir, monkeypatch):
+    """A dbt node with no select is the whole project, not a broken node."""
+    from orchestrator import build
+    _wire(monkeypatch)
+    (state_dir / "pipelines.json").write_text("[]")
+    (state_dir / "flows.json").write_text(json.dumps([{
+        "id": "f8", "name": "nightly models",
+        "nodes": [{"node_id": "m1", "kind": "dbt",
+                   "dbt": {"dbt_command": "run", "select": ""}, "deps": []},
+                  {"node_id": "t1", "kind": "dbt",
+                   "dbt": {"dbt_command": "test", "select": ""}, "deps": ["m1"]}],
+        "cron": "0 3 * * *", "timezone": "UTC",
+        "email": {"on_success": [], "on_failure": []}, "enabled": True,
+    }]))
+    defs = build.build_all_defs()
+    specs = {a.key: a for a in defs.resolve_all_asset_specs()}
+    assert dg.AssetKey(["nightly_models__f8", "m1"]) in specs
+    # the test node runs after the models it validates
+    t1 = specs[dg.AssetKey(["nightly_models__f8", "t1"])]
+    assert dg.AssetKey(["nightly_models__f8", "m1"]) in {d.asset_key for d in t1.deps}
+    assert specs[dg.AssetKey(["nightly_models__f8", "m1"])].description == "dbt run all models"
