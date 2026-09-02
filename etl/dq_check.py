@@ -42,6 +42,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from functools import lru_cache
 from hashlib import blake2b
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -52,6 +53,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from dlt.common.normalizers.naming.snake_case import (
+    NamingConvention as SnakeCaseNamingConvention,
+)
+
 from .config import (
     HELPER_RESERVED_COLUMNS,
     BranchConfig,
@@ -61,6 +66,10 @@ from .config import (
 )
 
 log = logging.getLogger("etl.dq")
+
+# The lake's identifier normalizer. DQ must resolve a source column to the same
+# name dlt wrote, so it borrows dlt's convention rather than reimplementing it.
+_NAMING = SnakeCaseNamingConvention()
 
 # Oracle's TO_CHAR(date,'J') Julian day == proleptic-Gregorian ordinal + this
 # offset (verified: 2000-01-01 -> ordinal 730120 -> Oracle J 2451545).
@@ -84,9 +93,19 @@ STATUS_WITHIN_TOLERANCE = "WITHIN_TOLERANCE"
 STATUS_MISMATCH = "MISMATCH"
 
 
+@lru_cache(maxsize=8192)
 def _norm(name: str) -> str:
-    """Lower-snake a column name the same way dlt normalizes lake identifiers."""
-    return re.sub(r"[^0-9a-zA-Z]+", "_", name).strip("_").lower()
+    """Lower-snake a column name the same way dlt normalizes lake identifiers.
+
+    Delegates to dlt's own naming convention instead of approximating it. A
+    hand-rolled "non-alphanumeric -> _" pass gets digit/letter boundaries wrong:
+    dlt writes ``STAFF_NAME_1B`` as ``staff_name_1_b`` and ``COL2A`` as
+    ``col2_a``, so the approximation produced a name that exists on neither
+    side. Such a column silently dropped out of ``common`` and was never
+    compared -- and inside a ``unique_key`` it would have broken the join
+    outright, bucketing every row as only-in-oracle plus only-in-iceberg.
+    """
+    return _NAMING.normalize_identifier(name)
 
 
 def _injected_norms(settings: Settings) -> set[str]:
@@ -360,12 +379,14 @@ class _Window:
     def date_col_norm(self) -> Optional[str]:
         return _norm(self.date_col) if self.date_col else None
 
-    def oracle_where(self) -> str:
+    def oracle_where(self, qualifier: str = "") -> str:
+        """Window predicates on the date column, qualified for the FROM alias."""
         parts = []
+        col = f"{qualifier}{self.date_col}"
         if self.oracle_lower is not None:
-            parts.append(f"{self.date_col} >= {self.oracle_lower}")
+            parts.append(f"{col} >= {self.oracle_lower}")
         if self.oracle_upper is not None:
-            parts.append(f"{self.date_col} <= {self.oracle_upper}")
+            parts.append(f"{col} <= {self.oracle_upper}")
         return " AND ".join(parts)
 
     def label(self) -> tuple[str, str]:
@@ -451,10 +472,15 @@ def _make_window(
         return win
 
     if tdef.is_helper_driven:
+        # The watermark belongs to the helper's column, not this one, so it
+        # cannot bound *this* date column on either side. The source is bounded
+        # instead by the helper predicates (see ``_coverage_predicates``), which
+        # reproduce the join the pipeline loads through; the lake needs no upper
+        # bound because it only ever received that same subset.
         _apply_upper(win, None, None, ceil_ora, ceil_ice)
-        win.note = ("helper-driven: watermark is the helper's column; "
-                    + ("upper bound is the configured ceiling"
-                       if win.oracle_upper is not None else "upper bound skipped"))
+        win.note = ("helper-driven: source scoped by the helper join"
+                    + (" and the configured ceiling"
+                       if win.oracle_upper is not None else ""))
         return win
 
     wm = (control_entry or {}).get("last_date")
@@ -564,36 +590,240 @@ def open_lake_table(root: Path, table: str):
     return StaticTable.from_metadata(_iceberg_uri(meta))
 
 
-def _lake_scan_batches(static_table, branch: int, columns: list[str]) -> Iterator[pa.Table]:
+def _pad_bound(value, widen: int):
+    """Move a window bound outward by one day (or one unit, for a numeric date)."""
+    if isinstance(value, dt.datetime):
+        return value + dt.timedelta(days=widen)
+    if isinstance(value, dt.date):
+        return value + dt.timedelta(days=widen)
+    if isinstance(value, (int, float)):
+        return value + widen
+    return None
+
+
+def _window_row_filter(static_table, win: Optional["_Window"]):
+    """A deliberately loose Iceberg predicate for the window, or None.
+
+    Without this the scan's only predicate is the branch, so DQ decoded whole
+    branch partitions and then discarded most rows in Arrow -- ``appointments``
+    read 129.7M rows per branch to compare 21.1M, and ``docl``/``doc`` read ~6x
+    what they compared. Pushing the date bounds into the scan lets Iceberg skip
+    files on their column statistics before any of it is decoded.
+
+    The bounds are padded outward by a day so this can only ever be a *pruning
+    hint*: it must never drop a row that ``_apply_window_arrow`` would keep, and
+    that filter still decides the exact row set. The padding also absorbs the
+    timestamp/timezone edge cases the Arrow filter handles explicitly (a
+    tz-aware lake column vs the source's naive wall clock).
+    """
+    if win is None or win.date_col is None:
+        return None
+    if win.ice_lower is None and win.ice_upper is None:
+        return None
+    field = _resolve_actual(
+        (f.name for f in static_table.schema().fields), win.date_col_norm)
+    if field is None:
+        return None
+
+    from pyiceberg.expressions import And, GreaterThanOrEqual, LessThanOrEqual
+
+    preds = []
+    lo = _pad_bound(win.ice_lower, -1) if win.ice_lower is not None else None
+    hi = _pad_bound(win.ice_upper, +1) if win.ice_upper is not None else None
+    if lo is not None:
+        preds.append(GreaterThanOrEqual(field, lo))
+    if hi is not None:
+        preds.append(LessThanOrEqual(field, hi))
+    if not preds:
+        return None
+    out = preds[0]
+    for extra in preds[1:]:
+        out = And(out, extra)
+    return out
+
+
+def _lake_scan_batches(static_table, branch: int, columns: list[str],
+                       snapshot: Optional["_SnapshotScope"] = None,
+                       win: Optional["_Window"] = None) -> Iterator[pa.Table]:
     """Stream the branch partition's ``columns`` as Arrow tables (partition-pruned).
 
-    ``branch`` is the numeric BRANCH_ID value (see BranchConfig.id)."""
-    from pyiceberg.expressions import EqualTo
+    ``branch`` is the numeric BRANCH_ID value (see BranchConfig.id). ``snapshot``
+    pins an append-only snapshot table to one version stamp (see
+    ``_SnapshotScope``); ``win`` prunes files to the window (see
+    ``_window_row_filter``) -- both are narrowing hints, never the final say.
+    """
+    from pyiceberg.expressions import And, EqualTo
 
     branch_field = _resolve_actual(
         (f.name for f in static_table.schema().fields), _norm("BRANCH_ID")) or "branch_id"
-    scan = static_table.scan(
-        row_filter=EqualTo(branch_field, branch), selected_fields=tuple(columns))
+    row_filter = EqualTo(branch_field, branch)
+    if snapshot is not None:
+        # version_date is an identity partition field, so pinning it prunes whole
+        # files; the version equality then picks the exact run within that day
+        # (a table can be snapshotted more than once a day).
+        if snapshot.date_field is not None:
+            row_filter = And(row_filter, EqualTo(snapshot.date_field, snapshot.version.date()))
+        row_filter = And(row_filter, EqualTo(snapshot.field, snapshot.version))
+    try:
+        window_pred = _window_row_filter(static_table, win)
+    except Exception as exc:  # noqa: BLE001 - pruning is optional; never fail on it
+        log.debug("window pushdown unavailable (%s); scanning the branch partition", exc)
+        window_pred = None
+    if window_pred is not None:
+        row_filter = And(row_filter, window_pred)
+    scan = static_table.scan(row_filter=row_filter, selected_fields=tuple(columns))
     for rb in scan.to_arrow_batch_reader():
         yield pa.Table.from_batches([rb])
+
+
+@dataclass
+class _SnapshotScope:
+    """Which version of an append-only snapshot table the lake side compares.
+
+    Snapshot tables are appended, never merged: every run stamps a full copy of
+    the source with a run timestamp (``settings.snapshot_version_column``) and
+    adds it to the table, so the lake accumulates one generation per run. The
+    source only ever holds the *current* generation, so comparing it against the
+    whole lake table is meaningless -- ``product_base`` had grown to 14 daily
+    copies (35.2M rows for one branch against 2.5M in Oracle), reporting 100%
+    drift every night. Pinning the newest version restores an apples-to-apples
+    compare of the last snapshot against the source.
+    """
+
+    field: str                    # lake column holding the run stamp ("version")
+    version: dt.datetime          # the newest stamp in this branch partition
+    date_field: Optional[str]     # partition column holding date(version)
+
+
+def _latest_snapshot_version(static_table, branch: int,
+                             settings: Settings) -> Optional["_SnapshotScope"]:
+    """Newest snapshot version present in one branch partition, or None.
+
+    Reads the partition summaries first (metadata only, no data files) to find
+    the newest ``version_date`` for the branch, then scans just that day's
+    ``version`` column for the exact stamp.
+    """
+    lake_cols = {f.name for f in static_table.schema().fields}
+    field = _resolve_actual(lake_cols, _norm(settings.snapshot_version_column))
+    if field is None:
+        return None
+    date_field = _resolve_actual(lake_cols, _norm(settings.snapshot_date_column))
+    branch_field = _resolve_actual(lake_cols, _norm("BRANCH_ID")) or "branch_id"
+
+    scope = None
+    if date_field is not None:
+        try:
+            parts = static_table.inspect.partitions().column("partition").combine_chunks()
+            days = [r[date_field] for r in parts.to_pylist()
+                    if r.get(branch_field) == branch and r.get(date_field) is not None]
+            if days:
+                scope = _SnapshotScope(field=field, date_field=date_field,
+                                       version=dt.datetime.combine(max(days), dt.time()))
+        except Exception as exc:  # noqa: BLE001 - metadata shape is pyiceberg's
+            log.debug("partition summary unusable (%s); scanning for max version", exc)
+
+    best = None
+    if scope is not None:
+        # Narrowed to the newest day: scan that partition only.
+        from pyiceberg.expressions import And, EqualTo
+
+        batches = static_table.scan(
+            row_filter=And(EqualTo(branch_field, branch),
+                           EqualTo(date_field, scope.version.date())),
+            selected_fields=(field,)).to_arrow_batch_reader()
+        batches = (pa.Table.from_batches([rb]) for rb in batches)
+    else:
+        batches = _lake_scan_batches(static_table, branch, [field])
+    for b in batches:
+        if b.num_rows:
+            m = pc.max(b.column(field)).as_py()
+            if m is not None and (best is None or m > best):
+                best = m
+    if best is None:
+        return None
+    return _SnapshotScope(field=field, version=best,
+                          date_field=date_field if scope is not None else None)
 
 
 # --------------------------------------------------------------------------- #
 # Source side (live Oracle  or  staged parquet for --self-test)
 # --------------------------------------------------------------------------- #
-def _oracle_select(tdef: TableDef, win: _Window) -> str:
-    if tdef.key_is_expression:
-        base = f"SELECT t.*, ({tdef.unique_key}) AS {tdef.derived_key_alias} FROM {tdef.table} t"
-        where = win.oracle_where().replace(f"{win.date_col} ", f"t.{win.date_col} ") if win.date_col else ""
-    else:
-        base = f"SELECT * FROM {tdef.table}"
-        where = win.oracle_where()
+def _coverage_predicates(tdef: TableDef, control_entry: dict) -> tuple[list[str], Optional[str]]:
+    """Predicates restricting the source to rows the pipeline can ever load.
+
+    A helper-driven table is not extracted from its own table alone: the
+    pipeline inner-joins it to a parent and filters on the *parent's* columns
+    (``oracle_extract.build_query`` / ``_query_shape``). Two things follow, and
+    DQ has to reproduce both or the unreachable rows read as drift:
+
+    * **the join** -- a child row whose foreign key matches no parent row is
+      never extracted. ``_query_shape`` supplies the join, so it is already in
+      the FROM clause by the time this runs.
+    * **the parent's window** -- the configured initial floor applies to the
+      helper's date column, and the branch's CDC watermark (which *is* the
+      helper's column) caps how fresh the lake can be.
+
+    Without these, ``authorisations`` compared its whole Oracle table against a
+    lake that only ever held rows joining to AUTHORISATIONS_MASTER on or after
+    the 2022-01-01 floor -- reporting ~975k rows per branch as missing when the
+    pipeline was never asked to load them.
+
+    Returns ``(predicates, note)``; both empty for a plain table.
+    """
+    if not tdef.is_helper_driven:
+        return [], None
+
+    from .oracle_extract import Watermark, format_initial_value, format_watermark
+
+    shape = _source_shape(tdef)
+    preds: list[str] = []
+    bounds: list[str] = []
+
+    # Lower bound: the same initial-range filter build_query applies, on the
+    # helper's date column. Masters are loaded in full and get no floor.
+    if not tdef.is_master and shape.date_ref and tdef.where_value_of_initial_run:
+        op = tdef.where_operator or ">="
+        preds.append(f"{shape.date_ref} {op} "
+                     f"{format_initial_value(tdef.where_value_of_initial_run)}")
+        bounds.append(f"{shape.date_ref} {op} {tdef.where_value_of_initial_run}")
+
+    # Upper bound: the branch's CDC watermark, which for a helper-driven table
+    # is the helper's own column -- the exact edge of what the last load saw.
+    wm = (control_entry or {}).get("last_cdc") or {}
+    if shape.cdc_ref and wm.get("value") is not None:
+        preds.append(f"{shape.cdc_ref} <= {format_watermark(Watermark.from_dict(wm))}")
+        bounds.append(f"{shape.cdc_ref} <= {wm['value']}")
+
+    note = ("helper join " + tdef.helper.table
+            + (" + " + " + ".join(bounds) if bounds else "")) if preds else None
+    return preds, note
+
+
+def _source_shape(tdef: TableDef):
+    """The pipeline's own SELECT/FROM shape, so DQ reads what the loader read."""
+    from .oracle_extract import _query_shape
+
+    return _query_shape(tdef)
+
+
+def _oracle_where_all(tdef: TableDef, win: _Window, coverage: list[str]) -> str:
+    """Window predicates (aliased to ``t.``) AND-ed with the coverage bounds."""
+    parts = [p for p in (win.oracle_where("t.") if win.date_col else "",) if p]
+    parts.extend(coverage)
+    return " AND ".join(parts)
+
+
+def _oracle_select(tdef: TableDef, win: _Window, coverage: list[str] = ()) -> str:
+    shape = _source_shape(tdef)
+    base = f"SELECT {shape.select} FROM {shape.frm}"
+    where = _oracle_where_all(tdef, win, list(coverage))
     return base + (f" WHERE {where}" if where else "")
 
 
-def _oracle_count_sql(tdef: TableDef, win: _Window) -> str:
-    where = win.oracle_where()
-    return f"SELECT COUNT(*) FROM {tdef.table}" + (f" WHERE {where}" if where else "")
+def _oracle_count_sql(tdef: TableDef, win: _Window, coverage: list[str] = ()) -> str:
+    shape = _source_shape(tdef)
+    where = _oracle_where_all(tdef, win, list(coverage))
+    return f"SELECT COUNT(*) FROM {shape.frm}" + (f" WHERE {where}" if where else "")
 
 
 def _oracle_business_norms(conn, query: str, injected: set[str]) -> tuple[set[str], list[str]]:
@@ -735,6 +965,29 @@ def _accumulate_kh(
     return kh, rows
 
 
+def _warn_on_normalizer_drift(res: "DqResult", tdef: TableDef,
+                              branch: BranchConfig) -> None:
+    """Flag a column that looks present on both sides under two spellings.
+
+    A name that appears in *both* one-sided lists once underscores are removed
+    is almost never real schema drift -- it is the source and the lake
+    normalizing the same column differently, which silently drops it from the
+    comparison. ``_norm`` now defers to dlt, so this should never fire; it is
+    here so the next divergence surfaces as a warning instead of as a column
+    that quietly stops being checked.
+    """
+    if not res.cols_only_oracle or not res.cols_only_iceberg:
+        return
+    squashed = {c.replace("_", ""): c for c in res.cols_only_iceberg}
+    pairs = [(o, squashed[k]) for o in res.cols_only_oracle
+             if (k := o.replace("_", "")) in squashed]
+    if pairs:
+        log.warning(
+            "[%s/%s] column name(s) normalize differently on the two sides and "
+            "are excluded from the comparison: %s", tdef.dataset_table_name,
+            branch.key, ", ".join(f"{o!r} vs {i!r}" for o, i in pairs))
+
+
 def check_unit(
     tdef: TableDef,
     branch: BranchConfig,
@@ -750,6 +1003,9 @@ def check_unit(
     """Run both checks for one (table, branch) and return a populated DqResult."""
     injected = _injected_norms(settings)
     win = _make_window(tdef, control_entry, since, until)
+    coverage, coverage_note = _coverage_predicates(tdef, control_entry)
+    if coverage_note:
+        win.note = f"{win.note}; {coverage_note}" if win.note else coverage_note
     lo, hi = win.label()
     res = DqResult(
         table=tdef.dataset_table_name, source_table=tdef.table, branch=branch.key,
@@ -758,6 +1014,19 @@ def check_unit(
 
     lake_cols = {f.name for f in static_table.schema().fields} if static_table else set()
     lake_business = _business_norms(lake_cols, injected)
+
+    # Append-only snapshot tables accumulate one full copy per run; compare the
+    # source against the newest copy only, never the whole accumulation.
+    snapshot = None
+    if tdef.is_snapshot and static_table is not None:
+        snapshot = _latest_snapshot_version(static_table, branch.id, settings)
+        if snapshot is not None:
+            note = f"snapshot: lake pinned to version {snapshot.version}"
+            res.window_note = f"{res.window_note}; {note}" if res.window_note else note
+        else:
+            log.warning("[%s/%s] snapshot table has no %s column; comparing the "
+                        "whole lake table", tdef.dataset_table_name, branch.key,
+                        settings.snapshot_version_column)
 
     try:
         # ---- source: column set + windowed COUNT(*) ---------------------------
@@ -772,16 +1041,18 @@ def check_unit(
             if not do_hash:  # the hash path sets this from the rows it pulls
                 res.oracle_row_count = sum(b.num_rows for b in _staged_batches(staged, win))
         else:
-            query = _oracle_select(tdef, win)
+            query = _oracle_select(tdef, win, coverage)
             src_business, _ = _oracle_business_norms(conn, query, injected)
             if not do_hash:  # the hash path derives the count from the rows it pulls
-                res.oracle_row_count = _oracle_count(conn, _oracle_count_sql(tdef, win))
+                res.oracle_row_count = _oracle_count(
+                    conn, _oracle_count_sql(tdef, win, coverage))
 
         if static_table is None:
             res.iceberg_row_count = 0
         common = sorted(src_business & lake_business)
         res.cols_only_oracle = sorted(src_business - lake_business)
         res.cols_only_iceberg = sorted(lake_business - src_business)
+        _warn_on_normalizer_drift(res, tdef, branch)
 
         # ---- hash delta -------------------------------------------------------
         if do_hash:
@@ -790,7 +1061,7 @@ def check_unit(
                 src_batches = _staged_batches(_staged_file(settings, tdef, branch.key), win)
             else:
                 src_batches = _oracle_batches(
-                    conn, _oracle_select(tdef, win), branch.fetch_batch_size)
+                    conn, _oracle_select(tdef, win, coverage), branch.fetch_batch_size)
             src_kh, src_rows = _accumulate_kh(src_batches, key_norm, common)
             # The windowed hash SELECT returns exactly the windowed COUNT(*) row
             # set, so take the count from the rows pulled (one fewer full scan)
@@ -803,7 +1074,8 @@ def check_unit(
                 scan_actual = [a for a in (
                     _resolve_actual(lake_cols, c) for c in scan_cols) if a]
                 ice_batches = (_apply_window_arrow(b, win)
-                               for b in _lake_scan_batches(static_table, branch.id, scan_actual))
+                               for b in _lake_scan_batches(static_table, branch.id,
+                                                           scan_actual, snapshot, win))
                 ice_kh, ice_rows = _accumulate_kh(ice_batches, key_norm, common)
             else:
                 ice_kh, ice_rows = pa.table(
@@ -816,7 +1088,8 @@ def check_unit(
         else:
             # counts-only: count the lake partition in the window without hashing
             if static_table is not None:
-                res.iceberg_row_count = _lake_window_count(static_table, branch.id, win)
+                res.iceberg_row_count = _lake_window_count(
+                    static_table, branch.id, win, snapshot)
 
         # ---- status -----------------------------------------------------------
         res.status, res.row_count_delta_pct, res.hash_delta_pct = classify_status(
@@ -829,13 +1102,15 @@ def check_unit(
     return res
 
 
-def _lake_window_count(static_table, branch: int, win: _Window) -> int:
+def _lake_window_count(static_table, branch: int, win: _Window,
+                       snapshot: Optional[_SnapshotScope] = None) -> int:
     """Count rows in the branch partition within the window (counts-only path)."""
     cols = [win.date_col_norm] if win.date_col_norm else [_norm("BRANCH_ID")]
     lake_cols = {f.name for f in static_table.schema().fields}
     actual = [a for a in (_resolve_actual(lake_cols, c) for c in cols) if a] or None
     total = 0
-    for b in _lake_scan_batches(static_table, branch, actual or list(lake_cols)[:1]):
+    for b in _lake_scan_batches(static_table, branch,
+                                actual or list(lake_cols)[:1], snapshot, win):
         total += _apply_window_arrow(b, win).num_rows
     return total
 

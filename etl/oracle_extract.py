@@ -871,6 +871,41 @@ def fetch_and_stage(conn, query, tdef, branch_key, branch_id, settings, fetch_ba
         return _stage_via_cursor(conn, query, tdef, branch_key, branch_id, settings, fetch_batch_size, now)
 
 
+def _clamp_future_watermark(wm: Watermark, label: str) -> Watermark:
+    """Never let a future-dated source row become the high-water mark.
+
+    A watermark feeds a ``>=``/``>`` predicate on the next run, so one row
+    carrying a mistyped date pushes the mark past every real row and silently
+    switches that branch off. It is captured as a plain ``max()``, and
+    ``_wm_advance`` only ever moves forward, so the damage is permanent: a
+    single ``ORDERS_MASTER`` row dated 2526-04-12 froze that table's date
+    watermark 182,477 days out, and ``DOC`` sat at 2029-12-31 on three branches
+    -- their "new rows by date" branch matched nothing, leaving every insert to
+    the unindexed CDC branch (a full table scan) or, where the CDC column is not
+    stamped on insert, to nothing at all.
+
+    Clamping to now is safe in both directions: rows genuinely dated in the
+    future are still extracted and loaded (the clamp touches only the mark), and
+    they simply re-qualify as "new" next run. Tables that legitimately carry
+    forward-dated values and want them bounded configure ``where_value_max``
+    instead, which caps the *query*.
+    """
+    if wm.value is None or wm.kind != "datetime":
+        return wm
+    try:
+        captured = dt.datetime.strptime(wm.value, "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return wm
+    now = now_local().replace(tzinfo=None)
+    if captured <= now:
+        return wm
+    log.warning(
+        "[%s] date watermark %s is in the future; clamping to %s (a source row "
+        "carries a bad date -- the raw value would freeze incremental loading)",
+        label, wm.value, now.strftime("%Y-%m-%d %H:%M:%S"))
+    return Watermark(value=now.strftime("%Y-%m-%d %H:%M:%S.%f"), kind="datetime")
+
+
 def _watermarks_from_parquet(path: Path, tdef: TableDef) -> tuple[Watermark, Watermark]:
     """Read just the CDC/date columns back from the staged parquet for max().
 
@@ -901,9 +936,11 @@ def _watermarks_from_parquet(path: Path, tdef: TableDef) -> tuple[Watermark, Wat
     except Exception:  # noqa: BLE001 - watermark read is best-effort
         return cdc, date
     if cdc_col and cdc_col in table.column_names:
-        cdc = _column_max_watermark(table, cdc_col)
+        cdc = _clamp_future_watermark(
+            _column_max_watermark(table, cdc_col), f"{tdef.dataset_table_name}.{cdc_col}")
     if date_col and date_col in table.column_names:
-        date = _column_max_watermark(table, date_col)
+        date = _clamp_future_watermark(
+            _column_max_watermark(table, date_col), f"{tdef.dataset_table_name}.{date_col}")
     return cdc, date
 
 
