@@ -11,8 +11,8 @@ Two checks are run for every ``(table, branch)`` over **one shared window**:
   ``only_in_iceberg`` / ``hash_mismatch``. This catches content drift that a bare
   count would miss.
 
-The window is **YTD .. last run**: from January 1 of the current year (the
-``--since`` default) up to each ``(table, branch)``'s last-run watermark in the
+The window is **month-to-date .. last run**: from the 1st of the current month
+(the ``--since`` default) up to each ``(table, branch)``'s last-run watermark in the
 Postgres ``control_state`` table (via ``ControlStore``/``MetaStore``) (the
 ``--until`` default). Both checks use the *same*
 window so the count delta and the hash delta describe the same row set. Master
@@ -444,7 +444,7 @@ def _make_window(
 ) -> _Window:
     """Resolve the shared [since .. until] window for one (table, branch).
 
-    Lower bound: ``since`` (default Jan 1, this year). Upper bound: ``until`` if
+    Lower bound: ``since`` (default the 1st of this month). Upper bound: ``until`` if
     given, else the branch's last-run date watermark from the Postgres
     ``control_state`` table (via ``ControlStore``/``MetaStore``), in either case
     capped by the table's configured ``where_value_max`` ceiling

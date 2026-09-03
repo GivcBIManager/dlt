@@ -11,8 +11,8 @@ table ``etl_dq_results`` in the app metastore and prints a summary:
   table's unique key, bucketed into matched / only-in-oracle / only-in-iceberg /
   hash-mismatch.
 
-The window is the same for both checks: from ``--since`` (default Jan 1 of the
-current year) up to each ``(table, branch)``'s last-run watermark from the
+The window is the same for both checks: from ``--since`` (default the 1st of the
+current month) up to each ``(table, branch)``'s last-run watermark from the
 Postgres ``control_state`` table (via ``ControlStore``/``MetaStore``)
 (override with ``--until``).
 
@@ -99,10 +99,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--tables-file", default="tables.json", help="path to tables.json")
 
     p.add_argument("--since", help="window lower bound YYYY-MM-DD "
-                                   "(default: Jan 1 of the current year)")
+                                   "(default: the 1st of the current month)")
     p.add_argument("--until", help="window upper bound YYYY-MM-DD "
                                    "(default: each table+branch's last-run watermark)")
-    p.add_argument("--year", type=int, help="year whose Jan 1 is the default --since")
+    p.add_argument("--year", type=int,
+                   help="use that year's Jan 1 as --since (year-to-date sweep)")
 
     p.add_argument("--no-hash", action="store_true",
                    help="row-count comparison only; skip the (heavier) hash pull")
@@ -122,6 +123,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p.parse_args(argv)
+
+
+def _default_since(year: int | None, today: dt.date | None = None) -> dt.date:
+    """Window lower bound when ``--since`` is absent: the 1st of this month.
+
+    A month-to-date window keeps the routine run cheap -- the compare cost is
+    driven almost entirely by how many rows fall inside it. ``--year`` still
+    selects that year's Jan 1, so a full year-to-date sweep stays one flag away.
+    """
+    if year:
+        return dt.date(year, 1, 1)
+    return (today or datetime.now().date()).replace(day=1)
 
 
 def main(argv: list[str]) -> int:
@@ -164,8 +177,7 @@ def main(argv: list[str]) -> int:
                   sorted(categories), sorted(table_filter) or "(all)")
         return 2
 
-    year = args.year or datetime.now().year
-    since = _parse_date(args.since) or dt.date(year, 1, 1)
+    since = _parse_date(args.since) or _default_since(args.year)
     until = _parse_date(args.until)
 
     from etl.metastore import MetaStore

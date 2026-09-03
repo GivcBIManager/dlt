@@ -403,9 +403,9 @@ Set the tolerance to `0` for strict reconciliation, where any drift at all is a
 `MISMATCH`. Note that most real drift moves **both** numbers: rows missing from
 the lake widen the count delta *and* land in `only_in_oracle`.
 
-### Window: YTD → last run
+### Window: month-to-date → last run
 
-The window runs from `--since` (default **Jan 1 of the current year** — YTD) up to
+The window runs from `--since` (default **the 1st of the current month** — MTD; `--year N` widens it to that year's Jan 1) up to
 each `(table, branch)`'s **last-run watermark** in the Postgres
 `etl_meta.control_state` table (`--until` overrides it). Both checks use this
 same window.
