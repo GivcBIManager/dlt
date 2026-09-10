@@ -76,6 +76,7 @@ def render_profiles() -> dict[str, Any]:
         "schema": str(ch.get("database", "default")),
         "secure": bool(ch.get("secure", False)),
         "connect_timeout": int(ch.get("connect_timeout", 10)),
+        "send_receive_timeout": int(ch.get("send_receive_timeout", 1800)),
         "threads": dbt_threads(),
     }
     return {"oasis": {"target": target, "outputs": {target: output}}}

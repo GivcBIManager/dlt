@@ -23,10 +23,11 @@ _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
 DEFAULTS: dict[str, Any] = {
     "host": "", "port": 8123, "user": "default", "database": "default",
-    "secure": False, "connect_timeout": 10,
+    "secure": False, "connect_timeout": 10, "send_receive_timeout": 1800,
 }
-FIELD_ORDER = ["host", "port", "user", "password", "database", "secure", "connect_timeout"]
-_NUM_FIELDS = {"port", "connect_timeout"}
+FIELD_ORDER = ["host", "port", "user", "password", "database", "secure", "connect_timeout",
+               "send_receive_timeout"]
+_NUM_FIELDS = {"port", "connect_timeout", "send_receive_timeout"}
 _BOOL_FIELDS = {"secure"}
 
 
@@ -96,7 +97,8 @@ def save_clickhouse(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"'{f}' must be a whole number") from None
 
     merged = dict(_raw())
-    for f in ("host", "port", "user", "database", "secure", "connect_timeout"):
+    for f in ("host", "port", "user", "database", "secure", "connect_timeout",
+              "send_receive_timeout"):
         if f in payload and payload[f] not in (None, ""):
             merged[f] = payload[f]
     # Password only overwritten when a fresh non-blank one is supplied.
