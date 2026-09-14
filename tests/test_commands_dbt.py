@@ -83,3 +83,22 @@ def test_full_refresh_still_applies_to_a_whole_project_run():
     argv, _ = commands.build_argv(
         {"script": "dbt", "dbt_command": "run", "select": "", "full_refresh": True})
     assert "--full-refresh" in argv and "--select" not in argv
+
+
+# --- docs generate ----------------------------------------------------------- #
+# Two words, so it must reach dbt as two argv tokens; and it builds the whole
+# project's docs, so it takes no --select and no scope in its label.
+
+def test_docs_generate_is_two_argv_tokens():
+    import commands
+    argv, label = commands.build_argv({"script": "dbt", "dbt_command": "docs generate"})
+    assert argv[1:3] == ["docs", "generate"]
+    assert label == "dbt docs generate"
+
+
+def test_docs_generate_ignores_select():
+    import commands
+    argv, label = commands.build_argv(
+        {"script": "dbt", "dbt_command": "docs generate", "select": "fact_doc"})
+    assert "--select" not in argv
+    assert label == "dbt docs generate"

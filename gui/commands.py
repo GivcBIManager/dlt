@@ -13,7 +13,9 @@ from typing import Any
 from config import REPO_ROOT, SCRIPTS, python_executable
 
 SCRIPT_CHOICES = ["oracle_to_iceberg", "dq_check", "snapshot_diff", "fresh_run", "dbt", "custom"]
-DBT_COMMANDS = {"run", "test", "build", "compile", "debug"}
+DBT_COMMANDS = {"run", "test", "build", "compile", "debug", "docs generate"}
+# Commands that take neither --select nor a selection in their label.
+_DBT_UNSELECTABLE = {"debug", "docs generate"}
 # tables.json table types, as dq_check --category names them.
 DQ_CATEGORIES = ("masters", "transactions", "snapshots")
 
@@ -41,19 +43,21 @@ def _dbt_argv(spec: dict[str, Any]) -> tuple[list[str], str]:
     if cmd not in DBT_COMMANDS:
         raise ValueError(f"Unknown dbt command: {cmd!r} (allowed: {', '.join(sorted(DBT_COMMANDS))})")
     d = str(dbt_config.dbt_dir())
-    argv = [dbt_config.dbt_executable(), cmd,
+    # "docs generate" is two argv tokens, not one; splitting keeps it from being
+    # passed to dbt as a single nonsense subcommand.
+    argv = [dbt_config.dbt_executable(), *cmd.split(),
             "--project-dir", d, "--profiles-dir", d,
             "--target", dbt_config.dbt_target()]
     sel = str(spec.get("select") or "").strip()
-    if sel and cmd != "debug":
+    if sel and cmd not in _DBT_UNSELECTABLE:
         argv += ["--select", sel]
     if spec.get("full_refresh") and cmd in ("run", "build"):
         argv.append("--full-refresh")
     argv += _split(spec.get("extra"))
     # No --select is dbt's whole-project selector; spell that out rather than
     # leaving a bare "dbt run" that reads like a selection went missing.
-    scope = sel if sel else ("" if cmd in ("debug", "compile") else "all models")
-    label = " ".join(["dbt", cmd] + ([scope] if scope and cmd != "debug" else []))
+    scope = sel if sel else ("" if cmd in _DBT_UNSELECTABLE or cmd == "compile" else "all models")
+    label = " ".join(["dbt", cmd] + ([scope] if scope and cmd not in _DBT_UNSELECTABLE else []))
     return argv, label
 
 

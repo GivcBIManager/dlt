@@ -20,3 +20,8 @@ dagster-graphql==1.13.11
 # dagster stack above (verified). ClickHouse is an EXTERNAL prerequisite
 # (24.x+ for icebergLocal).
 dbt-clickhouse>=1.9,<1.10
+
+# Comment- and order-preserving YAML round-trip, for the dbt model metadata
+# editor (gui/dbt_meta.py). PyYAML cannot round-trip: it would silently strip
+# every comment out of the models/**/_*__models.yml files on the first save.
+ruamel.yaml>=0.18

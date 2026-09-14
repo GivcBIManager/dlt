@@ -31,6 +31,7 @@ import config  # noqa: E402
 import connections  # noqa: E402
 import dagster_client  # noqa: E402
 import dbt_config  # noqa: E402
+import dbt_meta  # noqa: E402
 import dbt_project_store  # noqa: E402
 import flows_store  # noqa: E402
 import flow_naming  # noqa: E402
@@ -202,6 +203,12 @@ def page_flows():
 @app.route("/models")
 def page_models():
     return render_template("dbt.html", active="models")
+
+
+@app.route("/lineage")
+def page_lineage():
+    # Lineage is a subtab of the Models page now; keep old links working.
+    return redirect(url_for("page_models") + "#lineage")
 
 
 @app.route("/settings")
@@ -784,7 +791,8 @@ def api_dbt_file_create():
     b = _body()
     return jsonify(dbt_project_store.create_from_template(
         b.get("name", ""), b.get("kind", "model"),
-        b.get("materialization", "table"), b.get("content")))
+        b.get("materialization", "table"), b.get("content"),
+        layer=b.get("layer", "staging")))
 
 
 @app.get("/api/dbt/template")
@@ -792,13 +800,21 @@ def api_dbt_file_create():
 def api_dbt_template():
     return jsonify({"content": dbt_project_store.template_for(
         request.args.get("kind", "model"), request.args.get("name", ""),
-        request.args.get("materialization", "table"))})
+        request.args.get("materialization", "table"),
+        request.args.get("layer", "staging"))})
 
 
 @app.delete("/api/dbt/file")
 @api
 def api_dbt_file_delete():
-    return jsonify({"deleted": dbt_project_store.delete_file(request.args.get("path", ""))})
+    path = request.args.get("path", "")
+    deleted = dbt_project_store.delete_file(path)
+    # A model's docs/tests live in its layer schema file, not in the .sql, so
+    # dropping only the .sql would leave dbt parsing an orphaned block forever.
+    forgot = False
+    if deleted and path.startswith("models/") and path.endswith(".sql"):
+        forgot = dbt_meta.forget(Path(path).stem)
+    return jsonify({"deleted": deleted, "metadata_removed": forgot})
 
 
 @app.get("/api/dbt/config")
@@ -841,6 +857,109 @@ def api_dbt_run():
     argv, label = commands.build_argv(spec)
     dbt_config.write_profiles()  # ensure the profile is current before running
     return jsonify(runner.start(argv, label=label))
+
+
+# --------------------------------------------------------------------------- #
+# dbt model metadata API (layer / tags / description / column tests)
+# --------------------------------------------------------------------------- #
+@app.get("/api/dbt/meta")
+@api
+def api_dbt_meta_get():
+    """Metadata for one model, or the overview list when no name is given."""
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify({"models": dbt_meta.overview(), "layers": list(dbt_meta.LAYERS)})
+    return jsonify({"meta": dbt_meta.describe(name),
+                    "catalog_columns": dbt_meta.catalog_columns(name),
+                    "layers": list(dbt_meta.LAYERS),
+                    "column_tests": list(dbt_meta.COLUMN_TESTS)})
+
+
+@app.put("/api/dbt/meta")
+@api
+def api_dbt_meta_put():
+    b = _body()
+    name = str(b.get("name", "")).strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    return jsonify({"meta": dbt_meta.save(name, b)})
+
+
+# --------------------------------------------------------------------------- #
+# dbt docs / lineage
+# --------------------------------------------------------------------------- #
+@app.post("/api/dbt/docs/generate")
+@api
+def api_dbt_docs_generate():
+    """Rebuild the docs site (manifest + catalog) via the run manager."""
+    argv, label = commands.build_argv({"script": "dbt", "dbt_command": "docs generate"})
+    dbt_config.write_profiles()
+    return jsonify(runner.start(argv, label=label))
+
+
+@app.get("/api/dbt/docs/status")
+@api
+def api_dbt_docs_status():
+    """Whether a docs site exists yet, and how stale it is."""
+    from datetime import datetime
+
+    d = dbt_config.dbt_dir()
+    index = d / "target" / "index.html"
+    if not index.exists():
+        return jsonify({"exists": False})
+    # Date the site by catalog.json: it is the one bundle file only `docs
+    # generate` writes (every dbt ls / run / compile rewrites manifest.json,
+    # and the Models page runs dbt ls), and it is written last.
+    catalog = d / "target" / "catalog.json"
+    stamp = (catalog if catalog.exists() else index).stat().st_mtime
+    return jsonify({"exists": True, "size": index.stat().st_size,
+                    "generated": datetime.fromtimestamp(stamp).isoformat(timespec="seconds"),
+                    "project": _dbt_project_name(d)})
+
+
+def _dbt_project_name(d: Path) -> str:
+    """The dbt project's `name`, which prefixes every node id (model.<name>.<model>).
+
+    The Lineage subtab needs it to deep-link the docs graph to one model.
+    """
+    import yaml
+
+    try:
+        doc = yaml.safe_load((d / "dbt_project.yml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    return str(doc.get("name") or "")
+
+
+# The dbt docs site is a static bundle written by `dbt docs generate` into
+# dbt/target/. Serving it from Flask keeps it on the GUI's own origin and
+# session, so there is no second process and no extra port to expose -- unlike
+# `dbt docs serve`, which starts its own unauthenticated web server.
+_DOCS_FILES = {
+    "index.html": "text/html; charset=utf-8",
+    "manifest.json": "application/json",
+    "catalog.json": "application/json",
+}
+
+
+@app.get("/dbt-docs/")
+@app.get("/dbt-docs/<path:filename>")
+def dbt_docs(filename: str = "index.html"):
+    """Serve the generated dbt docs site (the lineage graph lives here)."""
+    content_type = _DOCS_FILES.get(filename)
+    if content_type is None:
+        # Allow-list only: the docs bundle is exactly these three files, and
+        # target/ also holds compiled SQL and profiles-derived artifacts that
+        # must not be reachable over HTTP.
+        return jsonify({"error": f"not a docs file: {filename}"}), 404
+    path = dbt_config.dbt_dir() / "target" / filename
+    if not path.exists():
+        return jsonify({
+            "error": "dbt docs have not been generated yet",
+            "hint": "run `dbt docs generate`, or use the Regenerate button on the Lineage page",
+        }), 404
+    return Response(path.read_bytes(), mimetype=content_type.split(";")[0],
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/healthz")

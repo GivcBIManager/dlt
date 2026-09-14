@@ -840,3 +840,122 @@ tr.clickable { cursor: pointer; }
   color: var(--text-muted); cursor: pointer;
 }
 .logout-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===================== dbt Models page ===================== */
+/* Segmented control: the page subtabs (Develop | Lineage) and the editor's
+   inner tabs (SQL | Metadata). Built on the existing .btn.tab buttons. */
+.seg { display: inline-flex; gap: 4px; padding: 4px; background: var(--surface-container);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-lg); }
+.seg .btn.tab { border-radius: var(--radius-md); }
+.seg .btn.tab:disabled { opacity: .45; }
+.tab-dot { color: var(--warning); margin-left: 2px; }
+
+.models-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 18px; }
+.health-inline { display: flex; align-items: center; gap: 8px; font-size: .8rem; color: var(--text-muted); }
+
+/* Model editor header */
+.me-head { align-items: flex-start; flex-wrap: wrap; }
+.me-title { display: flex; gap: 12px; align-items: flex-start; min-width: 0; flex: 1; }
+.me-icon { width: 38px; height: 38px; border-radius: var(--radius-md); display: grid; place-items: center;
+  background: var(--primary-container); color: var(--primary); flex: none; font-size: 1rem; }
+.me-name { font-size: 1.05rem; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.me-path { font-size: .75rem; margin-top: 3px; word-break: break-all; }
+.me-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.me-toolbar .sep { width: 1px; align-self: stretch; background: var(--border-soft); margin: 0 2px; }
+.me-tabs { margin-bottom: 14px; }
+#editor { min-height: 380px; }
+
+/* Layer identity: one colour per layer, shared by the badge and the picker.
+   Same hues as the master / transaction / snapshot pills elsewhere. */
+.layer-badge.staging, .layer-card.staging { --layer: #1d4ed8; --layer-bg: #dbeafe; }
+.layer-badge.intermediate, .layer-card.intermediate { --layer: #6d28d9; --layer-bg: #ede9fe; }
+.layer-badge.marts, .layer-card.marts { --layer: #047857; --layer-bg: var(--success-light); }
+.layer-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  padding: 3px 9px; border-radius: var(--radius-full); color: var(--layer); background: var(--layer-bg); }
+
+.layer-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.layer-card { text-align: left; background: var(--surface); border: 1.5px solid var(--border);
+  border-radius: var(--radius-md); padding: 10px 12px; cursor: pointer; font: inherit; color: var(--text-primary);
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.layer-card:hover { border-color: var(--layer); }
+.layer-card.on { border-color: var(--layer); background: var(--layer-bg); box-shadow: var(--shadow-sm); }
+.layer-card .lc-name { display: flex; align-items: center; gap: 7px; font-weight: 700; color: var(--layer); font-size: .85rem; }
+.layer-card .lc-rule { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.35; }
+@media (max-width: 900px) { .layer-picker { grid-template-columns: minmax(0, 1fr); } }
+
+.me-section { margin-top: 18px; }
+.me-section > label:first-child { margin-top: 0; }
+.me-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 1080px) { .me-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Tag chip input */
+.tag-input { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 40px;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: text; }
+.tag-input:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(12, 90, 145, .14); }
+.tag-input input { border: none; box-shadow: none; padding: 4px 2px; flex: 1; min-width: 120px; width: auto; }
+.tag-input input:focus { box-shadow: none; }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
+  padding: 3px 4px 3px 10px; border-radius: var(--radius-full); background: var(--primary); color: #fff; }
+.tag-chip button { border: none; background: rgba(255, 255, 255, .2); color: #fff; width: 18px; height: 18px;
+  border-radius: 50%; cursor: pointer; font-size: 11px; line-height: 1; display: grid; place-items: center; padding: 0; }
+.tag-chip button:hover { background: rgba(255, 255, 255, .35); }
+.tag-chip.fixed { background: var(--surface-container-high); color: var(--text-muted); padding-right: 10px; }
+.tag-suggest { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag-suggest .chip { font-size: 11px; padding: 3px 9px; }
+
+/* Documentation coverage tiles */
+.me-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.me-stat { border: 1px solid var(--border-soft); background: var(--surface-low); border-radius: var(--radius-md);
+  padding: 10px 12px; min-width: 0; }
+.me-stat .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted); }
+.me-stat .v { font-size: 1.15rem; font-weight: 800; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-stat .v small { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.me-stat .v.mono { font-size: .8rem; font-weight: 600; padding-top: 5px; line-height: 1.35;
+  white-space: normal; overflow-wrap: break-word; }  /* a composite grain must read in full */
+.me-bar { height: 5px; border-radius: 3px; background: var(--surface-container-highest); margin-top: 6px; overflow: hidden; }
+.me-bar > span { display: block; height: 100%; background: var(--success); }
+
+textarea.prose { font-family: inherit; line-height: 1.5; }
+
+/* Column documentation table */
+.me-cols-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.me-cols-bar input[type=search] { width: 240px; }
+.me-cols table { table-layout: fixed; }
+.me-cols th { padding: .6rem .75rem; }
+.me-cols td { padding: .4rem .75rem; vertical-align: middle; }
+.me-cols td input:not([type=checkbox]) { padding: .35rem .55rem; font-size: .82rem; }
+.me-cols td.cname { overflow: hidden; text-overflow: ellipsis; }
+.me-cols tr.undoc td.cname { box-shadow: inset 3px 0 0 var(--warning); }
+.me-cols td.ck, .me-cols th.ck { text-align: center; }
+.me-cols input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+
+/* Model / test lists: two equal columns that can never widen the page.
+   `1fr` alone lets a long no-wrap test name stretch its track past the
+   viewport; minmax(0, 1fr) caps it and the name ellipsises instead. */
+.grid-2.dbt-lists { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; }
+@media (max-width: 1080px) { .grid-2.dbt-lists { grid-template-columns: minmax(0, 1fr); } }
+.dbt-lists .panel { display: flex; flex-direction: column; min-width: 0; }
+.dbt-lists .table-wrap { height: 380px; max-height: none; }
+.dbt-lists table { table-layout: fixed; }
+.dbt-lists th { padding: .6rem .75rem; }
+.dbt-lists td { padding: .45rem .75rem; }
+.dbt-lists td.fname { white-space: normal; }
+.dbt-lists td.stamp { font-size: .76rem; }
+/* File names read as links, not pill buttons: the pill border and padding cost
+   the width the name needs. <wbr> after each underscore lets it wrap there. */
+.dbt-open { display: block; width: 100%; text-align: left; background: none; border: none; padding: 0;
+  font: inherit; font-weight: 600; color: var(--primary); cursor: pointer; line-height: 1.35; }
+.dbt-open:hover { text-decoration: underline; }
+.dbt-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
+.dbt-lists tr.active td { background: var(--primary-container); }
+
+/* Lineage subtab */
+.docs-frame { width: 100%; height: calc(100vh - 300px); min-height: 520px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: #fff; display: block; }
+/* .btn and friends set `display`, which beats the [hidden] attribute; on this
+   page hidden must always mean hidden (tab panes, the focus button, etc.). */
+#models-page [hidden] { display: none !important; }
+.me-tabs-row { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin-bottom: 14px; }
+.me-tabs-row .me-tabs { margin-bottom: 0; }
