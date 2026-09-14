@@ -27,6 +27,12 @@
     <h2 style="flex:1">Editor <span id="cur-file" class="mono muted">— no file —</span><span id="dirty-dot" title="Unsaved changes" style="color:var(--warning);margin-left:6px" hidden>●</span>
       <span id="new-fields" class="row-flex" style="display:none">
         <span id="new-prefix" class="mono muted">models/</span>
+        <select id="new-layer" title="layer (which folder the model lives in)">
+          <option value="staging">staging</option>
+          <option value="intermediate">intermediate</option>
+          <option value="marts">marts</option>
+        </select>
+        <span class="mono muted">/</span>
         <input id="new-name" placeholder="file_name" style="width:170px" spellcheck="false">
         <span class="mono muted">.sql</span>
         <select id="new-mat" title="materialization">
@@ -51,6 +57,56 @@
 </div>
 
 <!-- output -->
+
+<!-- Model metadata: layer, tags, description and per-column data tests.
+     Writes into models/<layer>/_<layer>__models.yml, the schema file dbt reads
+     for documentation and tests. -->
+<div class="panel" id="meta-panel" style="margin-bottom:18px" hidden>
+  <div class="panel-head">
+    <h2><i class="fa-solid fa-tags"></i> Metadata <span id="meta-model" class="mono muted"></span></h2>
+    <div class="row-flex">
+      <a class="btn sm ghost" href="/lineage" title="Open the lineage graph">
+        <i class="fa-solid fa-diagram-project"></i> Lineage</a>
+      <button class="btn sm primary" id="meta-save"><i class="fa-solid fa-floppy-disk"></i> Save metadata</button>
+    </div>
+  </div>
+
+  <div class="hint">
+    Saved to <span class="mono" id="meta-file"></span>. Changing the layer moves the
+    <span class="mono">.sql</span> file into that folder — it does <b>not</b> rename the table in
+    ClickHouse, so reports pointed at <span class="mono">default.&lt;model&gt;</span> keep working.
+  </div>
+
+  <div class="grid-2" style="margin-top:12px">
+    <div>
+      <label for="meta-layer">Layer</label>
+      <select id="meta-layer" style="width:100%"></select>
+      <div class="hint" id="meta-layer-hint"></div>
+    </div>
+    <div>
+      <label for="meta-tags">Tags <span class="muted">(comma separated)</span></label>
+      <input id="meta-tags" style="width:100%" spellcheck="false"
+             placeholder="finance, revenue, incremental">
+      <div class="hint">Select with <span class="mono">dbt run --select tag:finance</span>.
+        The layer tag is added automatically.</div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px">
+    <label for="meta-desc">Description <span class="muted">(shown in the docs site)</span></label>
+    <textarea id="meta-desc" style="width:100%;min-height:90px" spellcheck="false"
+              placeholder="What one row means, the grain, and any trap a report author should know."></textarea>
+  </div>
+
+  <div style="margin-top:12px">
+    <div class="row-flex" style="justify-content:space-between">
+      <label>Columns <span class="muted">— description and data tests</span></label>
+      <span class="muted" id="meta-col-note"></span>
+    </div>
+    <div id="meta-columns" class="table-wrap" style="max-height:340px"></div>
+  </div>
+</div>
+
 <div class="panel">
   <div class="panel-head"><h2>Output <span id="run-status"></span></h2></div>
   <div id="dbt-tail-banner" class="banner warn" role="status" hidden></div>
@@ -160,6 +216,9 @@ async function openFile(path, name) {
   try { const r = await apiGet("/api/dbt/file?path=" + encodeURIComponent(path));
     curFile = path; curSel = name; el("cur-file").textContent = path;
     setEditor(r.content);
+    // Metadata only exists for models in a layer folder; loadMeta hides the
+    // panel for tests, macros and anything else opened here.
+    loadMeta(path.startsWith("models/") && path.endsWith(".sql") ? name : null);
   } catch (e) { err(e.message); }
 }
 
@@ -173,15 +232,22 @@ function exitNew() {
 async function startNew(kind) {
   if (!confirmDiscard()) return;
   newKind = kind; curFile = null; curSel = null;
+  // A file that does not exist yet has no metadata block to edit.
+  META = null; el("meta-panel").hidden = true;
   el("cur-file").style.display = "none";
   el("new-fields").style.display = "";
   el("new-prefix").textContent = kind === "model" ? "models/" : "tests/";
   el("new-mat").style.display = kind === "model" ? "" : "none";
+  // Tests live in tests/ and have no layer; only models are classified.
+  el("new-layer").style.display = kind === "model" ? "" : "none";
+  el("new-layer").nextElementSibling.style.display = kind === "model" ? "" : "none";
   el("file-save").innerHTML = '<i class="fa-solid fa-plus"></i> Create file';
   el("new-name").value = "";
   try {
     const mat = el("new-mat").value || "table";
-    const r = await apiGet(`/api/dbt/template?kind=${kind}&materialization=${encodeURIComponent(mat)}`);
+    const lay = el("new-layer").value || "staging";
+    const r = await apiGet(`/api/dbt/template?kind=${kind}` +
+                           `&materialization=${encodeURIComponent(mat)}&layer=${encodeURIComponent(lay)}`);
     setEditor(r.content);
   } catch (e) { err(e.message); }
   el("new-name").focus();
@@ -197,7 +263,8 @@ async function onMatChange() {
     el("editor").value = cur.replace(/materialized(\s*=\s*)['"]\w+['"]/, `materialized$1'${mat}'`);
     updateDirty();
   } else {
-    try { const r = await apiGet(`/api/dbt/template?kind=model&materialization=${encodeURIComponent(mat)}`);
+    try { const r = await apiGet(`/api/dbt/template?kind=model` +
+            `&materialization=${encodeURIComponent(mat)}&layer=${encodeURIComponent(el("new-layer").value)}`);
       setEditor(r.content); } catch (e) { err(e.message); }
   }
 }
@@ -214,8 +281,10 @@ async function createNew() {
   if (!name) { err("Name the file first"); el("new-name").focus(); return; }
   const kind = newKind;
   const materialization = kind === "model" ? el("new-mat").value : "table";
+  const layer = kind === "model" ? el("new-layer").value : undefined;
   try {
-    const r = await apiPost("/api/dbt/file", { name, kind, materialization, content: el("editor").value });
+    const r = await apiPost("/api/dbt/file",
+                            { name, kind, materialization, layer, content: el("editor").value });
     ok("Created " + r.path);
     await loadLists();
     openFile(r.path, name);
@@ -267,11 +336,122 @@ function tailRun(id) {
   dbtPoller.start();
 }
 
+// ---- model metadata ----------------------------------------------------- //
+let META = null;          // last loaded metadata for the open model
+let META_TESTS = [];      // column-level tests the backend accepts
+
+const LAYER_HINTS = {
+  staging: "Reads exactly one Iceberg lake table, 1:1 — rename/cast only, no joins.",
+  intermediate: "Joins two or more lake tables to assemble one business entity.",
+  marts: "Built on other dbt models via ref(). This is what BI should point at.",
+};
+
+function renderMetaColumns(cols, catalog) {
+  // Columns the model actually has (from the docs catalog) but that carry no
+  // documentation yet are appended, so they can be filled in without retyping.
+  const known = new Set(cols.map(c => c.name));
+  const extra = (catalog || []).filter(c => !known.has(c.name))
+                               .map(c => ({ name: c.name, description: "", tests: [], _new: true }));
+  const all = cols.concat(extra);
+  if (!all.length) return `<div class="muted">No columns. Generate docs to list them.</div>`;
+
+  const types = Object.fromEntries((catalog || []).map(c => [c.name, c.type]));
+  const head = `<thead><tr><th>Column</th><th>Type</th><th>Description</th>` +
+               META_TESTS.map(t => `<th class="num">${esc(t)}</th>`).join("") + `</tr></thead>`;
+  const body = all.map((c, i) => `<tr${c._new ? ' class="muted"' : ""}>
+    <td class="mono">${esc(c.name)}</td>
+    <td class="mono muted">${esc(types[c.name] || "—")}</td>
+    <td><input class="meta-col-desc" data-i="${i}" value="${esc(c.description || "")}"
+               style="width:100%" spellcheck="false"></td>
+    ${META_TESTS.map(t => `<td class="num"><input type="checkbox" class="meta-col-test"
+        data-i="${i}" data-test="${esc(t)}" ${(c.tests || []).includes(t) ? "checked" : ""}></td>`).join("")}
+  </tr>`).join("");
+  META._rendered = all;
+  return `<table>${head}<tbody>${body}</tbody></table>`;
+}
+
+function syncLayerHint() {
+  el("meta-layer-hint").textContent = LAYER_HINTS[el("meta-layer").value] || "";
+}
+
+async function loadMeta(name) {
+  const panel = el("meta-panel");
+  if (!name) { panel.hidden = true; META = null; return; }
+  try {
+    const r = await apiGet("/api/dbt/meta?name=" + encodeURIComponent(name));
+    META = r.meta;
+    META_TESTS = r.column_tests || [];
+    el("meta-model").textContent = name;
+    el("meta-file").textContent = `models/${META.layer}/_${META.layer}__models.yml`;
+    el("meta-layer").innerHTML = (r.layers || [])
+      .map(l => `<option value="${esc(l)}"${l === META.layer ? " selected" : ""}>${esc(l)}</option>`).join("");
+    syncLayerHint();
+    el("meta-tags").value = (META.tags || []).join(", ");
+    el("meta-desc").value = META.description || "";
+    el("meta-columns").innerHTML = renderMetaColumns(META.columns || [], r.catalog_columns);
+    const undoc = (META._rendered || []).filter(c => c._new).length;
+    el("meta-col-note").textContent = undoc
+      ? `${undoc} column${undoc === 1 ? "" : "s"} in the table but not yet documented`
+      : "";
+    panel.hidden = false;
+  } catch (e) {
+    // A test file, or a model with no .sql in a layer folder: no metadata to show.
+    panel.hidden = true;
+    META = null;
+  }
+}
+
+async function saveMeta() {
+  if (!META) return;
+  const rendered = META._rendered || [];
+  document.querySelectorAll(".meta-col-desc").forEach(inp => {
+    rendered[+inp.dataset.i].description = inp.value.trim();
+  });
+  rendered.forEach(c => { c.tests = []; });
+  document.querySelectorAll(".meta-col-test").forEach(box => {
+    if (box.checked) rendered[+box.dataset.i].tests.push(box.dataset.test);
+  });
+  // Only persist columns that carry something worth writing.
+  const columns = rendered
+    .filter(c => (c.description && c.description.length) || (c.tests && c.tests.length))
+    .map(c => ({ name: c.name, description: c.description, tests: c.tests }));
+
+  const body = {
+    name: META.name,
+    layer: el("meta-layer").value,
+    tags: el("meta-tags").value.split(",").map(t => t.trim()).filter(Boolean),
+    description: el("meta-desc").value.trim(),
+    columns,
+  };
+  const b = el("meta-save");
+  b.disabled = true;
+  try {
+    const moved = body.layer !== META.layer;
+    const r = await apiPut("/api/dbt/meta", body);
+    META = r.meta;
+    toast(moved ? `Saved — moved to ${esc(body.layer)}` : "Metadata saved", "ok");
+    if (moved) {
+      // The .sql moved on disk; the list and the open file path are now stale.
+      await loadLists();
+      const np = `models/${META.layer}/${META.name}.sql`;
+      if (curFile) { curFile = np; el("cur-file").textContent = np; }
+    }
+    await loadMeta(META.name);
+  } catch (e) {
+    toast("Could not save metadata: " + e.message, "bad");
+  } finally {
+    b.disabled = false;
+  }
+}
+
 // ---- wiring ------------------------------------------------------------- //
 el("health-recheck").onclick = runHealth;
+el("meta-save").onclick = saveMeta;
+el("meta-layer").onchange = syncLayerHint;
 el("new-model").onclick = () => startNew("model");
 el("new-test").onclick = () => startNew("test");
 el("new-mat").onchange = onMatChange;
+el("new-layer").onchange = onMatChange;
 el("editor").addEventListener("input", updateDirty);
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 el("file-save").onclick = saveFile;

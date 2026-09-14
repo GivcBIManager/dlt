@@ -10,6 +10,34 @@ macro-paths: ["macros"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  # Root of the Oasis Iceberg lake, read by the `iceberg_source` macro.
+  # NOTE: this path is resolved by the CLICKHOUSE SERVER on its own filesystem,
+  # not by the machine running dbt. Keep the trailing slash.
+  iceberg_root: '/var/lib/clickhouse/user_files/iceberg_output/oasis/'
+
 models:
   oasis:
     +materialized: table
+
+    # ------------------------------------------------------------------
+    # Layers.
+    #
+    # Folders classify models by their position in the DAG, not by name:
+    #   staging/      reads exactly ONE lake table, 1:1, rename/cast only
+    #   intermediate/ joins 2+ lake tables to assemble one business entity
+    #   marts/        built on top of other dbt models via ref()
+    #
+    # No `+schema:` is set on any layer ON PURPOSE. In dbt, adding a schema
+    # would rename the relations (default_staging.fact_doc etc.) and break
+    # every BI query already pointed at default.<model>. Folder placement and
+    # tags carry the classification; the physical table names never move.
+    # ------------------------------------------------------------------
+    staging:
+      +tags: ["staging"]
+
+    intermediate:
+      +tags: ["intermediate"]
+
+    marts:
+      +tags: ["marts"]

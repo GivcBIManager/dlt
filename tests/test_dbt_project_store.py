@@ -124,3 +124,37 @@ def test_create_without_content_falls_back_to_template(proj):
     out = ps.create_from_template("templated", "model", "view", content="")
     body = ps.read_file(out["path"])
     assert "materialized='view'" in body and "icebergLocal(" in body
+
+
+# --- layers ------------------------------------------------------------------ #
+# A model's layer is its folder under models/, so creation must put it in one.
+
+def test_create_model_lands_in_its_layer_folder(proj):
+    import dbt_project_store as ps
+    out = ps.create_from_template("fact_x", "model", "table", layer="marts")
+    assert out["path"] == "models/marts/fact_x.sql"
+
+
+def test_create_model_defaults_to_staging(proj):
+    import dbt_project_store as ps
+    assert ps.create_from_template("fact_y", "model")["path"] == "models/staging/fact_y.sql"
+
+
+def test_create_model_rejects_unknown_layer(proj):
+    import dbt_project_store as ps
+    with pytest.raises(ValueError, match="unknown layer"):
+        ps.create_from_template("fact_z", "model", layer="gold")
+
+
+def test_tests_ignore_layer(proj):
+    import dbt_project_store as ps
+    assert ps.create_from_template("assert_y", "test", layer="marts")["path"] == "tests/assert_y.sql"
+
+
+def test_model_template_reads_the_lake_through_the_macro(proj):
+    # iceberg_source() is what registers the lineage edge; a bare
+    # icebergLocal() call would leave the new model off the graph.
+    import dbt_project_store as ps
+    body = ps.template_for("model", "fact_x", "table", layer="intermediate")
+    assert "{{ iceberg_source(" in body
+    assert "models/intermediate/_intermediate__models.yml" in body

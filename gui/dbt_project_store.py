@@ -18,6 +18,10 @@ import dbt_config
 
 _ALLOWED_SUFFIX = {".sql", ".yml", ".yaml"}
 _ALLOWED_SUBDIRS = {"models", "tests", "macros"}
+# Layer folders under models/. A model must live in one of them: the folder is
+# what classifies it, and dbt_project.yml configures tags per layer.
+_LAYERS = ("staging", "intermediate", "marts")
+_DEFAULT_LAYER = "staging"
 
 # dbt's global default when a model declares no config(materialized=...).
 _DEFAULT_MATERIALIZATION = "view"
@@ -26,12 +30,18 @@ _MAT_RE = re.compile(r"materialized\s*=\s*['\"](\w+)['\"]")
 MODEL_TEMPLATE = """\
 -- {name}: materialize a local Iceberg table into a native ClickHouse table.
 --
--- WARNING: the icebergLocal(...) path is read by the CLICKHOUSE SERVER from its
--- own filesystem, not this host. Use a path valid on the ClickHouse host.
+-- Read the lake through iceberg_source('<table>') rather than calling
+-- icebergLocal() directly: the macro emits the same table function AND
+-- registers the table as a dbt source, which is what puts this model on the
+-- lineage graph. The table must be declared in
+-- models/staging/_oasis_lake__sources.yml first.
+--
+-- Document this model (description, tags, column tests) in
+-- models/{layer}/_{layer}__models.yml, or via the Metadata panel on this page.
 {{{{ config(materialized='{materialization}') }}}}
 
 select *
-from icebergLocal('/absolute/path/on/clickhouse/iceberg_output/oasis/CHANGE_ME')
+from {{{{ iceberg_source('CHANGE_ME') }}}}
 """
 
 TEST_TEMPLATE = """\
@@ -212,11 +222,13 @@ def _sanitize(name: str) -> str:
     return "".join(c for c in str(name or "").strip() if c.isalnum() or c in ("_", "-"))
 
 
-def template_for(kind: str, name: str = "", materialization: str = "table") -> str:
+def template_for(kind: str, name: str = "", materialization: str = "table",
+                 layer: str = _DEFAULT_LAYER) -> str:
     """Render the starter template for a new model/test (frontend preview)."""
     if kind == "model":
         stem = _sanitize(name) or "new_model"
-        return MODEL_TEMPLATE.format(name=stem, materialization=materialization or "table")
+        return MODEL_TEMPLATE.format(name=stem, materialization=materialization or "table",
+                                     layer=layer if layer in _LAYERS else _DEFAULT_LAYER)
     if kind == "test":
         stem = _sanitize(name) or "new_test"
         return TEST_TEMPLATE.format(name=stem)
@@ -224,12 +236,18 @@ def template_for(kind: str, name: str = "", materialization: str = "table") -> s
 
 
 def create_from_template(name: str, kind: str, materialization: str = "table",
-                         content: str | None = None) -> dict[str, Any]:
+                         content: str | None = None,
+                         layer: str = _DEFAULT_LAYER) -> dict[str, Any]:
     stem = _sanitize(name)
     if not stem:
         raise ValueError("name must be alphanumeric / underscore")
     if kind == "model":
-        rel = f"models/{stem}.sql"
+        # New models go into a layer folder, never models/ root: a model outside
+        # a layer picks up no layer tag and cannot be documented by the metadata
+        # editor, which addresses models by the layer folder they live in.
+        if layer not in _LAYERS:
+            raise ValueError(f"unknown layer {layer!r}; expected one of {list(_LAYERS)}")
+        rel = f"models/{layer}/{stem}.sql"
     elif kind == "test":
         rel = f"tests/{stem}.sql"
     else:
@@ -237,5 +255,6 @@ def create_from_template(name: str, kind: str, materialization: str = "table",
     if _resolve(rel).exists():
         raise ValueError(f"{rel} already exists")
     # Honor caller-supplied editor content; else fall back to the template.
-    body = content if (content and content.strip()) else template_for(kind, stem, materialization)
+    body = content if (content and content.strip()) else template_for(
+        kind, stem, materialization, layer)
     return write_file(rel, body)
