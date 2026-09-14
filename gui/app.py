@@ -207,7 +207,8 @@ def page_models():
 
 @app.route("/lineage")
 def page_lineage():
-    return render_template("lineage.html", active="lineage")
+    # Lineage is a subtab of the Models page now; keep old links working.
+    return redirect(url_for("page_models") + "#lineage")
 
 
 @app.route("/settings")
@@ -902,12 +903,32 @@ def api_dbt_docs_status():
     """Whether a docs site exists yet, and how stale it is."""
     from datetime import datetime
 
-    index = dbt_config.dbt_dir() / "target" / "index.html"
+    d = dbt_config.dbt_dir()
+    index = d / "target" / "index.html"
     if not index.exists():
         return jsonify({"exists": False})
-    st = index.stat()
-    return jsonify({"exists": True, "size": st.st_size,
-                    "generated": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")})
+    # Date the site by catalog.json: it is the one bundle file only `docs
+    # generate` writes (every dbt ls / run / compile rewrites manifest.json,
+    # and the Models page runs dbt ls), and it is written last.
+    catalog = d / "target" / "catalog.json"
+    stamp = (catalog if catalog.exists() else index).stat().st_mtime
+    return jsonify({"exists": True, "size": index.stat().st_size,
+                    "generated": datetime.fromtimestamp(stamp).isoformat(timespec="seconds"),
+                    "project": _dbt_project_name(d)})
+
+
+def _dbt_project_name(d: Path) -> str:
+    """The dbt project's `name`, which prefixes every node id (model.<name>.<model>).
+
+    The Lineage subtab needs it to deep-link the docs graph to one model.
+    """
+    import yaml
+
+    try:
+        doc = yaml.safe_load((d / "dbt_project.yml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    return str(doc.get("name") or "")
 
 
 # The dbt docs site is a static bundle written by `dbt docs generate` into

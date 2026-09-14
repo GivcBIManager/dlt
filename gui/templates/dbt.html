@@ -1,130 +1,189 @@
 {% extends "base.html" %}
 {% block content %}
+<div id="models-page">
 <div class="page-head">
   <h1><i class="fa-solid fa-cubes"></i> Models &amp; Tests</h1>
-  <p>Author dbt models that materialize the Iceberg lake into ClickHouse via <span class="mono">icebergLocal()</span>, then run &amp; test them. <b>Paths in icebergLocal() must be valid on the ClickHouse host.</b></p>
+  <p>Author dbt models that materialize the Iceberg lake into ClickHouse, document them, and trace their lineage.
+     Models read the lake through <span class="mono">iceberg_source('&lt;table&gt;')</span>; the lake root
+     (<span class="mono">iceberg_root</span> in <span class="mono">dbt_project.yml</span>) <b>must be a path on the ClickHouse host</b>.</p>
 </div>
 
-<!-- Connection health (settings live in the backend config files) -->
-<div class="panel" style="margin-bottom:18px">
-  <div class="panel-head"><h2><i class="fa-solid fa-heart-pulse"></i> Connection health</h2>
-    <div class="row-flex">
-      <span id="health-pill"></span>
-      <button class="btn sm" id="health-recheck"><i class="fa-solid fa-rotate"></i> Recheck</button>
+<!-- Page subtabs, with connection health tucked into the same bar -->
+<div class="models-bar">
+  <div class="seg" role="tablist" aria-label="Models page sections">
+    <button class="btn tab page-tab primary" data-tab="develop" role="tab" aria-selected="true">
+      <i class="fa-solid fa-code"></i> Develop</button>
+    <button class="btn tab page-tab" data-tab="lineage" role="tab" aria-selected="false">
+      <i class="fa-solid fa-diagram-project"></i> Lineage</button>
+  </div>
+  <div class="health-inline" title="ClickHouse &amp; dbt settings live in .dlt/secrets.toml and config.toml">
+    <span>ClickHouse</span><span id="health-pill"></span>
+    <button class="btn sm ghost" id="health-recheck" title="Re-run dbt debug"><i class="fa-solid fa-rotate"></i></button>
+  </div>
+</div>
+<details id="health-detail" class="panel" style="display:none">
+  <summary class="hint">Connection check failed — show diagnostics</summary>
+  <pre id="health-output" class="mono" style="white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
+</details>
+
+<!-- ===================== Develop ===================== -->
+<section data-page-panel="develop">
+
+<div class="panel" id="editor-panel">
+  <div class="panel-head me-head">
+    <div class="me-title">
+      <span class="me-icon"><i id="me-icon" class="fa-solid fa-file-code"></i></span>
+      <div style="min-width:0;flex:1">
+        <div class="me-name">
+          <span id="me-name">No file open</span>
+          <span id="me-layer" class="layer-badge" hidden></span>
+          <span id="me-mat" class="tag" hidden></span>
+          <span id="dirty-dot" title="Unsaved changes" style="color:var(--warning)" hidden>●</span>
+        </div>
+        <div id="cur-file" class="me-path mono muted"></div>
+        <div id="new-fields" class="row-flex" style="display:none;margin-top:8px;flex-wrap:wrap;gap:6px">
+          <span id="new-prefix" class="mono muted">models/</span>
+          <select id="new-layer" style="width:auto" title="Layer: the folder the model lives in">
+            <option value="staging">staging</option>
+            <option value="intermediate">intermediate</option>
+            <option value="marts">marts</option>
+          </select>
+          <span id="new-sep" class="mono muted">/</span>
+          <input id="new-name" placeholder="file_name" style="width:220px" spellcheck="false">
+          <span class="mono muted">.sql</span>
+          <select id="new-mat" style="width:auto" title="Materialization">
+            <option value="table">table</option>
+            <option value="view">view</option>
+            <option value="incremental">incremental</option>
+            <option value="ephemeral">ephemeral</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="me-toolbar">
+      <button class="btn sm primary" id="btn-run"><i class="fa-solid fa-play"></i> Run</button>
+      <button class="btn sm" id="btn-test"><i class="fa-solid fa-vial"></i> Test</button>
+      <button class="btn sm ghost" id="btn-compile">Compile</button>
+      <button class="btn sm ghost" id="btn-debug">Debug</button>
+      <span class="sep"></span>
+      <button class="btn sm bad" id="btn-del" title="Delete this file" aria-label="Delete this file">
+        <i class="fa-solid fa-trash"></i></button>
+      <button class="btn sm primary" id="file-save" title="Save (Ctrl+S)">
+        <i class="fa-solid fa-floppy-disk"></i> Save</button>
     </div>
   </div>
-  <div class="hint">ClickHouse &amp; dbt settings are configured in the backend config files
-    (<span class="mono">.dlt/secrets.toml</span>, <span class="mono">config.toml</span>).</div>
-  <details id="health-detail" style="display:none;margin-top:8px">
-    <summary class="hint">Show diagnostics</summary>
-    <pre id="health-output" class="mono" style="white-space:pre-wrap;max-height:200px;overflow:auto"></pre>
-  </details>
+
+  <div class="me-tabs-row">
+    <div class="seg me-tabs" role="tablist" aria-label="Editor view">
+      <button class="btn tab sm me-tab primary" data-me="sql" role="tab">
+        <i class="fa-solid fa-code"></i> SQL <span class="tab-dot" id="sql-dot" hidden>●</span></button>
+      <button class="btn tab sm me-tab" data-me="meta" role="tab" disabled>
+        <i class="fa-solid fa-tags"></i> Metadata <span class="tab-dot" id="meta-dot" hidden>●</span></button>
+    </div>
+    <button class="btn sm ghost" id="me-lineage" disabled title="Open a model to see its lineage">
+      <i class="fa-solid fa-diagram-project"></i> View lineage</button>
+  </div>
+
+  <!-- SQL -->
+  <div data-me-pane="sql">
+    <textarea id="editor" class="mono" spellcheck="false"
+      placeholder="-- the file's SQL appears here"></textarea>
+  </div>
+
+  <!-- Metadata: writes models/<layer>/_<layer>__models.yml -->
+  <div data-me-pane="meta" hidden>
+    <label>Layer</label>
+    <div class="layer-picker" id="meta-layers"></div>
+    <div id="meta-move" class="banner warn" style="margin-top:10px" hidden></div>
+    <div class="hint">Saved to <span class="mono" id="meta-file"></span>. The layer is the folder the
+      model lives in — its ClickHouse table name never changes.</div>
+
+    <div class="me-grid me-section">
+      <div>
+        <label for="meta-tag-entry">Tags <small>— select with dbt run --select tag:&lt;name&gt;</small></label>
+        <div class="tag-input" id="meta-tags">
+          <input id="meta-tag-entry" placeholder="Add a tag, press Enter" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="tag-suggest" id="meta-tag-suggest"></div>
+      </div>
+      <div>
+        <label>Documentation coverage</label>
+        <div class="me-stats" id="meta-stats"></div>
+      </div>
+    </div>
+
+    <div class="me-section">
+      <label for="meta-desc">Description <small>— shown on this model's page in the docs site</small></label>
+      <textarea id="meta-desc" class="prose" rows="4"
+        placeholder="What one row means, the grain, and any trap a report author should know."></textarea>
+    </div>
+
+    <div class="me-section me-cols">
+      <label>Columns</label>
+      <div class="me-cols-bar">
+        <input type="search" id="meta-col-filter" placeholder="Filter columns…" spellcheck="false">
+        <button type="button" class="chip" id="meta-col-undoc">Undocumented only</button>
+        <span class="muted" id="meta-col-note" style="margin-left:auto;font-size:.8rem"></span>
+      </div>
+      <div id="meta-columns" class="table-wrap" style="max-height:440px"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn sm ghost" id="meta-revert"><i class="fa-solid fa-rotate-left"></i> Revert metadata</button>
+    </div>
+  </div>
 </div>
 
-<!-- editor + actions -->
 <div class="panel">
-  <div class="panel-head">
-    <h2 style="flex:1">Editor <span id="cur-file" class="mono muted">— no file —</span><span id="dirty-dot" title="Unsaved changes" style="color:var(--warning);margin-left:6px" hidden>●</span>
-      <span id="new-fields" class="row-flex" style="display:none">
-        <span id="new-prefix" class="mono muted">models/</span>
-        <select id="new-layer" title="layer (which folder the model lives in)">
-          <option value="staging">staging</option>
-          <option value="intermediate">intermediate</option>
-          <option value="marts">marts</option>
-        </select>
-        <span class="mono muted">/</span>
-        <input id="new-name" placeholder="file_name" style="width:170px" spellcheck="false">
-        <span class="mono muted">.sql</span>
-        <select id="new-mat" title="materialization">
-          <option value="table">table</option>
-          <option value="view">view</option>
-          <option value="incremental">incremental</option>
-          <option value="ephemeral">ephemeral</option>
-        </select>
-      </span>
-    </h2>
-    <button class="btn sm primary" id="file-save"><i class="fa-solid fa-floppy-disk"></i> Save file</button>
-  </div>
-  <textarea id="editor" class="mono" style="width:100%;min-height:320px" spellcheck="false"
-    placeholder="Select a model or test below, or create a new one."></textarea>
-  <div class="btn-row">
-    <button class="btn primary" id="btn-run"><i class="fa-solid fa-play"></i> Run</button>
-    <button class="btn" id="btn-test"><i class="fa-solid fa-vial"></i> Test</button>
-    <button class="btn ghost" id="btn-compile">Compile</button>
-    <button class="btn ghost" id="btn-debug">Debug</button>
-    <button class="btn bad sm" id="btn-del"><i class="fa-solid fa-trash"></i> Delete</button>
-  </div>
-</div>
-
-<!-- output -->
-
-<!-- Model metadata: layer, tags, description and per-column data tests.
-     Writes into models/<layer>/_<layer>__models.yml, the schema file dbt reads
-     for documentation and tests. -->
-<div class="panel" id="meta-panel" style="margin-bottom:18px" hidden>
-  <div class="panel-head">
-    <h2><i class="fa-solid fa-tags"></i> Metadata <span id="meta-model" class="mono muted"></span></h2>
-    <div class="row-flex">
-      <a class="btn sm ghost" href="/lineage" title="Open the lineage graph">
-        <i class="fa-solid fa-diagram-project"></i> Lineage</a>
-      <button class="btn sm primary" id="meta-save"><i class="fa-solid fa-floppy-disk"></i> Save metadata</button>
-    </div>
-  </div>
-
-  <div class="hint">
-    Saved to <span class="mono" id="meta-file"></span>. Changing the layer moves the
-    <span class="mono">.sql</span> file into that folder — it does <b>not</b> rename the table in
-    ClickHouse, so reports pointed at <span class="mono">default.&lt;model&gt;</span> keep working.
-  </div>
-
-  <div class="grid-2" style="margin-top:12px">
-    <div>
-      <label for="meta-layer">Layer</label>
-      <select id="meta-layer" style="width:100%"></select>
-      <div class="hint" id="meta-layer-hint"></div>
-    </div>
-    <div>
-      <label for="meta-tags">Tags <span class="muted">(comma separated)</span></label>
-      <input id="meta-tags" style="width:100%" spellcheck="false"
-             placeholder="finance, revenue, incremental">
-      <div class="hint">Select with <span class="mono">dbt run --select tag:finance</span>.
-        The layer tag is added automatically.</div>
-    </div>
-  </div>
-
-  <div style="margin-top:12px">
-    <label for="meta-desc">Description <span class="muted">(shown in the docs site)</span></label>
-    <textarea id="meta-desc" style="width:100%;min-height:90px" spellcheck="false"
-              placeholder="What one row means, the grain, and any trap a report author should know."></textarea>
-  </div>
-
-  <div style="margin-top:12px">
-    <div class="row-flex" style="justify-content:space-between">
-      <label>Columns <span class="muted">— description and data tests</span></label>
-      <span class="muted" id="meta-col-note"></span>
-    </div>
-    <div id="meta-columns" class="table-wrap" style="max-height:340px"></div>
-  </div>
-</div>
-
-<div class="panel">
-  <div class="panel-head"><h2>Output <span id="run-status"></span></h2></div>
+  <div class="panel-head"><h2><i class="fa-solid fa-terminal"></i> Output <span id="run-status"></span></h2></div>
   <div id="dbt-tail-banner" class="banner warn" role="status" hidden></div>
   <div id="dbt-console" class="console">Run a model or test to see output…</div>
 </div>
 
-<!-- model / test lists (below the editor) -->
-<div class="grid-2">
+<div class="grid-2 dbt-lists">
   <div class="panel">
-    <div class="panel-head"><h2>Models <span id="m-count" class="tag"></span></h2>
+    <div class="panel-head"><h2><i class="fa-solid fa-cube"></i> Models <span id="m-count" class="tag"></span></h2>
       <button class="btn sm" id="new-model"><i class="fa-solid fa-plus"></i> New model</button></div>
     <div id="models-list"></div>
   </div>
   <div class="panel">
-    <div class="panel-head"><h2>Tests <span id="t-count" class="tag"></span></h2>
+    <div class="panel-head"><h2><i class="fa-solid fa-vial"></i> Tests <span id="t-count" class="tag"></span></h2>
       <button class="btn sm" id="new-test"><i class="fa-solid fa-plus"></i> New test</button></div>
     <div id="tests-list"></div>
   </div>
+</div>
+</section>
+
+<!-- ===================== Lineage ===================== -->
+<section data-page-panel="lineage" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <h2><i class="fa-solid fa-diagram-project"></i> Lineage &amp; documentation</h2>
+      <div class="row-flex" style="flex-wrap:wrap;gap:8px">
+        <span id="docs-status" class="muted" style="font-size:.8rem"></span>
+        <button class="btn sm ghost" id="docs-focus" hidden title="Center the graph on the open model">
+          <i class="fa-solid fa-crosshairs"></i> <span></span></button>
+        <button class="btn sm ghost" id="docs-all"><i class="fa-solid fa-expand"></i> Whole project</button>
+        <a class="btn sm ghost" id="docs-open" href="/dbt-docs/" target="_blank" rel="noopener">
+          <i class="fa-solid fa-arrow-up-right-from-square"></i> New tab</a>
+        <button class="btn sm primary" id="docs-regen"><i class="fa-solid fa-rotate"></i> Regenerate</button>
+      </div>
+    </div>
+    <div class="hint" style="margin:-6px 0 12px">
+      Regenerate after editing models or metadata: it re-reads every model, source and test and asks
+      ClickHouse for column types. In the graph, click a node to open its docs page.
+    </div>
+    <div id="docs-missing" class="banner warn" hidden>
+      No docs site has been generated yet — click <b>Regenerate</b> to build it.</div>
+    <details id="docs-log" style="margin-bottom:12px" hidden>
+      <summary class="hint">dbt docs generate <span id="docs-run-status"></span></summary>
+      <div id="docs-console" class="console" style="max-height:220px"></div>
+    </details>
+    <!-- The docs bundle is a self-contained SPA; it is framed rather than
+         re-implemented so it stays whatever the installed dbt version ships. -->
+    <iframe id="docs-frame" class="docs-frame" title="dbt documentation and lineage graph" hidden></iframe>
+  </div>
+</section>
 </div>
 {% endblock %}
 
@@ -151,6 +210,28 @@ function reconnectDbtTail(id) {
   dbtPoller.start();
 }
 
+// The open file is a model (and so has metadata and lineage) only when it is a
+// .sql under models/ -- tests, macros and schema .yml files are not.
+function curModel() {
+  return curFile && curFile.startsWith("models/") && curFile.endsWith(".sql") ? curSel : null;
+}
+
+// ---- page subtabs: Develop | Lineage ------------------------------------ //
+// The active tab lives in the URL hash so /models#lineage deep-links (the old
+// /lineage page redirects there) and a reload keeps you where you were.
+const PAGE_TABS = ["develop", "lineage"];
+function showPageTab(tab, focus) {
+  if (!PAGE_TABS.includes(tab)) tab = "develop";
+  $$(".page-tab").forEach(b => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle("primary", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  $$("[data-page-panel]").forEach(s => { s.hidden = s.dataset.pagePanel !== tab; });
+  if (location.hash !== "#" + tab) history.replaceState(null, "", "#" + tab);
+  if (tab === "lineage") showLineage(focus);
+}
+
 // ---- connection health (auto dbt debug on load) ------------------------- //
 function healthPill(cls, label) { return `<span class="pill ${cls}">${esc(label)}</span>`; }
 async function runHealth() {
@@ -170,25 +251,42 @@ async function runHealth() {
 }
 
 // ---- model / test lists ------------------------------------------------- //
-function renderFileTable(rows, emptyMsg) {
+// Fixed column widths (colgroup + table-layout:fixed) keep both tables the same
+// shape. The name column takes the rest and wraps at underscores rather than
+// ellipsising: generic-test names share long prefixes (not_null_fact_...), so a
+// truncated list is a column of identical stubs. "Created" is intentionally
+// gone: on Linux st_ctime is the last metadata change, not creation.
+const shortStamp = (s) => String(s).replace("T", " ").slice(0, 16);
+const wrapAtUnderscores = (s) => esc(s).replace(/_/g, "_<wbr>");
+function renderFileTable(rows, emptyMsg, kind) {
   if (!rows || !rows.length) return `<div class="muted">${esc(emptyMsg)}</div>`;
-  const head = `<thead><tr><th>Name</th><th>Type</th><th>Modified</th><th>Created</th><th class="num">Size</th></tr></thead>`;
-  const body = rows.map(x => `<tr>
-    <td><button class="btn sm ghost dbt-open" data-path="${esc(x.path)}" data-name="${esc(x.name)}">${esc(x.name)}</button></td>
-    <td>${x.type ? `<span class="tag">${esc(x.type)}</span>` : "—"}</td>
-    <td class="mono">${fmtDate(x.modified)}</td>
-    <td class="mono">${fmtDate(x.created)}</td>
-    <td class="num">${x.size == null ? "—" : fmtBytes(x.size)}</td>
-  </tr>`).join("");
-  return `<div class="table-wrap" style="max-height:260px"><table>${head}<tbody>${body}</tbody></table></div>`;
+  const cols = `<colgroup><col><col style="width:104px"><col style="width:146px"><col style="width:72px"></colgroup>`;
+  const head = `<thead><tr><th>Name</th><th>Type</th><th>Modified</th><th class="num">Size</th></tr></thead>`;
+  const body = rows.map(x => {
+    // Generic tests come from `dbt ls` and have no file of their own.
+    const type = x.type || (kind === "test" ? "generic" : "");
+    const active = x.path === curFile && x.name === curSel;
+    return `<tr${active ? ' class="active"' : ""}>
+      <td class="fname"><button class="dbt-open" data-path="${esc(x.path)}" data-name="${esc(x.name)}"
+          title="${esc(x.path)}">${wrapAtUnderscores(x.name)}</button></td>
+      <td>${type ? `<span class="tag">${esc(type)}</span>` : "—"}</td>
+      <td class="mono stamp" title="${esc(x.modified || "")}">${x.modified ? esc(shortStamp(x.modified)) : "—"}</td>
+      <td class="num">${x.size == null ? "—" : fmtBytes(x.size)}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="table-wrap"><table>${cols}${head}<tbody>${body}</tbody></table></div>`;
+}
+function renderLists() {
+  el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
+  el("models-list").innerHTML = renderFileTable(MODELS, "No models yet.", "model");
+  el("tests-list").innerHTML = renderFileTable(TESTS, "No tests yet.", "test");
 }
 async function loadLists() {
   try {
     const [m, t] = [await apiGet("/api/dbt/models"), await apiGet("/api/dbt/tests")];
     MODELS = m.models || []; TESTS = t.tests || [];
-    el("m-count").textContent = MODELS.length; el("t-count").textContent = TESTS.length;
-    el("models-list").innerHTML = renderFileTable(MODELS, "No models yet.");
-    el("tests-list").innerHTML = renderFileTable(TESTS, "No tests yet.");
+    renderLists();
+    setHeader();
   } catch (e) {
     // Don't leave the panels silently blank on an API failure.
     el("models-list").innerHTML =
@@ -199,26 +297,74 @@ async function loadLists() {
   }
 }
 
-// ---- editor: open / save / new / delete --------------------------------- //
-// Dirty-state guard: never silently discard unsaved edits.
+// ---- editor header + inner tabs (SQL | Metadata) ------------------------ //
+function setHeader() {
+  const hasFile = !!curFile;
+  el("me-name").textContent = newKind ? `New ${newKind}` : (hasFile ? curSel : "No file open");
+  el("cur-file").textContent = hasFile ? curFile
+    : (newKind ? "" : "Select a model or test below, or create a new one.");
+
+  const badge = el("me-layer");
+  badge.hidden = !META;
+  if (META) { badge.className = "layer-badge " + META.layer; badge.textContent = META.layer; }
+  const m = hasFile ? MODELS.find(x => x.path === curFile) : null;
+  el("me-mat").hidden = !(m && m.type);
+  if (m && m.type) el("me-mat").textContent = m.type;
+
+  const yml = hasFile && /\.ya?ml$/.test(curFile);
+  const kind = newKind || (!hasFile ? "" : yml ? "yml" : curFile.startsWith("tests/") ? "test" : "model");
+  el("me-icon").className = "fa-solid " +
+    ({ model: "fa-cube", test: "fa-vial", yml: "fa-file-lines" }[kind] || "fa-file-code");
+
+  // A schema .yml holds the docs and tests of every model in its layer. It is
+  // what a generic test "opens", and deleting it from here would wipe them all.
+  const del = el("btn-del");
+  del.disabled = !hasFile || yml;
+  del.title = yml ? "Schema files document every model in their layer — edit them here, don't delete them"
+                  : "Delete this file";
+}
+
+let meTab = "sql";
+function showMeTab(tab) {
+  if (tab === "meta" && !META) tab = "sql";
+  meTab = tab;
+  $$(".me-tab").forEach(b => b.classList.toggle("primary", b.dataset.me === tab));
+  $$("[data-me-pane]").forEach(p => { p.hidden = p.dataset.mePane !== tab; });
+}
+function syncMeTabs() {
+  const metaBtn = document.querySelector('.me-tab[data-me="meta"]');
+  metaBtn.disabled = !META;
+  metaBtn.title = META ? "Layer, tags, description and column tests"
+                       : "Metadata applies to models in a layer folder";
+  el("me-lineage").disabled = !curModel();
+  if (!META && meTab === "meta") showMeTab("sql");
+}
+
+// ---- dirty tracking: SQL and metadata are saved together ---------------- //
 let savedContent = "";
-function isDirty() { const e = el("editor"); return !!e && e.value !== savedContent; }
-function updateDirty() { const d = el("dirty-dot"); if (d) d.hidden = !isDirty(); }
+function sqlDirty() { return el("editor").value !== savedContent; }
+function anyDirty() { return sqlDirty() || metaDirty(); }
+function updateDirty() {
+  el("sql-dot").hidden = !sqlDirty();
+  el("meta-dot").hidden = !metaDirty();
+  el("dirty-dot").hidden = !anyDirty();
+}
 function setEditor(content) { el("editor").value = content; savedContent = content; updateDirty(); }
 function markClean() { savedContent = el("editor").value; updateDirty(); }
 function confirmDiscard() {
-  return !isDirty() || confirm("Discard unsaved changes to the current file?");
+  return !anyDirty() || confirm("Discard unsaved changes to the current file and its metadata?");
 }
 
+// ---- open / new / save / delete ----------------------------------------- //
 async function openFile(path, name) {
   if (!confirmDiscard()) return;
   exitNew();
-  try { const r = await apiGet("/api/dbt/file?path=" + encodeURIComponent(path));
-    curFile = path; curSel = name; el("cur-file").textContent = path;
+  try {
+    const r = await apiGet("/api/dbt/file?path=" + encodeURIComponent(path));
+    curFile = path; curSel = name;
     setEditor(r.content);
-    // Metadata only exists for models in a layer folder; loadMeta hides the
-    // panel for tests, macros and anything else opened here.
-    loadMeta(path.startsWith("models/") && path.endsWith(".sql") ? name : null);
+    await loadMeta(curModel());
+    setHeader(); renderLists();
   } catch (e) { err(e.message); }
 }
 
@@ -226,22 +372,21 @@ function exitNew() {
   newKind = null;
   el("new-fields").style.display = "none";
   el("cur-file").style.display = "";
-  el("file-save").innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save file';
+  el("file-save").innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save';
 }
 
 async function startNew(kind) {
   if (!confirmDiscard()) return;
   newKind = kind; curFile = null; curSel = null;
   // A file that does not exist yet has no metadata block to edit.
-  META = null; el("meta-panel").hidden = true;
+  META = null; metaSnap = null;
+  showMeTab("sql"); syncMeTabs(); setHeader(); renderLists();
   el("cur-file").style.display = "none";
   el("new-fields").style.display = "";
   el("new-prefix").textContent = kind === "model" ? "models/" : "tests/";
-  el("new-mat").style.display = kind === "model" ? "" : "none";
   // Tests live in tests/ and have no layer; only models are classified.
-  el("new-layer").style.display = kind === "model" ? "" : "none";
-  el("new-layer").nextElementSibling.style.display = kind === "model" ? "" : "none";
-  el("file-save").innerHTML = '<i class="fa-solid fa-plus"></i> Create file';
+  ["new-mat", "new-layer", "new-sep"].forEach(id => { el(id).style.display = kind === "model" ? "" : "none"; });
+  el("file-save").innerHTML = '<i class="fa-solid fa-plus"></i> Create';
   el("new-name").value = "";
   try {
     const mat = el("new-mat").value || "table";
@@ -269,11 +414,24 @@ async function onMatChange() {
   }
 }
 
-async function saveFile() {
+// One Save for both halves. SQL goes first: a layer change in the metadata
+// moves the .sql file, so the edit must land at the old path before the move.
+async function saveAll() {
   if (newKind) return createNew();
   if (!curFile) return err("No file open");
-  try { await apiPut("/api/dbt/file", { path: curFile, content: el("editor").value }); ok("Saved " + curFile); markClean(); }
-  catch (e) { err(e.message); }
+  const doSql = sqlDirty(), doMeta = metaDirty();
+  if (!doSql && !doMeta) { ok("Nothing to save"); return; }
+  const b = el("file-save");
+  b.disabled = true;
+  try {
+    if (doSql) { await apiPut("/api/dbt/file", { path: curFile, content: el("editor").value }); markClean(); }
+    if (doMeta) await saveMeta(doSql);
+    else ok("Saved " + curFile);
+  } catch (e) {
+    err("Save failed: " + e.message);
+  } finally {
+    b.disabled = false;
+  }
 }
 
 async function createNew() {
@@ -286,15 +444,22 @@ async function createNew() {
     const r = await apiPost("/api/dbt/file",
                             { name, kind, materialization, layer, content: el("editor").value });
     ok("Created " + r.path);
+    markClean();
     await loadLists();
     openFile(r.path, name);
   } catch (e) { err(e.message); }
 }
 
 async function delFile() {
-  if (!curFile || !confirm("Delete " + curFile + "?")) return;
-  try { await apiDel("/api/dbt/file?path=" + encodeURIComponent(curFile)); ok("Deleted");
-    curFile = null; curSel = null; setEditor(""); el("cur-file").textContent = "— no file —"; loadLists();
+  if (!curFile) return;
+  const extra = curModel() ? "\n\nIts description, tags and column tests are removed too." : "";
+  if (!confirm(`Delete ${curFile}?${extra}`)) return;
+  try {
+    await apiDel("/api/dbt/file?path=" + encodeURIComponent(curFile));
+    ok("Deleted " + curFile);
+    curFile = null; curSel = null; META = null; metaSnap = null;
+    setEditor(""); showMeTab("sql"); syncMeTabs(); setHeader();
+    loadLists(); loadTagPool();
   } catch (e) { err(e.message); }
 }
 
@@ -337,124 +502,278 @@ function tailRun(id) {
 }
 
 // ---- model metadata ----------------------------------------------------- //
-let META = null;          // last loaded metadata for the open model
+let META = null;          // metadata for the open model, as last loaded/saved
 let META_TESTS = [];      // column-level tests the backend accepts
+let META_LAYERS = [];     // layer folders, in DAG order
+let META_CATALOG = [];    // real columns/types from the docs catalog
+let metaSnap = null;      // serialized form state at load/save, for dirty checks
+let metaLayer = null;     // layer picked in the form (may differ from META.layer)
+let metaTags = [];        // tags in the form
+let TAG_POOL = [];        // every tag used on any model, most used first
+let undocOnly = false;
 
-const LAYER_HINTS = {
-  staging: "Reads exactly one Iceberg lake table, 1:1 — rename/cast only, no joins.",
-  intermediate: "Joins two or more lake tables to assemble one business entity.",
-  marts: "Built on other dbt models via ref(). This is what BI should point at.",
+const LAYER_INFO = {
+  staging: { icon: "fa-inbox", rule: "Reads exactly one lake table, 1:1 — rename and cast only, no joins." },
+  intermediate: { icon: "fa-code-merge", rule: "Joins two or more lake tables to assemble one business entity." },
+  marts: { icon: "fa-chart-simple", rule: "Built on other dbt models via ref(). What BI should point at." },
 };
 
-function renderMetaColumns(cols, catalog) {
-  // Columns the model actually has (from the docs catalog) but that carry no
-  // documentation yet are appended, so they can be filled in without retyping.
-  const known = new Set(cols.map(c => c.name));
-  const extra = (catalog || []).filter(c => !known.has(c.name))
-                               .map(c => ({ name: c.name, description: "", tests: [], _new: true }));
-  const all = cols.concat(extra);
-  if (!all.length) return `<div class="muted">No columns. Generate docs to list them.</div>`;
+function metaState() {
+  if (!META) return null;
+  const columns = $$("#meta-columns tr[data-col]").map(tr => ({
+    name: tr.dataset.col,
+    description: tr.querySelector(".meta-col-desc").value.trim(),
+    tests: $$(".meta-col-test", tr).filter(b => b.checked).map(b => b.dataset.test),
+  }));
+  return { name: META.name, layer: metaLayer, tags: [...metaTags],
+           description: el("meta-desc").value.trim(), columns };
+}
+function metaDirty() { return !!META && metaSnap !== null && JSON.stringify(metaState()) !== metaSnap; }
 
-  const types = Object.fromEntries((catalog || []).map(c => [c.name, c.type]));
-  const head = `<thead><tr><th>Column</th><th>Type</th><th>Description</th>` +
-               META_TESTS.map(t => `<th class="num">${esc(t)}</th>`).join("") + `</tr></thead>`;
-  const body = all.map((c, i) => `<tr${c._new ? ' class="muted"' : ""}>
-    <td class="mono">${esc(c.name)}</td>
-    <td class="mono muted">${esc(types[c.name] || "—")}</td>
-    <td><input class="meta-col-desc" data-i="${i}" value="${esc(c.description || "")}"
-               style="width:100%" spellcheck="false"></td>
-    ${META_TESTS.map(t => `<td class="num"><input type="checkbox" class="meta-col-test"
-        data-i="${i}" data-test="${esc(t)}" ${(c.tests || []).includes(t) ? "checked" : ""}></td>`).join("")}
-  </tr>`).join("");
-  META._rendered = all;
-  return `<table>${head}<tbody>${body}</tbody></table>`;
+function renderLayers() {
+  el("meta-layers").innerHTML = META_LAYERS.map(l => {
+    const info = LAYER_INFO[l] || { icon: "fa-folder", rule: "" };
+    const on = l === metaLayer;
+    return `<button type="button" class="layer-card ${esc(l)}${on ? " on" : ""}" data-layer="${esc(l)}" aria-pressed="${on}">
+      <div class="lc-name"><i class="fa-solid ${info.icon}"></i> ${esc(l)}${l === META.layer
+        ? ' <span class="muted" style="font-weight:500;font-size:11px">· current</span>' : ""}</div>
+      <div class="lc-rule">${esc(info.rule)}</div>
+    </button>`;
+  }).join("");
+  const moving = metaLayer !== META.layer, mv = el("meta-move");
+  mv.hidden = !moving;
+  if (moving) {
+    mv.innerHTML = `Saving moves <span class="mono">models/${esc(META.layer)}/${esc(META.name)}.sql</span> →
+      <span class="mono">models/${esc(metaLayer)}/${esc(META.name)}.sql</span>. The ClickHouse table
+      <span class="mono">${esc(META.name)}</span> keeps its name.`;
+  }
+  el("meta-file").textContent = `models/${metaLayer}/_${metaLayer}__models.yml`;
+  renderTags();  // the fixed layer chip follows the picked layer
 }
 
-function syncLayerHint() {
-  el("meta-layer-hint").textContent = LAYER_HINTS[el("meta-layer").value] || "";
+function renderTags() {
+  const box = el("meta-tags"), entry = el("meta-tag-entry");
+  $$(".tag-chip", box).forEach(c => c.remove());
+  // The layer tag is applied project-wide by dbt_project.yml, so it is shown
+  // but cannot be removed here.
+  const fixed = metaLayer
+    ? `<span class="tag-chip fixed" title="Added to every ${esc(metaLayer)} model by dbt_project.yml">${esc(metaLayer)}</span>` : "";
+  const chips = metaTags.map((t, i) =>
+    `<span class="tag-chip">${esc(t)}<button type="button" data-rm="${i}" aria-label="Remove tag ${esc(t)}">×</button></span>`).join("");
+  entry.insertAdjacentHTML("beforebegin", fixed + chips);
+  const sugg = TAG_POOL.filter(t => !metaTags.includes(t) && !META_LAYERS.includes(t)).slice(0, 8);
+  el("meta-tag-suggest").innerHTML = sugg.length
+    ? `<span class="hint" style="margin:0">Used on other models:</span>` +
+      sugg.map(t => `<button type="button" class="chip" data-add="${esc(t)}">+ ${esc(t)}</button>`).join("")
+    : "";
+}
+function addTag(raw) {
+  // Spaces would break `--select tag:<name>`, so they become underscores.
+  const t = String(raw || "").trim().replace(/\s+/g, "_");
+  if (!t || metaTags.includes(t) || META_LAYERS.includes(t)) return;
+  metaTags.push(t); renderTags(); updateDirty();
+}
+
+function renderMetaColumns() {
+  // Columns the table actually has (from the docs catalog) but that carry no
+  // documentation yet are listed too, so they can be filled in without retyping.
+  const cols = META.columns || [];
+  const known = new Set(cols.map(c => c.name));
+  const all = cols.concat(META_CATALOG.filter(c => !known.has(c.name))
+                                      .map(c => ({ name: c.name, description: "", tests: [] })));
+  if (!all.length) {
+    el("meta-columns").innerHTML = `<div class="muted" style="padding:14px">No columns known yet — run
+      <b>Regenerate</b> on the Lineage tab to read them from ClickHouse.</div>`;
+    return;
+  }
+  const types = Object.fromEntries(META_CATALOG.map(c => [c.name, c.type]));
+  const cg = `<colgroup><col style="width:24%"><col style="width:17%"><col>` +
+             META_TESTS.map(() => '<col style="width:88px">').join("") + `</colgroup>`;
+  const head = `<thead><tr><th>Column</th><th>Type</th><th>Description</th>` +
+               META_TESTS.map(t => `<th class="ck">${esc(t)}</th>`).join("") + `</tr></thead>`;
+  const body = all.map(c => {
+    const undoc = !c.description && !(c.tests || []).length;
+    const ty = types[c.name] || "";
+    return `<tr data-col="${esc(c.name)}"${undoc ? ' class="undoc"' : ""}>
+      <td class="cname mono" title="${esc(c.name)}">${esc(c.name)}</td>
+      <td class="mono muted" title="${esc(ty)}" style="overflow:hidden;text-overflow:ellipsis">${esc(ty || "—")}</td>
+      <td><input class="meta-col-desc" value="${esc(c.description || "")}" placeholder="What this column means"
+                 spellcheck="false" aria-label="Description of ${esc(c.name)}"></td>
+      ${META_TESTS.map(t => `<td class="ck"><input type="checkbox" class="meta-col-test" data-test="${esc(t)}"
+          aria-label="${esc(t)} test on ${esc(c.name)}"${(c.tests || []).includes(t) ? " checked" : ""}></td>`).join("")}
+    </tr>`;
+  }).join("");
+  el("meta-columns").innerHTML = `<table>${cg}${head}<tbody>${body}</tbody></table>`;
+  applyColFilter();
+}
+
+function applyColFilter() {
+  const q = el("meta-col-filter").value.trim().toLowerCase();
+  $$("#meta-columns tr[data-col]").forEach(tr => {
+    tr.hidden = !((!q || tr.dataset.col.toLowerCase().includes(q)) &&
+                  (!undocOnly || tr.classList.contains("undoc")));
+  });
+  el("meta-col-undoc").classList.toggle("on", undocOnly);
+  updateStats();
+}
+
+function updateStats() {
+  if (!META) return;
+  const rows = $$("#meta-columns tr[data-col]");
+  const total = rows.length, shown = rows.filter(tr => !tr.hidden).length;
+  const described = rows.filter(tr => tr.querySelector(".meta-col-desc").value.trim()).length;
+  const tested = rows.filter(tr => $$(".meta-col-test", tr).some(b => b.checked)).length;
+  const pct = total ? Math.round(100 * described / total) : 0;
+  const grain = (META.grain || []).join(", ");
+  el("meta-stats").innerHTML = `
+    <div class="me-stat"><div class="k">Described</div>
+      <div class="v">${described}<small> / ${total}</small></div>
+      <div class="me-bar"><span style="width:${pct}%"></span></div></div>
+    <div class="me-stat"><div class="k">Tested</div>
+      <div class="v">${tested}<small> col${tested === 1 ? "" : "s"}</small></div></div>
+    <div class="me-stat" title="${esc(grain ? "unique_combination_final on (" + grain + ")" : "No model-level uniqueness test")}">
+      <div class="k">Grain</div><div class="v mono">${grain ? wrapAtUnderscores(grain) : "—"}</div></div>`;
+  el("meta-col-note").textContent = shown === total ? `${total} columns` : `${shown} of ${total} columns`;
 }
 
 async function loadMeta(name) {
-  const panel = el("meta-panel");
-  if (!name) { panel.hidden = true; META = null; return; }
-  try {
-    const r = await apiGet("/api/dbt/meta?name=" + encodeURIComponent(name));
-    META = r.meta;
-    META_TESTS = r.column_tests || [];
-    el("meta-model").textContent = name;
-    el("meta-file").textContent = `models/${META.layer}/_${META.layer}__models.yml`;
-    el("meta-layer").innerHTML = (r.layers || [])
-      .map(l => `<option value="${esc(l)}"${l === META.layer ? " selected" : ""}>${esc(l)}</option>`).join("");
-    syncLayerHint();
-    el("meta-tags").value = (META.tags || []).join(", ");
-    el("meta-desc").value = META.description || "";
-    el("meta-columns").innerHTML = renderMetaColumns(META.columns || [], r.catalog_columns);
-    const undoc = (META._rendered || []).filter(c => c._new).length;
-    el("meta-col-note").textContent = undoc
-      ? `${undoc} column${undoc === 1 ? "" : "s"} in the table but not yet documented`
-      : "";
-    panel.hidden = false;
-  } catch (e) {
-    // A test file, or a model with no .sql in a layer folder: no metadata to show.
-    panel.hidden = true;
-    META = null;
+  META = null; metaSnap = null;
+  if (name) {
+    try {
+      const r = await apiGet("/api/dbt/meta?name=" + encodeURIComponent(name));
+      META = r.meta;
+      META_TESTS = r.column_tests || [];
+      META_LAYERS = r.layers || [];
+      META_CATALOG = r.catalog_columns || [];
+      metaLayer = META.layer;
+      metaTags = [...(META.tags || [])];
+      el("meta-desc").value = META.description || "";
+      el("meta-col-filter").value = "";
+      renderLayers();
+      renderMetaColumns();
+      metaSnap = JSON.stringify(metaState());
+    } catch (e) {
+      // A model with no .sql in a layer folder: nothing to edit.
+      META = null;
+    }
   }
+  syncMeTabs(); setHeader(); updateDirty();
 }
 
-async function saveMeta() {
-  if (!META) return;
-  const rendered = META._rendered || [];
-  document.querySelectorAll(".meta-col-desc").forEach(inp => {
-    rendered[+inp.dataset.i].description = inp.value.trim();
-  });
-  rendered.forEach(c => { c.tests = []; });
-  document.querySelectorAll(".meta-col-test").forEach(box => {
-    if (box.checked) rendered[+box.dataset.i].tests.push(box.dataset.test);
-  });
+// Throws on failure so saveAll can report it alongside the SQL save.
+async function saveMeta(alsoSql) {
+  const st = metaState();
   // Only persist columns that carry something worth writing.
-  const columns = rendered
-    .filter(c => (c.description && c.description.length) || (c.tests && c.tests.length))
-    .map(c => ({ name: c.name, description: c.description, tests: c.tests }));
+  const body = { ...st, columns: st.columns.filter(c => c.description || c.tests.length) };
+  const moved = body.layer !== META.layer;
+  const r = await apiPut("/api/dbt/meta", body);
+  const m = r.meta;
+  ok(moved ? `Saved — moved to ${m.layer}` : (alsoSql ? "Saved file and metadata" : "Metadata saved"));
+  if (moved) curFile = `models/${m.layer}/${m.name}.sql`;
+  await Promise.all([loadMeta(m.name), loadLists(), loadTagPool()]);
+  renderLists();
+}
 
-  const body = {
-    name: META.name,
-    layer: el("meta-layer").value,
-    tags: el("meta-tags").value.split(",").map(t => t.trim()).filter(Boolean),
-    description: el("meta-desc").value.trim(),
-    columns,
-  };
-  const b = el("meta-save");
-  b.disabled = true;
+async function loadTagPool() {
   try {
-    const moved = body.layer !== META.layer;
-    const r = await apiPut("/api/dbt/meta", body);
-    META = r.meta;
-    toast(moved ? `Saved — moved to ${esc(body.layer)}` : "Metadata saved", "ok");
-    if (moved) {
-      // The .sql moved on disk; the list and the open file path are now stale.
-      await loadLists();
-      const np = `models/${META.layer}/${META.name}.sql`;
-      if (curFile) { curFile = np; el("cur-file").textContent = np; }
-    }
-    await loadMeta(META.name);
+    const r = await apiGet("/api/dbt/meta");
+    const counts = {};
+    (r.models || []).forEach(m => (m.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+    TAG_POOL = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  } catch (e) { TAG_POOL = []; }
+  if (META) renderTags();
+}
+
+// ---- lineage (the dbt docs site, framed) -------------------------------- //
+let DOCS = null;          // last /api/dbt/docs/status
+let lineageShown = null;  // URL the frame was last pointed at
+let docsPoller = null;
+
+// dbt docs routes: #!/model/<unique_id>, with ?g_v=1 opening the graph and
+// g_i the node selector -- "+name+" is the model plus everything up and down.
+function lineageUrl(model) {
+  if (model && DOCS && DOCS.project) {
+    const id = `model.${DOCS.project}.${model}`;
+    return `/dbt-docs/#!/model/${encodeURIComponent(id)}?g_v=1&g_i=${encodeURIComponent("+" + model + "+")}`;
+  }
+  return "/dbt-docs/#!/overview?g_v=1";
+}
+async function loadDocsStatus() {
+  try { DOCS = await apiGet("/api/dbt/docs/status"); }
+  catch (e) { DOCS = null; el("docs-status").textContent = "status unavailable"; return; }
+  el("docs-missing").hidden = DOCS.exists;
+  el("docs-frame").hidden = !DOCS.exists;
+  el("docs-status").textContent = DOCS.exists ? "generated " + fmtDate(DOCS.generated) : "not generated yet";
+}
+// focus: undefined = keep whatever the frame shows (first time: the open model),
+// null = whole project, "<name>" = centre on that model.
+async function showLineage(focus, forceReload) {
+  await loadDocsStatus();
+  const m = curModel(), fb = el("docs-focus");
+  fb.hidden = !m;
+  if (m) fb.querySelector("span").textContent = m;
+  if (!DOCS || !DOCS.exists) return;
+  const want = focus === undefined ? (lineageShown || lineageUrl(m)) : lineageUrl(focus);
+  const frame = el("docs-frame");
+  if (frame.getAttribute("src") !== want) frame.src = want;
+  else if (forceReload && frame.contentWindow) frame.contentWindow.location.reload();
+  lineageShown = want;
+  el("docs-open").href = want;
+}
+
+async function regenDocs() {
+  const b = el("docs-regen"), con = el("docs-console"), log = el("docs-log");
+  b.disabled = true;
+  log.hidden = false; log.open = true;
+  con.textContent = "$ dbt docs generate …\n";
+  el("docs-run-status").innerHTML = pill("running");
+  try {
+    const run = await apiPost("/api/dbt/docs/generate", {});
+    if (docsPoller) docsPoller.stop();
+    docsPoller = createTailPoller({
+      fetchChunk: (offset) => apiGet(`/api/runs/${run.id}/tail?offset=${offset}`),
+      isTerminal: (r) => r.status !== "running" && r.status !== "detached",
+      onChunk: (chunk) => appendConsole(con, chunk),
+      onStatus: (r) => setStatusPill(el("docs-run-status"), r.status, r.returncode),
+      // Reload only once the run has finished: the bundle's three files are
+      // written at different moments, so reloading on the first one to change
+      // would show a new manifest against the old catalog.
+      onDone: async (res) => {
+        b.disabled = false;
+        if (res && res.status === "finished") {
+          log.open = false;
+          await showLineage(undefined, true);
+          ok("Docs regenerated");
+          if (META) loadMeta(META.name);  // the catalog may list new columns
+        } else {
+          err("dbt docs generate failed — see the log above the graph");
+        }
+      },
+      onError: (fails, max) => { if (fails >= max) { b.disabled = false; err("Lost contact with the docs run"); } },
+    });
+    docsPoller.start();
   } catch (e) {
-    toast("Could not save metadata: " + e.message, "bad");
-  } finally {
     b.disabled = false;
+    el("docs-run-status").innerHTML = pill("failed");
+    err("Could not start dbt docs generate: " + e.message);
   }
 }
 
 // ---- wiring ------------------------------------------------------------- //
 el("health-recheck").onclick = runHealth;
-el("meta-save").onclick = saveMeta;
-el("meta-layer").onchange = syncLayerHint;
+$$(".page-tab").forEach(b => b.onclick = () => showPageTab(b.dataset.tab));
+$$(".me-tab").forEach(b => b.onclick = () => showMeTab(b.dataset.me));
+el("me-lineage").onclick = () => showPageTab("lineage", curModel());
+el("docs-focus").onclick = () => showLineage(curModel());
+el("docs-all").onclick = () => showLineage(null);
+el("docs-regen").onclick = regenDocs;
+
 el("new-model").onclick = () => startNew("model");
 el("new-test").onclick = () => startNew("test");
 el("new-mat").onchange = onMatChange;
 el("new-layer").onchange = onMatChange;
 el("editor").addEventListener("input", updateDirty);
-window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
-el("file-save").onclick = saveFile;
+el("file-save").onclick = saveAll;
 el("btn-del").onclick = delFile;
 el("btn-run").onclick = () => runDbt("run");
 el("btn-test").onclick = () => runDbt("test");
@@ -466,6 +785,61 @@ el("btn-debug").onclick = () => runDbt("debug");
     if (b) openFile(b.dataset.path, b.dataset.name);
   }));
 
-runHealth(); loadLists();
+el("meta-layers").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-layer]");
+  if (c) { metaLayer = c.dataset.layer; renderLayers(); updateDirty(); }
+});
+el("meta-tags").addEventListener("click", (e) => {
+  const rm = e.target.closest("[data-rm]");
+  if (rm) { metaTags.splice(+rm.dataset.rm, 1); renderTags(); updateDirty(); return; }
+  el("meta-tag-entry").focus();
+});
+el("meta-tag-entry").addEventListener("keydown", (e) => {
+  const v = e.target.value;
+  if ((e.key === "Enter" || e.key === ",") || (e.key === "Tab" && v.trim())) {
+    e.preventDefault();
+    if (v.trim()) { addTag(v); e.target.value = ""; }
+  } else if (e.key === "Backspace" && !v && metaTags.length) {
+    metaTags.pop(); renderTags(); updateDirty();
+  }
+});
+// Pasting "a, b, c" adds all three; the text after the last comma stays typed.
+el("meta-tag-entry").addEventListener("input", (e) => {
+  const parts = e.target.value.split(",");
+  if (parts.length > 1) { parts.slice(0, -1).forEach(addTag); e.target.value = parts[parts.length - 1]; }
+});
+el("meta-tag-entry").addEventListener("blur", (e) => {
+  if (e.target.value.trim()) { addTag(e.target.value); e.target.value = ""; }
+});
+el("meta-tag-suggest").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-add]");
+  if (b) addTag(b.dataset.add);
+});
+el("meta-desc").addEventListener("input", updateDirty);
+// Typing into a row does not re-run the filter: with "Undocumented only" on,
+// the row would vanish mid-sentence. Its marker and the stats update instead.
+["input", "change"].forEach(ev => el("meta-columns").addEventListener(ev, (e) => {
+  const tr = e.target.closest("tr[data-col]");
+  if (tr) tr.classList.toggle("undoc", !tr.querySelector(".meta-col-desc").value.trim() &&
+                                       !$$(".meta-col-test", tr).some(b => b.checked));
+  updateStats(); updateDirty();
+}));
+el("meta-col-filter").addEventListener("input", applyColFilter);
+el("meta-col-undoc").onclick = () => { undocOnly = !undocOnly; applyColFilter(); };
+el("meta-revert").onclick = () => {
+  if (META && (!metaDirty() || confirm("Discard metadata changes?"))) loadMeta(META.name);
+};
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !el("editor-panel").closest("[hidden]")) {
+    e.preventDefault(); saveAll();
+  }
+});
+window.addEventListener("beforeunload", (e) => { if (anyDirty()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("hashchange", () => showPageTab(location.hash.slice(1)));
+
+setHeader(); syncMeTabs(); updateDirty();
+runHealth(); loadLists(); loadTagPool();
+showPageTab(location.hash.slice(1) || "develop");
 </script>
 {% endblock %}

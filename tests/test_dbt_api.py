@@ -93,3 +93,31 @@ def test_docs_missing_bundle_explains_itself(client, docs_dir):
 
 def test_docs_status_reports_absence(client, docs_dir):
     assert client.get("/api/dbt/docs/status").get_json() == {"exists": False}
+
+
+def test_docs_status_carries_project_name(client, docs_dir):
+    # The Lineage subtab builds model.<project>.<name> deep links from this.
+    (docs_dir / "target" / "index.html").write_text("<html></html>", encoding="utf-8")
+    (docs_dir / "dbt_project.yml").write_text("name: 'oasis'\n", encoding="utf-8")
+    body = client.get("/api/dbt/docs/status").get_json()
+    assert body["exists"] is True and body["project"] == "oasis"
+
+
+def test_lineage_page_redirects_to_models_subtab(client):
+    r = client.get("/lineage")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/models#lineage")
+
+
+def test_docs_status_dates_the_site_by_its_catalog(client, docs_dir):
+    # dbt ls / run rewrite manifest.json all the time; only `docs generate`
+    # writes catalog.json, so that is when the docs were generated.
+    import os
+    from datetime import datetime
+    t = docs_dir / "target"
+    for name, ts in (("index.html", 1_700_000_000), ("catalog.json", 1_700_000_500),
+                     ("manifest.json", 1_800_000_000)):
+        (t / name).write_text("{}", encoding="utf-8")
+        os.utime(t / name, (ts, ts))
+    body = client.get("/api/dbt/docs/status").get_json()
+    assert body["generated"] == datetime.fromtimestamp(1_700_000_500).isoformat(timespec="seconds")
