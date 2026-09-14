@@ -1,0 +1,340 @@
+version: 2
+
+# Oasis Iceberg lake -- the landing zone written by the dlt extract jobs.
+#
+# These are NOT relations ClickHouse can read by name. Every model reads them
+# through the icebergLocal() table function, emitted by the `iceberg_source`
+# macro in macros/iceberg_source.sql. Declaring them here is what gives the
+# lineage graph in `dbt docs` its upstream edges -- without it the models are
+# 15 disconnected nodes.
+#
+# The lake root is the `iceberg_root` var in dbt_project.yml and is a path on
+# the CLICKHOUSE HOST's filesystem.
+
+sources:
+  - name: oasis_lake
+    description: >
+      Apache Iceberg tables extracted from the Oasis HIS Oracle database
+      (schemas OASIS / DEVDBA / APP_ADMIN) by the dlt pipelines, landed on the
+      ClickHouse host and read via icebergLocal().
+    tags: ["source", "iceberg", "oasis"]
+    tables:
+      - name: appointments
+        description: >
+          Outpatient appointment bookings; one row per appointment slot, including future (scheduled) bookings.
+          Oracle origin: OASIS.APPOINTMENTS.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.APPOINTMENTS
+          load_type: transaction
+          unique_key: "APPOINTMENT_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: bed_class_master_data
+        description: >
+          Lookup of bed and room classes (private, ward, ICU, ...).
+          Oracle origin: OASIS.BED_CLASS_MASTER_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.BED_CLASS_MASTER_DATA
+          load_type: master
+          unique_key: "BED_CLASS"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: bed_details
+        description: >
+          Bed occupancy transactions; one row per bed movement with start/end timestamps.
+          Oracle origin: OASIS.BED_DETAILS.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.BED_DETAILS
+          load_type: master
+          unique_key: "BED_DETAIL_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: bed_slots_master
+        description: >
+          Physical bed slot registry keyed by bed location.
+          Oracle origin: OASIS.BED_SLOTS_MASTER.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.BED_SLOTS_MASTER
+          load_type: master
+          unique_key: "BED_LOCATION"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: codes_data
+        description: >
+          Generic Oasis code lookup, partitioned by code_type (nationality, religion, discharge reason, ...).
+          Oracle origin: OASIS.CODES_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.CODES_DATA
+          load_type: master
+          unique_key: "CODE"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: delivery_charge
+        description: >
+          Charge lines raised against a delivery; the financial grain of billing.
+          Oracle origin: OASIS.DELIVERY_CHARGE.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.DELIVERY_CHARGE
+          load_type: transaction
+          unique_key: "DELIVERY_CHARGE_ID"
+          cdc_column: ""
+
+      - name: delivery_lines
+        description: >
+          Delivery line items linking a charge to its ordered product.
+          Oracle origin: OASIS.DELIVERY_LINES.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.DELIVERY_LINES
+          load_type: transaction
+          unique_key: "DELIVERY_LINE"
+          cdc_column: ""
+
+      - name: doc
+        description: >
+          Accounts-receivable document header (invoices, credit notes, AR adjustments).
+          Oracle origin: DEVDBA.DOC.
+        tags: ["transaction"]
+        meta:
+          oracle_table: DEVDBA.DOC
+          load_type: transaction
+          unique_key: "DOC_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: er_priorities
+        description: >
+          Emergency triage priority lookup with label, colour and target response time.
+          Oracle origin: OASIS.ER_PRIORITIES.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.ER_PRIORITIES
+          load_type: master
+          unique_key: "PRIORITY"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: external_accounts_data
+        description: >
+          External (payer) account registry backing the purchaser dimension.
+          Oracle origin: DEVDBA.EXTERNAL_ACCOUNTS_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: DEVDBA.EXTERNAL_ACCOUNTS_DATA
+          load_type: master
+          unique_key: "ACCOUNT_CODE,ACCOUNT_TYPE,C_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: hnh_admission_reason_mapping
+        description: >
+          Hospital-maintained mapping from admission reason text to a MOH reporting code.
+          Oracle origin: APP_ADMIN.HNH_ADMISSION_REASON_MAPPING.
+        tags: ["master"]
+        meta:
+          oracle_table: APP_ADMIN.HNH_ADMISSION_REASON_MAPPING
+          load_type: master
+          unique_key: "MOH_CODE"
+          cdc_column: ""
+
+      - name: hnh_disacharge_mode_mapping
+        description: >
+          Hospital-maintained mapping from discharge mode text to a MOH reporting code. Name is misspelled at the source.
+          Oracle origin: APP_ADMIN.HNH_DISACHARGE_MODE_MAPPING.
+        tags: ["master"]
+        meta:
+          oracle_table: APP_ADMIN.HNH_DISACHARGE_MODE_MAPPING
+          load_type: master
+          unique_key: "MOH_CODE"
+          cdc_column: ""
+
+      - name: ios_main_data
+        description: >
+          IOS (item/order/service) master header -- the catalogue of billable services and products.
+          Oracle origin: OASIS.IOS_MAIN_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.IOS_MAIN_DATA
+          load_type: master
+          unique_key: "IOS_MAIN"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: ios_master_data
+        description: >
+          IOS detail records; the per-branch orderable service catalogue.
+          Oracle origin: OASIS.IOS_MASTER_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.IOS_MASTER_DATA
+          load_type: master
+          unique_key: "IOS"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: master_deliveries
+        description: >
+          Delivery header grouping delivery lines under one work entity and date.
+          Oracle origin: OASIS.MASTER_DELIVERIES.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.MASTER_DELIVERIES
+          load_type: transaction
+          unique_key: "MASTER_DELIVERY_NO"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_ad
+        description: >
+          Inpatient admission records; one row per admission episode.
+          Oracle origin: OASIS.PATIENT_AD.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.PATIENT_AD
+          load_type: master
+          unique_key: "ADMISSION_NO"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_bill_agreements
+        description: >
+          Patient billing responsibility agreements linking an episode to a payer and tariff.
+          Oracle origin: OASIS.PATIENT_BILL_AGREEMENTS.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.PATIENT_BILL_AGREEMENTS
+          load_type: transaction
+          unique_key: "PATIENT_ID, EPISODE_NO, RESPONSIBILITY_SEQ"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_eligibility
+        description: >
+          Insurance eligibility records authorising a patient for a service window.
+          Oracle origin: OASIS.PATIENT_ELIGIBILITY.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.PATIENT_ELIGIBILITY
+          load_type: transaction
+          unique_key: "PATIENT_ELIGIBILITY_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_emergency_visit
+        description: >
+          Emergency department visits; one row per ER attendance.
+          Oracle origin: OASIS.PATIENT_EMERGENCY_VISIT.
+        tags: ["transaction"]
+        meta:
+          oracle_table: OASIS.PATIENT_EMERGENCY_VISIT
+          load_type: transaction
+          unique_key: "ER_VISIT_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_file_master
+        description: >
+          Patient medical-record-file registry; supplies the MRN.
+          Oracle origin: OASIS.PATIENT_FILE_MASTER.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.PATIENT_FILE_MASTER
+          load_type: master
+          unique_key: "PAT_FILE_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_master_data
+        description: >
+          Patient demographic master record.
+          Oracle origin: OASIS.PATIENT_MASTER_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.PATIENT_MASTER_DATA
+          load_type: master
+          unique_key: "PATIENT_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: positions_data
+        description: >
+          Staff position/title lookup.
+          Oracle origin: OASIS.POSITIONS_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.POSITIONS_DATA
+          load_type: master
+          unique_key: "POSITION_TYPE"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: purchasers
+        description: >
+          Payer (insurance company / TPA / self-pay) registry.
+          Oracle origin: OASIS.PURCHASERS.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.PURCHASERS
+          load_type: master
+          unique_key: "PURCHASER_CODE"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: room_master
+        description: >
+          Room registry with room class and status.
+          Oracle origin: OASIS.ROOM_MASTER.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.ROOM_MASTER
+          load_type: master
+          unique_key: "ROOM_NO"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: staff_contracts
+        description: >
+          Staff employment contracts with start, end and termination dates.
+          Oracle origin: OASIS.STAFF_CONTRACTS.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.STAFF_CONTRACTS
+          load_type: master
+          unique_key: "STAFF_CONTRACT_NO"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: staff_master_data
+        description: >
+          Staff demographic master record (English and Arabic names).
+          Oracle origin: OASIS.STAFF_MASTER_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.STAFF_MASTER_DATA
+          load_type: master
+          unique_key: "STAFF_ID"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: staff_posts
+        description: >
+          Staff position assignments over time; latest row per staff is the current post.
+          Oracle origin: OASIS.STAFF_POSTS.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.STAFF_POSTS
+          load_type: master
+          unique_key: "POST_NUMBER,DATE_STARTED"
+          cdc_column: "AMEND_LAST_DATE"
+
+      - name: staff_type_classification
+        description: >
+          Locally maintained classification of staff types into medical/non-medical categories.
+          Oracle origin: punch.staff_type_classification.
+        tags: ["master"]
+        meta:
+          oracle_table: punch.staff_type_classification
+          load_type: master
+          unique_key: "STAFF_TYPE"
+          cdc_column: ""
+
+      - name: staff_types_data
+        description: >
+          Staff type/grade lookup.
+          Oracle origin: OASIS.STAFF_TYPES_DATA.
+        tags: ["master"]
+        meta:
+          oracle_table: OASIS.STAFF_TYPES_DATA
+          load_type: master
+          unique_key: "STAFF_TYPE"
+          cdc_column: "AMEND_LAST_DATE"
+

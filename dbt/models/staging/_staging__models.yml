@@ -1,0 +1,338 @@
+version: 2
+
+# Staging layer.
+#
+# A staging model reads exactly ONE table from the Iceberg lake and does nothing
+# but select, rename, cast and (incrementally) filter it. No joins, no business
+# logic. These keep their historical fact_/master_ names because BI reports are
+# already pointed at them -- the folder and tags carry the layer, not the name.
+
+models:
+
+  - name: fact_appointments
+    description: >
+      Outpatient appointments, one row per appointment slot. Includes FUTURE
+      bookings: the source is filtered on a scheduled date, so this table looks
+      ahead of today. Filter on `table_date` when reporting on activity that has
+      actually happened.
+    config:
+      tags: ["outpatient", "appointments", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, appointment_id]
+    columns:
+      - name: branch_id
+        description: Hospital branch. Partition key of every model in this project.
+        data_tests: [not_null]
+      - name: appointment_id
+        description: Source appointment identifier, unique within a branch.
+        data_tests: [not_null]
+      - name: table_date
+        description: >
+          Appointment date, converted from the source Julian day number
+          (julian_date - 2440588 days since epoch). This is the date to report on.
+      - name: patient_id
+        description: Patient the appointment is booked for. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode the appointment belongs to, unique per patient.
+      - name: start_date
+        description: Scheduled start timestamp of the slot.
+      - name: end_date
+        description: Scheduled end timestamp of the slot.
+      - name: time_arrived
+        description: When the patient physically arrived. Null if they never showed.
+      - name: time_seen
+        description: >
+          When the consultant started the consultation. Subtracting time_arrived
+          gives the patient's waiting time.
+      - name: time_complete
+        description: When the consultation finished.
+      - name: consultant
+        description: Consultant staff id. Joins master_staff.id.
+      - name: new_followup_flag
+        description: Whether this is a new patient visit or a follow-up.
+      - name: walkin_flag
+        description: Whether the patient walked in rather than pre-booking.
+      - name: outcome_code
+        description: Appointment outcome. Joins master_codes on the matching code_type.
+      - name: on_line_booking
+        description: Whether the appointment was booked through the online channel.
+      - name: recorded_updated_at
+        description: >
+          dlt extract watermark. This is the incremental high-water column --
+          the model only appends rows newer than max(recorded_updated_at).
+        data_tests: [not_null]
+
+  - name: fact_doc
+    description: >
+      Accounts-receivable document headers (invoices, credit notes, AR
+      adjustments) -- 161 columns passed straight through from the source with
+      `select *`. Because it is `select *`, adding a column upstream silently
+      changes this model's shape; the column list here is not exhaustive.
+      This is the only staging model another dbt model builds on
+      (see marts/vw_contractual_discounts).
+    config:
+      tags: ["finance", "ar", "billing", "incremental", "select_star"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, doc_id]
+    columns:
+      - name: doc_id
+        description: AR document identifier. Primary key.
+        data_tests: [not_null]
+      - name: doc_no
+        description: >
+          Human-facing document number. A trailing 'D' marks a contractual
+          discount document -- that is what marts/vw_contractual_discounts keys on.
+      - name: doc_type
+        description: >
+          Document type. 'CREDITAR' is an AR credit note; combined with a
+          doc_no ending in 'D' it identifies a contractual discount.
+      - name: doc_date
+        description: Document date, used as the reporting date.
+      - name: doc_status
+        description: Document lifecycle status.
+      - name: total_doc_price
+        description: Document total. Summed by the contractual-discount mart.
+      - name: account_code
+        description: External account. Joins master_purchaser.account_code.
+      - name: account_type
+        description: External account type. Part of the purchaser join key.
+      - name: currency_code
+        description: Document currency; check before summing across branches.
+      - name: exchange_rate
+        description: Rate applied to convert the document to base currency.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: fact_inpatient
+    description: >
+      Inpatient admissions, one row per admission episode. Carries three
+      separate discharge timestamps (physical, clinical, financial) which move
+      independently -- pick the one that matches the question being asked.
+    config:
+      tags: ["inpatient", "admissions", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, admission_no]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: admission_no
+        description: Admission identifier, unique within a branch.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Admitted patient. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode number for this admission.
+      - name: admit_date
+        description: Admission timestamp. The start of length-of-stay.
+      - name: physical_discharge_date
+        description: >
+          When the patient physically left the bed. Use this for length-of-stay
+          and bed occupancy.
+      - name: clinical_discharge_date
+        description: When the clinician signed the discharge off. Precedes physical discharge.
+      - name: financial_discharge_date
+        description: >
+          When billing closed the episode. Can lag physical discharge by days;
+          do not use it for clinical metrics.
+      - name: status
+        description: Admission status code. Joins master_codes.
+      - name: outcome
+        description: Discharge outcome code. Joins master_codes.
+      - name: admit_type
+        description: Admission type (elective, emergency, ...).
+      - name: bed_class
+        description: Bed class booked for the admission. Joins the bed class lookup.
+      - name: reason_for_admit
+        description: Coded admission reason; master_codes maps it to a MOH code.
+      - name: discharge_destination
+        description: Where the patient went on discharge.
+      - name: admission_department
+        description: Department responsible for the admission.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+        data_tests: [not_null]
+
+  - name: fact_patient_bill_agreement
+    description: >
+      Billing responsibility agreements: who pays for a given patient episode,
+      under which tariff and policy. The grain is one row per responsibility
+      sequence, so a single episode can have several payers stacked in order.
+    config:
+      tags: ["finance", "billing", "payer", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, patient_id, episode_no, responsibility_seq]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Patient the agreement covers.
+        data_tests: [not_null]
+      - name: episode_no
+        description: Episode the agreement covers.
+        data_tests: [not_null]
+      - name: responsibility_seq
+        description: >
+          Order of responsibility. Sequence 1 is the primary payer; higher
+          sequences are secondary payers picking up the remainder.
+        data_tests: [not_null]
+      - name: purchaser_code
+        description: Paying purchaser. Joins master_purchaser.id.
+      - name: policy_code
+        description: Insurance policy applied.
+      - name: contract_no
+        description: Contract the tariff comes from.
+      - name: tariff_id
+        description: Price list used to charge this episode.
+      - name: status
+        description: Agreement status.
+      - name: bill_to
+        description: Party the bill is addressed to.
+      - name: account_no
+        description: Patient account the charges post to.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: fact_patient_eligibility
+    description: >
+      Insurance eligibility authorisations. Each row authorises a patient for a
+      service window between eligibility_start and eligibility_end. Rows can
+      supersede one another via original_eligibility_id.
+    config:
+      tags: ["insurance", "eligibility", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, patient_eligibility_id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: patient_eligibility_id
+        description: Eligibility record identifier, unique within a branch.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Patient authorised. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode the authorisation applies to.
+      - name: eligibility_start
+        description: First timestamp the authorisation is valid from.
+      - name: eligibility_end
+        description: Last timestamp the authorisation is valid to.
+      - name: eligibility_status
+        description: Authorisation status.
+      - name: eligibility_number
+        description: Authorisation reference issued by the payer.
+      - name: admission_no
+        description: Admission the authorisation covers, when inpatient. Joins fact_inpatient.
+      - name: consultant_id
+        description: Requesting consultant. Joins master_staff.id.
+      - name: referral_code
+        description: Referral reason code.
+      - name: original_eligibility_id
+        description: >
+          Set when this row replaces an earlier authorisation. Follow it to
+          reconstruct the authorisation chain.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: master_ios
+    description: >
+      IOS (Item / Order / Service) detail catalogue -- the per-branch list of
+      orderable, billable services and products. Each row rolls up to an
+      ios_main header in master_ios_main.
+    config:
+      tags: ["catalogue", "service", "dimension", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, ios]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: ios
+        description: Service/item identifier, unique within a branch. Joins fact_delivery.ios.
+        data_tests: [not_null]
+      - name: ios_main
+        description: Parent catalogue header. Joins master_ios_main.ios_main.
+      - name: ios_user
+        description: User-facing service code shown to staff.
+      - name: ios_type
+        description: Kind of catalogue entry (service, drug, consumable, ...).
+      - name: ios_category
+        description: Category grouping used for reporting.
+      - name: service_dept
+        description: Department that delivers this service.
+      - name: product_code
+        description: Stock product backing the service, when it is a physical item.
+      - name: product_category_code
+        description: Product category used for revenue grouping.
+      - name: orderable_flag
+        description: Whether the item can currently be ordered.
+      - name: procedure_flag
+        description: Whether the item is a clinical procedure.
+      - name: pharmacy_type
+        description: Pharmacy classification, set for dispensable drugs.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: master_ios_main
+    description: >
+      IOS catalogue headers -- the master record for a billable service or
+      product, with 118 columns spanning pricing, stock control, coding
+      (ICD / ACHI / UNSPSC / national drug code) and dispensing rules. Note the
+      source select ends with a trailing comma before FROM; that is in the
+      original SQL and ClickHouse tolerates it.
+    config:
+      tags: ["catalogue", "service", "dimension", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [branch_id, ios_main]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: ios_main
+        description: Catalogue header identifier, unique within a branch.
+        data_tests: [not_null]
+      - name: description
+        description: Service or product name shown on bills and reports.
+      - name: price
+        description: List price before tariff or contract adjustment.
+      - name: average_cost
+        description: Moving average cost, used for margin analysis.
+      - name: product_code
+        description: Stock product this header maps to.
+      - name: product_category_code
+        description: Top-level product category.
+      - name: sub_product_category_code
+        description: Second-level product category.
+      - name: detail_product_category_code
+        description: Third-level product category.
+      - name: ios_type
+        description: Kind of catalogue entry.
+      - name: is_accommodation
+        description: Marks bed/room accommodation charges, which are billed per night.
+      - name: icd_code
+        description: ICD diagnosis code associated with the service.
+      - name: achi_code
+        description: ACHI procedure classification code.
+      - name: national_drug_coding
+        description: National drug code, for pharmacy items.
+      - name: vat_cat_type
+        description: VAT category driving the tax rate applied at billing.
+      - name: is_locked
+        description: Whether the catalogue entry is frozen against edits.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.

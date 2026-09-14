@@ -1,0 +1,451 @@
+version: 2
+
+# Intermediate layer.
+#
+# These models join two or more Iceberg lake tables to assemble one business
+# entity -- resolving code lookups, picking the latest row per key, flattening
+# header/line pairs. They still read the lake directly rather than building on
+# staging models, because the project has no 1:1 staging model per source table.
+
+models:
+
+  - name: fact_bed_transations
+    description: >
+      Bed movement transactions -- one row per bed occupancy interval, joined out
+      to room and bed-class descriptions. Note the spelling: "transations" is
+      the existing table name in ClickHouse and is deliberately preserved, since
+      renaming it would break reports already pointed at it.
+
+      Two columns are named `bd.room_no` and `bd.work_entity`, with a literal
+      dot, because the source SELECT lists them unaliased. Quote them with
+      backticks when querying.
+    config:
+      tags: ["inpatient", "beds", "occupancy", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: id
+        description: Bed detail identifier (source bed_detail_id), unique within a branch.
+        data_tests: [not_null]
+      - name: table_date
+        description: Movement start date, cast to a date for reporting.
+        data_tests: [not_null]
+      - name: start_date
+        description: Timestamp the patient occupied the bed.
+      - name: end_date
+        description: >
+          Timestamp the bed was vacated. Null means the bed is still occupied,
+          so filter on it to get current occupancy.
+      - name: bed_location
+        description: Physical bed identifier within the ward.
+      - name: bed_class
+        description: Bed class description, resolved from the bed class lookup.
+      - name: bed_class_id
+        description: Raw bed class code behind bed_class.
+      - name: room_class
+        description: Room class description, resolved from the room's class code.
+      - name: room_class_id
+        description: Raw room class code behind room_class.
+      - name: room_description
+        description: Room name, resolved from the room master.
+      - name: room_status_id
+        description: Room status code.
+      - name: bed_status_id
+        description: Bed status code.
+      - name: bed_gender
+        description: Gender the bed is designated for.
+      - name: current_record
+        description: Source flag marking the row as the current state of the bed.
+      - name: admission_no
+        description: Admission occupying the bed. Joins fact_inpatient.admission_no.
+      - name: patient_id
+        description: Patient occupying the bed. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode the occupancy belongs to.
+      - name: trans_from_bed_location
+        description: Bed the patient transferred from; null on first admission to a bed.
+      - name: trans_from_work_entity
+        description: Work entity the patient transferred from.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+        data_tests: [not_null]
+
+  - name: fact_delivery
+    description: >
+      Delivered and billed service lines -- the revenue grain of the warehouse.
+      Built by INNER JOINing delivery_charge to delivery_lines and
+      master_deliveries, so a charge without a matching line or delivery header
+      is dropped. Uses a run_query() watermark rather than a correlated subquery
+      for its incremental filter.
+
+      `dc.delivery_line` carries a literal dot in its name (unaliased in the
+      source SELECT); quote it with backticks.
+    config:
+      tags: ["finance", "revenue", "billing", "delivery", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, delivery_charge_id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: delivery_charge_id
+        description: Charge line identifier, unique within a branch. The grain of this table.
+        data_tests: [not_null]
+      - name: table_date
+        description: Delivery date of the charge. The reporting date.
+      - name: master_delivery_no
+        description: Delivery header grouping this charge with its siblings.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Patient charged. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode the charge belongs to.
+      - name: admission_no
+        description: Admission the charge belongs to, when inpatient. Joins fact_inpatient.
+      - name: ios
+        description: Service/item delivered. Joins master_ios.ios.
+      - name: ios_main
+        description: Catalogue header of the service. Joins master_ios_main.ios_main.
+      - name: purchaser_code
+        description: Payer charged. Joins master_purchaser.id.
+      - name: policy_code
+        description: Insurance policy applied to the charge.
+      - name: contract_no
+        description: Contract supplying the tariff.
+      - name: tariff_id
+        description: Price list used.
+      - name: staff_id
+        description: Staff member who delivered the service. Joins master_staff.id.
+      - name: unit_price
+        description: Price per unit before discount.
+      - name: units_delivered
+        description: Units physically delivered.
+      - name: units_charged
+        description: Units actually billed. Can differ from units_delivered.
+      - name: units_processed
+        description: Units processed through to the payer.
+      - name: price_paid_purchaser
+        description: Amount the payer is liable for.
+      - name: payment_amount
+        description: Amount paid.
+      - name: cancelled_amount
+        description: Amount reversed by cancellation.
+      - name: vat_value
+        description: VAT charged on the line.
+      - name: vat_code
+        description: VAT rate code applied.
+      - name: cancel_flag
+        description: >
+          Cancellation marker, COALESCEd to 'X' when the source is null. Exclude
+          cancelled lines before summing revenue.
+      - name: package_deal_flag
+        description: >
+          Whether the line is part of a bundled package price, COALESCEd to 'N'
+          when null. Package lines are priced at the package, not the line.
+      - name: cancellation_reason_code
+        description: Reason the line was cancelled (source status_reason_code).
+      - name: status
+        description: Charge status.
+      - name: invoice_no
+        description: Invoice the charge was billed on.
+      - name: doc_id
+        description: AR document raised for the charge. Joins fact_doc.doc_id.
+      - name: crd_doc_id
+        description: Credit-note AR document, when the charge was credited.
+      - name: product_code
+        description: Stock product delivered, for consumables and drugs.
+      - name: product_category_code
+        description: Product category used for revenue grouping.
+      - name: batch_no
+        description: Stock batch dispensed, for traceable items.
+      - name: service_dept
+        description: Department that delivered the service.
+      - name: attendance_type
+        description: Encounter type (outpatient, inpatient, emergency) the charge arose in.
+      - name: take_home
+        description: Marks medication dispensed for the patient to take home.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+        data_tests: [not_null]
+
+  - name: fact_emergency_visit
+    description: >
+      Emergency department attendances, one row per ER visit, LEFT JOINed to the
+      triage priority lookup for label, colour and target response time. The
+      triage clock is time_arrived -> time_triaged -> time_treatment_started.
+    config:
+      tags: ["emergency", "er", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, er_visit_id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: er_visit_id
+        description: ER visit identifier, unique within a branch.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Patient attending. Joins master_patient.patient_id.
+      - name: episode_no
+        description: Episode opened for the visit.
+      - name: julian_date
+        description: >
+          Visit date as a raw Julian day number, passed through uncast. Convert
+          with toDate32('1970-01-01') + (julian_date - 2440588), as
+          fact_appointments does.
+      - name: time_arrived
+        description: Arrival timestamp. Start of the ER clock.
+      - name: time_triaged
+        description: Triage completion timestamp. Arrival-to-triage is the triage wait.
+      - name: time_treatment_started
+        description: Treatment start timestamp. Arrival-to-treatment is door-to-doctor time.
+      - name: time_complete
+        description: Visit completion timestamp.
+      - name: priority
+        description: Raw triage priority code.
+      - name: priority_description
+        description: Triage priority name, resolved from the priority lookup.
+      - name: priority_label
+        description: Short triage label used on ER boards.
+      - name: priority_color
+        description: Display colour for the triage level.
+      - name: target_time_mins
+        description: >
+          Target minutes from arrival to treatment for this triage level.
+          Compare against time_treatment_started to measure breaches.
+      - name: er_status
+        description: Visit status.
+      - name: outcome_code
+        description: Visit outcome. Joins master_codes.
+      - name: referred_type
+        description: How the patient was referred in.
+      - name: institution_from
+        description: Institution the patient was transferred from.
+      - name: institution_to
+        description: Institution the patient was transferred to on exit.
+      - name: treated_by
+        description: Treating clinician. Joins master_staff.id.
+      - name: police_flag
+        description: Marks a medico-legal case requiring police notification.
+      - name: physical_discharge_date
+        description: When the patient physically left the department.
+      - name: active_flag
+        description: Whether the visit record is currently active.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+        data_tests: [not_null]
+
+  - name: master_codes
+    description: >
+      The general-purpose Oasis code lookup, flattened and enriched. One row per
+      code per branch, spanning MANY unrelated code sets -- always filter on
+      code_type before joining, or a join on `code` alone will match the wrong
+      code set.
+
+      moh_code is resolved by matching the code DESCRIPTION text against the two
+      hospital-maintained MOH mapping tables. That is a text join, so it is
+      sensitive to wording changes upstream.
+    config:
+      tags: ["dimension", "lookup", "reference", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, code, code_type]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: code
+        description: >
+          Code value. NOT unique on its own -- unique only together with
+          code_type, since each code_type restarts the numbering.
+        data_tests: [not_null]
+      - name: code_type
+        description: >
+          Which code set the row belongs to. Known values used elsewhere in this
+          project: 1 = religion, 5 = nationality (see master_staff).
+      - name: description
+        description: Human-readable label for the code. Also the join key to the MOH mappings.
+      - name: user_code
+        description: Short code shown to users in the Oasis UI.
+      - name: moh_code
+        description: >
+          Ministry of Health reporting code, resolved by text-matching
+          `description` against the discharge-mode and admission-reason mapping
+          tables. Empty when no mapping matches.
+      - name: prog_code
+        description: Programme code associated with the entry.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: master_patient
+    description: >
+      Patient dimension. Joins the demographic master to the patient file
+      registry to attach the MRN, taking the file with the highest volume_id per
+      patient (argMax) as the current medical record number.
+    config:
+      tags: ["dimension", "patient", "pii", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, patient_id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: patient_id
+        description: Patient identifier, unique within a branch. The key every fact joins on.
+        data_tests: [not_null]
+      - name: mrn
+        description: >
+          Medical record number, taken as argMax(user_file_id, volume_id) -- the
+          file from the highest volume. Null when the patient has no file record.
+      - name: patient_name
+        description: >
+          Full name, built by concatenating the four source name parts and
+          title-casing the result. Contains PII.
+      - name: pat_name_1
+        description: First name part, passed through unmodified. Contains PII.
+      - name: account_no
+        description: Patient billing account.
+      - name: gender
+        description: Patient gender, passed through from the source `sex` column.
+      - name: date_of_birth
+        description: Date of birth, cast to Date32. Contains PII; use it to derive age bands.
+      - name: date_registered
+        description: When the patient was first registered at the hospital.
+      - name: nationality_code
+        description: Nationality. Joins master_codes where code_type = 5.
+      - name: marital_code
+        description: Marital status code. Joins master_codes.
+      - name: occupation_code
+        description: Occupation code. Joins master_codes.
+      - name: mobile_no
+        description: Mobile number. Contains PII.
+      - name: phone_1
+        description: Primary phone number. Contains PII.
+      - name: amend_last_date
+        description: Source last-amended timestamp.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: master_purchaser
+    description: >
+      Payer dimension -- insurance companies, third-party administrators and
+      self-pay accounts. Built by INNER JOINing purchasers to the external
+      account registry, so a purchaser without a matching external account is
+      dropped from the dimension.
+    config:
+      tags: ["dimension", "payer", "finance", "incremental"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, id]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: id
+        description: >
+          Purchaser code, unique within a branch. Renamed from the source
+          purchaser_code; facts join to it as purchaser_code.
+        data_tests: [not_null]
+      - name: description
+        description: Payer name, title-cased.
+      - name: account_name
+        description: External account name, title-cased.
+      - name: account_code
+        description: External account code. Part of the join key to fact_doc.
+      - name: account_type
+        description: External account type. Part of the join key to fact_doc.
+      - name: group_code
+        description: Account grouping, used to roll payers up to a parent group.
+      - name: is_tpa
+        description: >
+          Marks the payer as a third-party administrator rather than the
+          underwriting insurer.
+      - name: amend_last_date
+        description: Source last-amended timestamp.
+      - name: recorded_updated_at
+        description: dlt extract watermark; the incremental high-water column.
+
+  - name: master_staff
+    description: >
+      Staff dimension, assembled from seven lake tables: the staff master, type
+      and classification lookups, current post, latest contract, and the code
+      table twice (for nationality and religion).
+
+      Unlike every other model here this one is materialized as a full `table`
+      on plain MergeTree, so it is rebuilt from scratch on every run and carries
+      no recorded_updated_at watermark. "Latest" post and contract are picked
+      with ORDER BY ... LIMIT 1 BY, so the row reflects only the current state --
+      there is no employment history in this table.
+    config:
+      tags: ["dimension", "staff", "hr", "pii", "full_refresh"]
+    data_tests:
+      - unique_combination_final:
+          arguments:
+              combination_of_columns: [branch_id, id]
+              # plain MergeTree: ClickHouse rejects FINAL (error 181)
+              final: false
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: id
+        description: >
+          Staff identifier, unique within a branch. Renamed from staff_id;
+          facts join to it as consultant, staff_id or treated_by.
+        data_tests: [not_null]
+      - name: staff_name_en
+        description: Full English name, title-cased from four source name parts. Contains PII.
+        data_tests: [not_null]
+      - name: staff_name_ar
+        description: Full Arabic name, concatenated from four source name parts. Contains PII.
+      - name: staff_grade
+        description: Staff type description (grade), resolved from the staff type lookup.
+      - name: classification
+        description: Staff classification, from the locally maintained classification table.
+      - name: category
+        description: Staff category, from the locally maintained classification table.
+      - name: staff_type
+        description: >
+          Medical vs non-medical split, from the classification table's
+          med_nonmed column.
+      - name: staff_post
+        description: >
+          Current position title, taken from the most recent staff post by
+          date_started. Null when the staff member has no post record.
+      - name: work_entity
+        description: Work entity of the current post.
+      - name: nationality
+        description: Nationality description, resolved from master codes where code_type = 5.
+      - name: religion
+        description: Religion description, resolved from master codes where code_type = 1.
+      - name: gender
+        description: >
+          Normalised to 'male' / 'female', or empty string when the source sex
+          column is null or unrecognised.
+      - name: date_of_birth
+        description: Date of birth. Contains PII.
+      - name: contract_start_date
+        description: Start date of the most recent contract.
+      - name: contract_end_date
+        description: End date of the most recent contract.
+      - name: termination_date
+        description: >
+          Termination date on the most recent contract. Non-null marks a leaver;
+          filter on it to get active staff.
+      - name: employee_dependant_flag
+        description: Marks the record as a dependant of an employee rather than staff.
+      - name: amend_last_date
+        description: Source last-amended timestamp.

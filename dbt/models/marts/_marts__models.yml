@@ -1,0 +1,42 @@
+version: 2
+
+# Marts layer.
+#
+# Models built on top of other dbt models rather than reading the lake directly.
+# This is the layer BI tools should point at for derived reporting metrics.
+
+models:
+
+  - name: vw_contractual_discounts
+    description: >
+      Contractual discounts per original AR document. A discount is recorded in
+      Oasis as a separate CREDITAR document whose doc_no is the original
+      document number with a 'D' appended, so this model strips that trailing
+      'D' to recover the document being discounted and sums the credit.
+
+      Materialized as a VIEW, so it is computed at query time and always
+      reflects the current contents of fact_doc. Rows summing to exactly zero
+      are dropped by the HAVING clause -- a discount fully reversed by a later
+      correction disappears rather than showing as 0.
+    config:
+      tags: ["finance", "revenue", "discounts", "reporting", "view"]
+    columns:
+      - name: branch_id
+        description: Hospital branch.
+        data_tests: [not_null]
+      - name: discount_doc_no
+        description: >
+          Original document number the discount applies to, derived by removing
+          the trailing 'D' from org_doc_no. Join this to fact_doc.doc_no.
+        data_tests: [not_null]
+      - name: org_doc_no
+        description: >
+          The discount document's own number, ending in 'D'. This is the source
+          row's doc_no, not the document being discounted.
+        data_tests: [not_null]
+      - name: doc_date
+        description: Date of the discount document, cast to DATE.
+      - name: discount
+        description: >
+          Total discount amount, summed across all lines of the document.
+          Never exactly zero -- the HAVING clause filters those rows out.
