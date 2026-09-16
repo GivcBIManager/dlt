@@ -32,6 +32,7 @@ import connections  # noqa: E402
 import dagster_client  # noqa: E402
 import dbt_config  # noqa: E402
 import dbt_meta  # noqa: E402
+import dbt_sources  # noqa: E402
 import dbt_project_store  # noqa: E402
 import flows_store  # noqa: E402
 import flow_naming  # noqa: E402
@@ -856,6 +857,7 @@ def api_dbt_run():
             "extra": b.get("extra", "")}
     argv, label = commands.build_argv(spec)
     dbt_config.write_profiles()  # ensure the profile is current before running
+    dbt_sources.sync_safe()      # declare newly loaded lake tables, or dbt won't parse
     return jsonify(runner.start(argv, label=label))
 
 
@@ -894,6 +896,7 @@ def api_dbt_docs_generate():
     """Rebuild the docs site (manifest + catalog) via the run manager."""
     argv, label = commands.build_argv({"script": "dbt", "dbt_command": "docs generate"})
     dbt_config.write_profiles()
+    dbt_sources.sync_safe()
     return jsonify(runner.start(argv, label=label))
 
 

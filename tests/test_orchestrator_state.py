@@ -16,17 +16,24 @@ def test_ensure_dbt_profiles_survives_step_worker_sys_path_reset(monkeypatch):
     # Stub the profile write so the test needs no ClickHouse config; this is the
     # same module object state binds as ``_dbt_config``.
     import dbt_config
+    import dbt_sources
     monkeypatch.setattr(dbt_config, "write_profiles", lambda: None)
+    # Likewise the lake -> sources sync, which would otherwise rewrite the real
+    # dbt/models/staging/_oasis_lake__sources.yml from inside the test run.
+    synced = []
+    monkeypatch.setattr(dbt_sources, "sync_safe", lambda: synced.append(1))
 
     # Reproduce the step-worker environment exactly as observed: gui/ absent from
     # sys.path and dbt_config no longer freshly importable from it.
     gui = str(state._gui_dir)
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != gui])
     monkeypatch.delitem(sys.modules, "dbt_config", raising=False)
+    monkeypatch.delitem(sys.modules, "dbt_sources", raising=False)
 
     # Under the old deferred import this raised ModuleNotFoundError; the load-time
     # binding resolves without touching sys.path.
     state.ensure_dbt_profiles({"script": "dbt"})
+    assert synced == [1], "a dbt step must declare new lake tables before dbt parses"
 
 
 def test_state_reads_json_and_bridges_build_argv(state_dir, monkeypatch):

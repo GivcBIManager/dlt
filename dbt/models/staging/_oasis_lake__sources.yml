@@ -2,11 +2,17 @@ version: 2
 
 # Oasis Iceberg lake -- the landing zone written by the dlt extract jobs.
 #
+# MAINTAINED BY gui/dbt_sources.py: every table under the lake root is declared
+# here automatically, before each dbt command run from the GUI or a Dagster flow
+# (or on demand: `python gui/dbt_sources.py`). Edit freely -- descriptions,
+# extra tags, columns and tests you add are kept. Only the `meta` facts and the
+# load-type tag are refreshed from tables.json, and a description is only
+# rewritten while it still reads "Not yet documented.".
+#
 # These are NOT relations ClickHouse can read by name. Every model reads them
 # through the icebergLocal() table function, emitted by the `iceberg_source`
-# macro in macros/iceberg_source.sql. Declaring them here is what gives the
-# lineage graph in `dbt docs` its upstream edges -- without it the models are
-# 15 disconnected nodes.
+# macro in macros/iceberg_source.sql. Declaring them here is what lets dbt parse
+# those models and gives the lineage graph its upstream edges.
 #
 # The lake root is the `iceberg_root` var in dbt_project.yml and is a path on
 # the CLICKHOUSE HOST's filesystem.
@@ -19,6 +25,88 @@ sources:
       ClickHouse host and read via icebergLocal().
     tags: ["source", "iceberg", "oasis"]
     tables:
+
+      - name: account_transactions
+        description: Oracle OASIS.ACCOUNT_TRANSACTIONS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.ACCOUNT_TRANSACTIONS
+          load_type: transaction
+          unique_key: ACCOUNT_TRANSACTION_NO
+          cdc_column: ''
+
+      - name: admission_request
+        description: Oracle OASIS.ADMISSION_REQUEST, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.ADMISSION_REQUEST
+          load_type: transaction
+          unique_key: ADMISSION_REQUEST_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: analysis_categories_data
+        description: Oracle DEVDBA.ANALYSIS_CATEGORIES_DATA, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.ANALYSIS_CATEGORIES_DATA
+          load_type: master
+          unique_key: CATEGORY_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: analysis_codes_data
+        description: Oracle DEVDBA.ANALYSIS_CODES_DATA, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.ANALYSIS_CODES_DATA
+          load_type: master
+          unique_key: ANALYSIS_CODES_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: api_communication_request
+        description: Oracle DEVDBA.API_COMMUNICATION_REQUEST, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_COMMUNICATION_REQUEST
+          load_type: transaction
+          unique_key: API_TRANS_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: api_pre_approval_req
+        description: Oracle DEVDBA.API_PRE_APPROVAL_REQ, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_PRE_APPROVAL_REQ
+          load_type: transaction
+          unique_key: API_TRANS_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: api_pre_approval_req_details
+        description: Oracle DEVDBA.API_PRE_APPROVAL_REQ_DETAILS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_PRE_APPROVAL_REQ_DETAILS
+          load_type: transaction
+          unique_key: ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: api_pre_approval_res
+        description: Oracle DEVDBA.API_PRE_APPROVAL_RES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_PRE_APPROVAL_RES
+          load_type: transaction
+          unique_key: ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: api_pre_approval_res_details
+        description: Oracle DEVDBA.API_PRE_APPROVAL_RES_DETAILS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_PRE_APPROVAL_RES_DETAILS
+          load_type: transaction
+          unique_key: ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: appointments
         description: >
           Outpatient appointment bookings; one row per appointment slot, including future (scheduled) bookings.
@@ -29,6 +117,42 @@ sources:
           load_type: transaction
           unique_key: "APPOINTMENT_ID"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: ar_episode_invoices
+        description: Oracle DEVDBA.AR_EPISODE_INVOICES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.AR_EPISODE_INVOICES
+          load_type: transaction
+          unique_key: INVOICE_NO
+          cdc_column: AMEND_LAST_DATE
+
+      - name: ar_stat_of_invoices
+        description: Oracle DEVDBA.AR_STAT_OF_INVOICES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.AR_STAT_OF_INVOICES
+          load_type: transaction
+          unique_key: STAT_INVOICE_NO
+          cdc_column: AMEND_LAST_DATE
+
+      - name: authorisations
+        description: Oracle OASIS.AUTHORISATIONS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.AUTHORISATIONS
+          load_type: transaction
+          unique_key: AUTHORISATION_NO
+          cdc_column: ''
+
+      - name: authorisations_master
+        description: Oracle OASIS.AUTHORISATIONS_MASTER, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.AUTHORISATIONS_MASTER
+          load_type: transaction
+          unique_key: REQUEST_NO
+          cdc_column: AMEND_LAST_DATE
 
       - name: bed_class_master_data
         description: >
@@ -63,6 +187,42 @@ sources:
           unique_key: "BED_LOCATION"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: bintran
+        description: Oracle DEVDBA.BINTRAN, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.BINTRAN
+          load_type: transaction
+          unique_key: BINTRAN_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: cashiers_signon
+        description: Oracle OASIS.CASHIERS_SIGNON, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.CASHIERS_SIGNON
+          load_type: master
+          unique_key: SIGNON_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: claim_service_detail
+        description: Oracle DEVDBA.CLAIM_SERVICE_DETAIL, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.CLAIM_SERVICE_DETAIL
+          load_type: transaction
+          unique_key: VISIT_ID, SERVICE_ID, INVOICE_NUMBER,SEQUENCE_NO
+          cdc_column: ''
+
+      - name: claim_visit_detail
+        description: Oracle DEVDBA.CLAIM_VISIT_DETAIL, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.CLAIM_VISIT_DETAIL
+          load_type: transaction
+          unique_key: VISIT_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: codes_data
         description: >
           Generic Oasis code lookup, partitioned by code_type (nationality, religion, discharge reason, ...).
@@ -73,6 +233,33 @@ sources:
           load_type: master
           unique_key: "CODE"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: contract_rules
+        description: Oracle OASIS.CONTRACT_RULES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.CONTRACT_RULES
+          load_type: master
+          unique_key: CONTRACT_NO,RULE_IOS,TERM_ID,RULE_SEQ
+          cdc_column: ''
+
+      - name: contracts
+        description: Oracle OASIS.CONTRACTS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.CONTRACTS
+          load_type: master
+          unique_key: CONTRACT_NO
+          cdc_column: AMEND_LAST_DATE
+
+      - name: control_contexts_data
+        description: Oracle DEVDBA.CONTROL_CONTEXTS_DATA, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.CONTROL_CONTEXTS_DATA
+          load_type: master
+          unique_key: C_ID
+          cdc_column: AMEND_LAST_DATE
 
       - name: delivery_charge
         description: >
@@ -96,6 +283,24 @@ sources:
           unique_key: "DELIVERY_LINE"
           cdc_column: ""
 
+      - name: diagnosis_codes
+        description: Oracle OASIS.DIAGNOSIS_CODES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.DIAGNOSIS_CODES
+          load_type: master
+          unique_key: DIAG_CODE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: diagnosis_desc
+        description: Oracle OASIS.DIAGNOSIS_DESC, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.DIAGNOSIS_DESC
+          load_type: master
+          unique_key: DIAG_CODE,LANGUAGE_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: doc
         description: >
           Accounts-receivable document header (invoices, credit notes, AR adjustments).
@@ -106,6 +311,33 @@ sources:
           load_type: transaction
           unique_key: "DOC_ID"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: docl
+        description: Oracle DEVDBA.DOCL, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.DOCL
+          load_type: transaction
+          unique_key: LINE_ID
+          cdc_column: ''
+
+      - name: docl_by_serial
+        description: Oracle DEVDBA.DOCL_BY_SERIAL, loaded by the dlt pipeline as a snapshot table. Not yet documented.
+        tags: [snapshot]
+        meta:
+          oracle_table: DEVDBA.DOCL_BY_SERIAL
+          load_type: snapshot
+          unique_key: PRODUCT_CODE, BIN_LOCATION, C_ID, SERIAL_NO_1, ADJ_DATE
+          cdc_column: ''
+
+      - name: eligibility_types
+        description: Oracle OASIS.ELIGIBILITY_TYPES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.ELIGIBILITY_TYPES
+          load_type: master
+          unique_key: ELIGIBILITY_TYPE
+          cdc_column: AMEND_LAST_DATE
 
       - name: er_priorities
         description: >
@@ -118,6 +350,15 @@ sources:
           unique_key: "PRIORITY"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: exchange_rates
+        description: Oracle DEVDBA.EXCHANGE_RATES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.EXCHANGE_RATES
+          load_type: master
+          unique_key: CURRENCY_CODE_CONVERT_FROM,CURRENCY_CODE_CONVERT_TO
+          cdc_column: ''
+
       - name: external_accounts_data
         description: >
           External (payer) account registry backing the purchaser dimension.
@@ -128,6 +369,24 @@ sources:
           load_type: master
           unique_key: "ACCOUNT_CODE,ACCOUNT_TYPE,C_ID"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: generics
+        description: Oracle OASIS.GENERICS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.GENERICS
+          load_type: master
+          unique_key: GENERIC_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: gl_code
+        description: Oracle DEVDBA.GL_CODE, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.GL_CODE
+          load_type: master
+          unique_key: CODE,C_ID
+          cdc_column: AMEND_LAST_DATE
 
       - name: hnh_admission_reason_mapping
         description: >
@@ -151,6 +410,15 @@ sources:
           unique_key: "MOH_CODE"
           cdc_column: ""
 
+      - name: hnh_internal_doctor_list
+        description: Oracle DEVDBA.HNH_INTERNAL_DOCTOR_LIST, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.HNH_INTERNAL_DOCTOR_LIST
+          load_type: master
+          unique_key: STAFF_ID
+          cdc_column: CREATION_DATE
+
       - name: ios_main_data
         description: >
           IOS (item/order/service) master header -- the catalogue of billable services and products.
@@ -173,6 +441,51 @@ sources:
           unique_key: "IOS"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: ios_prices
+        description: Oracle OASIS.IOS_PRICES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.IOS_PRICES
+          load_type: master
+          unique_key: IOS,APPLIES_START,FACILITY_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: item_barcode
+        description: Oracle DEVDBA.ITEM_BARCODE, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.ITEM_BARCODE
+          load_type: master
+          unique_key: BAR_CODE,PRODUCT_CODE,ACCOUNT_CODE,C_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: lab_department_code
+        description: Oracle OASIS.LAB_DEPARTMENT_CODE, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.LAB_DEPARTMENT_CODE
+          load_type: master
+          unique_key: LAB_DEPT_NO
+          cdc_column: AMEND_LAST_DATE
+
+      - name: lab_ios
+        description: Oracle OASIS.LAB_IOS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.LAB_IOS
+          load_type: master
+          unique_key: IOS
+          cdc_column: AMEND_LAST_DATE
+
+      - name: maps006
+        description: Oracle OASIS.MAPS006, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.MAPS006
+          load_type: master
+          unique_key: USER_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: master_deliveries
         description: >
           Delivery header grouping delivery lines under one work entity and date.
@@ -183,6 +496,33 @@ sources:
           load_type: transaction
           unique_key: "MASTER_DELIVERY_NO"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: order_lines
+        description: Oracle OASIS.ORDER_LINES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.ORDER_LINES
+          load_type: transaction
+          unique_key: ORDER_LINE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: order_sets
+        description: Oracle OASIS.ORDER_SETS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.ORDER_SETS
+          load_type: master
+          unique_key: ORDER_SET_ID,HOSPITAL_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: orders_master
+        description: Oracle OASIS.ORDERS_MASTER, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.ORDERS_MASTER
+          load_type: transaction
+          unique_key: MASTER_ORDER_NO
+          cdc_column: AMEND_LAST_DATE
 
       - name: patient_ad
         description: >
@@ -206,6 +546,24 @@ sources:
           unique_key: "PATIENT_ID, EPISODE_NO, RESPONSIBILITY_SEQ"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: patient_contracts
+        description: Oracle OASIS.PATIENT_CONTRACTS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PATIENT_CONTRACTS
+          load_type: master
+          unique_key: PAT_CONTRACT_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: patient_diagnosis_notes
+        description: Oracle OASIS.PATIENT_DIAGNOSIS_NOTES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.PATIENT_DIAGNOSIS_NOTES
+          load_type: transaction
+          unique_key: PATIENT_DIAGNOSIS_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: patient_eligibility
         description: >
           Insurance eligibility records authorising a patient for a service window.
@@ -228,6 +586,24 @@ sources:
           unique_key: "ER_VISIT_ID"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: patient_episode_packages
+        description: Oracle OASIS.PATIENT_EPISODE_PACKAGES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PATIENT_EPISODE_PACKAGES
+          load_type: master
+          unique_key: PACKAGE_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: patient_episodes
+        description: Oracle OASIS.PATIENT_EPISODES, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.PATIENT_EPISODES
+          load_type: transaction
+          unique_key: PATIENT_ID, EPISODE_NO
+          cdc_column: AMEND_LAST_DATE
+
       - name: patient_file_master
         description: >
           Patient medical-record-file registry; supplies the MRN.
@@ -238,6 +614,15 @@ sources:
           load_type: master
           unique_key: "PAT_FILE_ID"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: patient_ids
+        description: Oracle OASIS.PATIENT_IDS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PATIENT_IDS
+          load_type: master
+          unique_key: PATIENT_ID_SEQ
+          cdc_column: AMEND_LAST_DATE
 
       - name: patient_master_data
         description: >
@@ -250,6 +635,69 @@ sources:
           unique_key: "PATIENT_ID"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: patient_order_sets
+        description: Oracle OASIS.PATIENT_ORDER_SETS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PATIENT_ORDER_SETS
+          load_type: master
+          unique_key: PATIENT_ID,EPISODE_NO,ENCOUNTER_ID,ORDER_SET_ID,HOSPITAL_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: personnel_documents
+        description: Oracle OASIS.PERSONNEL_DOCUMENTS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PERSONNEL_DOCUMENTS
+          load_type: master
+          unique_key: DOCUMENT_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: ph_cautionary_advisory_labels
+        description: Oracle OASIS.PH_CAUTIONARY_ADVISORY_LABELS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PH_CAUTIONARY_ADVISORY_LABELS
+          load_type: master
+          unique_key: CAUTIONARY_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: ph_ios_medicine
+        description: Oracle OASIS.PH_IOS_MEDICINE, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PH_IOS_MEDICINE
+          load_type: master
+          unique_key: IOS_MAIN
+          cdc_column: AMEND_LAST_DATE
+
+      - name: policies
+        description: Oracle OASIS.POLICIES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.POLICIES
+          load_type: master
+          unique_key: POLICY_CODE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: policy_class_rules
+        description: Oracle OASIS.POLICY_CLASS_RULES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.POLICY_CLASS_RULES
+          load_type: master
+          unique_key: CLASS_ID,RULE_IOS,TERM_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: policy_classes
+        description: Oracle OASIS.POLICY_CLASSES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.POLICY_CLASSES
+          load_type: master
+          unique_key: CLASS_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: positions_data
         description: >
           Staff position/title lookup.
@@ -260,6 +708,51 @@ sources:
           load_type: master
           unique_key: "POSITION_TYPE"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: product_base
+        description: Oracle DEVDBA.PRODUCT_BASE, loaded by the dlt pipeline as a snapshot table. Not yet documented.
+        tags: [snapshot]
+        meta:
+          oracle_table: DEVDBA.PRODUCT_BASE
+          load_type: snapshot
+          unique_key: PRODUCT_CODE, C_ID
+          cdc_column: ''
+
+      - name: product_supply_detail
+        description: Oracle DEVDBA.PRODUCT_SUPPLY_DETAIL, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.PRODUCT_SUPPLY_DETAIL
+          load_type: master
+          unique_key: ACCOUNT_CODE,PRODUCT_CODE,C_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: products_markup
+        description: Oracle OASIS.PRODUCTS_MARKUP, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PRODUCTS_MARKUP
+          load_type: master
+          unique_key: DETAIL_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: products_markup_master
+        description: Oracle OASIS.PRODUCTS_MARKUP_MASTER, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PRODUCTS_MARKUP_MASTER
+          load_type: master
+          unique_key: MASTER_SEQ_ID
+          cdc_column: LAST_AMEND_DATE
+
+      - name: purchaser_ios_prices
+        description: Oracle OASIS.PURCHASER_IOS_PRICES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.PURCHASER_IOS_PRICES
+          load_type: master
+          unique_key: PURCHASER_CODE,IOS,APPLIES_START,PRICE_LIST_ID,FACILITY_ID
+          cdc_column: AMEND_LAST_DATE
 
       - name: purchasers
         description: >
@@ -282,6 +775,24 @@ sources:
           load_type: master
           unique_key: "ROOM_NO"
           cdc_column: "AMEND_LAST_DATE"
+
+      - name: rule_master
+        description: Oracle OASIS.RULE_MASTER, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.RULE_MASTER
+          load_type: master
+          unique_key: RULE_IOS
+          cdc_column: AMEND_LAST_DATE
+
+      - name: service_dept_data
+        description: Oracle OASIS.SERVICE_DEPT_DATA, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.SERVICE_DEPT_DATA
+          load_type: master
+          unique_key: SERVICE_DEPT
+          cdc_column: AMEND_LAST_DATE
 
       - name: staff_contracts
         description: >
@@ -338,3 +849,92 @@ sources:
           unique_key: "STAFF_TYPE"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: staff_vacations
+        description: Oracle OASIS.STAFF_VACATIONS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.STAFF_VACATIONS
+          load_type: transaction
+          unique_key: STAFF_VACATION_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: term_details
+        description: Oracle OASIS.TERM_DETAILS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.TERM_DETAILS
+          load_type: master
+          unique_key: TERM_ID, SEQUENCE_NO,APPLIES_START
+          cdc_column: ''
+
+      - name: terms
+        description: Oracle OASIS.TERMS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.TERMS
+          load_type: master
+          unique_key: TERM_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: time_periods
+        description: Oracle DEVDBA.TIME_PERIODS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: DEVDBA.TIME_PERIODS
+          load_type: master
+          unique_key: SEQUENCE_NO
+          cdc_column: AMEND_LAST_DATE
+
+      - name: transaction_types
+        description: Oracle OASIS.TRANSACTION_TYPES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.TRANSACTION_TYPES
+          load_type: master
+          unique_key: TRANSACTION_TYPE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: transaction_types_master
+        description: Oracle OASIS.TRANSACTION_TYPES_MASTER, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.TRANSACTION_TYPES_MASTER
+          load_type: master
+          unique_key: TRANSACTION_TYPE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: vacation_types
+        description: Oracle OASIS.VACATION_TYPES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.VACATION_TYPES
+          load_type: master
+          unique_key: VACATION_TYPE_ID
+          cdc_column: AMEND_LAST_DATE
+
+      - name: work_entities_data
+        description: Oracle OASIS.WORK_ENTITIES_DATA, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: OASIS.WORK_ENTITIES_DATA
+          load_type: master
+          unique_key: WORK_ENTITY
+          cdc_column: AMEND_LAST_DATE
+
+      - name: xy_ios
+        description: Oracle XY.XY_IOS, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: XY.XY_IOS
+          load_type: master
+          unique_key: IOS_MAIN
+          cdc_column: AMEND_LAST_DATE
+
+      - name: xy_modalities
+        description: Oracle XY.XY_MODALITIES, loaded by the dlt pipeline as a master table. Not yet documented.
+        tags: [master]
+        meta:
+          oracle_table: XY.XY_MODALITIES
+          load_type: master
+          unique_key: MODALITY_ID
+          cdc_column: AMEND_LAST_DATE

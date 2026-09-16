@@ -33,6 +33,7 @@ if str(_gui_dir) not in sys.path:
 import commands as _commands  # noqa: E402  (after sys.path insert)
 import config as _gui_config  # noqa: E402
 import dbt_config as _dbt_config  # noqa: E402  (profiles.yml generator, used by dbt assets)
+import dbt_sources as _dbt_sources  # noqa: E402  (lake -> dbt sources sync, used by dbt assets)
 import flow_naming  # noqa: E402  (re-exported so orchestrator modules share GUI naming)
 
 build_argv = _commands.build_argv
@@ -58,6 +59,12 @@ def secrets_path() -> Path:
 
 
 def ensure_dbt_profiles(spec: dict[str, Any] | None) -> None:
-    """Generate dbt/profiles.yml before a dbt asset runs (no-op otherwise)."""
+    """Prepare the dbt project before a dbt asset runs (no-op otherwise).
+
+    Generates dbt/profiles.yml and declares any lake table loaded since the last
+    run as a dbt source -- a flow typically loads new data and then runs dbt, and
+    a model reading an undeclared table would stop the whole project parsing.
+    """
     if (spec or {}).get("script") == "dbt":
         _dbt_config.write_profiles()  # bound at load time; see the import note above
+        _dbt_sources.sync_safe()

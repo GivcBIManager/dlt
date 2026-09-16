@@ -173,6 +173,18 @@ def _project_sig() -> float:
     return latest
 
 
+def _sync_lake_sources() -> None:
+    """Declare newly loaded lake tables before dbt parses the project.
+
+    Imported lazily so this module stays usable without ruamel.yaml.
+    """
+    try:
+        import dbt_sources
+    except ImportError:
+        return
+    dbt_sources.sync_safe()
+
+
 def _dbt_ls_cached(resource_type: str) -> list[dict[str, Any]]:
     key = (str(_root()), resource_type)
     sig = _project_sig()
@@ -180,6 +192,11 @@ def _dbt_ls_cached(resource_type: str) -> list[dict[str, Any]]:
         hit = _LS_CACHE.get(key)
         if hit is not None and hit[0] == sig:
             return hit[1]
+    # Cache miss, so `dbt ls` is about to parse the project, and one model that
+    # reads an undeclared lake table makes it fail outright. Declare new tables
+    # first, then re-take the signature in case that rewrote the sources file.
+    _sync_lake_sources()
+    sig = _project_sig()
     result = _dbt_ls(resource_type)
     with _LS_LOCK:
         _LS_CACHE[key] = (sig, result)
