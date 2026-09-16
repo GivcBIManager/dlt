@@ -336,3 +336,8 @@ models:
         description: Whether the catalogue entry is frozen against edits.
       - name: recorded_updated_at
         description: dlt extract watermark; the incremental high-water column.
+  - name: fact_docl
+    description: each record contains the details for each doc id from doc table
+    config:
+      tags: [incremental, doc, details]
+    columns: []
