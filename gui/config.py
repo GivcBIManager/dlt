@@ -70,6 +70,15 @@ def _resolve_iceberg_bucket() -> Path:
 ICEBERG_BUCKET = _resolve_iceberg_bucket()
 ICEBERG_ROOT = ICEBERG_BUCKET / ICEBERG_DATASET
 
+# Oracle Fusion Iceberg warehouse -- a SECOND lake, written by a pipeline that
+# does not live in this repo, read by dbt through the `ofusion_source` macro.
+# Its layout is not the oasis lake's: tables sit at
+# <root>/<domain>/<table>/<run stamp>/{data,metadata}, so a table's physical
+# path cannot be derived from its name and is resolved by gui/ofusion_sources.py.
+# Override with $OFUSION_ROOT; the default is where ClickHouse can read it.
+OFUSION_ROOT = Path(os.environ.get("OFUSION_ROOT")
+                    or "/var/lib/clickhouse/user_files/ofusion_output")
+
 # Entry-point scripts the panel can launch.
 SCRIPTS = {
     "oracle_to_iceberg": REPO_ROOT / "oracle_to_iceberg.py",
@@ -88,6 +97,9 @@ FLOWS_JSON = STATE_DIR / "flows.json"
 # --- Dagster orchestration -------------------------------------------------- #
 ORCHESTRATOR_DIR = REPO_ROOT / "orchestrator"
 DAGSTER_HOME = REPO_ROOT / ".dagster_home"
+# Multi-location workspace: the orchestrator plus the Fusion pipeline code
+# location (each in its own venv). Loaded via `dagster dev -w`.
+WORKSPACE_FILE = REPO_ROOT / "workspace.yaml"
 
 # --- dbt materialization layer --------------------------------------------- #
 # The dbt project lives at <repo root>/dbt. profiles.yml is GENERATED from app

@@ -1,9 +1,11 @@
 """Supervise a local Dagster instance (webserver + daemon) for the GUI.
 
-Launches one combined process — ``python -m dagster dev -m orchestrator.definitions``
-— sharing an absolute DAGSTER_HOME with a generated dagster.yaml (run-queue
-concurrency limit). Cross-platform process-group handling mirrors
-pipeline_runner.py so the whole tree can be killed on Windows and POSIX.
+Launches one combined process — ``python -m dagster dev -w workspace.yaml`` —
+loading every code location in that workspace (the orchestrator plus the Fusion
+pipeline, each in its own venv), sharing an absolute DAGSTER_HOME with a
+generated dagster.yaml (run concurrency limit). Cross-platform
+process-group handling mirrors pipeline_runner.py so the whole tree can be
+killed on Windows and POSIX.
 """
 from __future__ import annotations
 
@@ -16,9 +18,15 @@ from typing import Any
 
 import config
 
+# Written only when DAGSTER_HOME has no dagster.yaml yet (a fresh machine); an
+# existing file is never touched. Both run-concurrency settings must sit under
+# `concurrency > runs`: since Dagster 1.13 an instance that ALSO carries
+# max_concurrent_runs or tag_concurrency_limits under a top-level `run_queue:`
+# fails to load outright, taking the whole `dagster dev` process with it.
 _DAGSTER_YAML = """\
-run_queue:
-  max_concurrent_runs: 1
+concurrency:
+  runs:
+    max_concurrent_runs: 1
 telemetry:
   enabled: false
 """
@@ -42,7 +50,7 @@ class DagsterService:
     def launch_argv(self) -> list[str]:
         return [
             config.python_executable(), "-m", "dagster", "dev",
-            "-m", "orchestrator.definitions",
+            "-w", str(config.WORKSPACE_FILE),
             "-h", config.dagster_host(), "-p", str(config.dagster_port()),
         ]
 

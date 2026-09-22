@@ -1,0 +1,17 @@
+# Dagster code locations loaded by `dagster dev -w workspace.yaml`
+# (launched from gui/dagster_service.py). Two locations, each in its own venv:
+#   - orchestrator.definitions : the OASIS/dlt ETL definitions (this repo)
+#   - fusion_dwh               : the Oracle Fusion pipeline (separate repo/venv)
+# The orchestrator location_name must stay "orchestrator.definitions": the GUI's
+# dagster_client builds GraphQL selectors from that exact name.
+load_from:
+  - python_module:
+      module_name: orchestrator.definitions
+      location_name: orchestrator.definitions
+      working_directory: /home/bi/workspace/dlt/orchestrator
+      executable_path: /home/bi/workspace/dlt/.venv/bin/python
+  - python_module:
+      module_name: fusion_pipeline.orchestration.definitions
+      location_name: fusion_dwh
+      working_directory: /home/bi/fusion_pipeline/oracle_fusion
+      executable_path: /home/bi/fusion_pipeline/oracle_fusion/.venv/bin/python

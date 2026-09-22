@@ -176,13 +176,20 @@ def _project_sig() -> float:
 def _sync_lake_sources() -> None:
     """Declare newly loaded lake tables before dbt parses the project.
 
+    Both lakes: the oasis lake's tables, and the Oracle Fusion warehouse's
+    tables plus the resolved Iceberg path of each (its paths carry a per-load
+    run stamp minted outside this repo, so a path left from the last sync can
+    already be stale -- see gui/ofusion_sources.py).
+
     Imported lazily so this module stays usable without ruamel.yaml.
     """
     try:
         import dbt_sources
+        import ofusion_sources
     except ImportError:
         return
     dbt_sources.sync_safe()
+    ofusion_sources.sync_safe()
 
 
 def _dbt_ls_cached(resource_type: str) -> list[dict[str, Any]]:
