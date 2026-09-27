@@ -90,3 +90,77 @@ def test_forget_removes_orphaned_block(proj):
     assert dbt_meta.forget("m1") is True
     assert "m1" not in (proj / "models" / "staging" / "_staging__models.yml").read_text()
     assert dbt_meta.forget("m1") is False
+
+
+# ---- lake folders: models/<lake>/<layer>/[<sub>/]<name>.sql -------------- #
+
+LAKE_SOURCES_YML = """\
+version: 2
+sources:
+  - name: lake
+    tables:
+      - name: t1
+"""
+
+LAKE_MODELS_YML = """\
+version: 2
+
+# Lake staging -- this comment must survive a save too.
+
+models:
+  - name: l1
+    description: Lake model.
+"""
+
+
+@pytest.fixture
+def lake(proj):
+    # The schema file carries the lake's name, not the layer's, and shares the
+    # folder with a sources file that must not be mistaken for it.
+    d = proj / "models" / "lk" / "staging"
+    (d / "area").mkdir(parents=True)
+    (d / "area" / "l1.sql").write_text("select 1", encoding="utf-8")
+    (d / "_lk__sources.yml").write_text(LAKE_SOURCES_YML, encoding="utf-8")
+    (d / "_lk__models.yml").write_text(LAKE_MODELS_YML, encoding="utf-8")
+    return proj
+
+
+def test_describe_finds_nested_lake_model(lake):
+    import dbt_meta
+    m = dbt_meta.describe("l1")
+    assert (m["lake"], m["layer"]) == ("lk", "staging")
+    assert m["path"] == "models/lk/staging/area/l1.sql"
+    assert m["schema_file"] == "models/lk/staging/_lk__models.yml"
+    assert m["description"] == "Lake model."
+
+
+def test_lake_save_writes_the_lake_schema_file(lake):
+    import dbt_meta
+    dbt_meta.save("l1", {**dbt_meta.describe("l1"), "tags": ["edited"]})
+    text = (lake / "models" / "lk" / "staging" / "_lk__models.yml").read_text()
+    assert "this comment must survive a save too" in text and "edited" in text
+    assert "edited" not in (lake / "models" / "lk" / "staging" / "_lk__sources.yml").read_text()
+    assert not (lake / "models" / "staging" / "_staging__models.yml").read_text().count("l1")
+
+
+def test_lake_move_stays_in_lake_and_subfolder(lake):
+    import dbt_meta
+    m = dbt_meta.describe("l1")
+    assert m["moves"]["marts"]["path"] == "models/lk/marts/area/l1.sql"
+    dbt_meta.save("l1", {**m, "layer": "marts"})
+    assert (lake / "models" / "lk" / "marts" / "area" / "l1.sql").exists()
+    assert not (lake / "models" / "marts" / "l1.sql").exists()
+    assert "l1" not in (lake / "models" / "lk" / "staging" / "_lk__models.yml").read_text()
+    moved = dbt_meta.describe("l1")
+    assert moved["schema_file"] == "models/lk/marts/_marts__models.yml"
+    assert moved["description"] == "Lake model."
+
+
+def test_forget_and_overview_cover_lake_models(lake):
+    import dbt_meta
+    rows = {r["name"]: r for r in dbt_meta.overview()}
+    assert rows["l1"]["lake"] == "lk" and rows["l1"]["described"] is True
+    assert rows["m1"]["lake"] == ""
+    (lake / "models" / "lk" / "staging" / "area" / "l1.sql").unlink()
+    assert dbt_meta.forget("l1") is True
+    assert "l1" not in (lake / "models" / "lk" / "staging" / "_lk__models.yml").read_text()

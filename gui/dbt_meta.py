@@ -6,9 +6,18 @@ The dbt project classifies models into three layers by FOLDER:
     models/intermediate/  joins 2+ lake tables into one business entity
     models/marts/         built on other dbt models via ref()
 
-Each layer owns one schema file, ``models/<layer>/_<layer>__models.yml``, which
-carries the description, tags and data tests for every model in that layer.
-This module is the read/write layer the Models page drives.
+A lake with a database of its own nests LAKE-first, one level down --
+``models/oasis_lake/staging/``, ``models/fusion/staging/<area>/`` -- so a
+model's home is ``models/[<lake>/]<layer>/[<sub>/]<name>.sql``: everything
+before the first layer folder is the lake, everything after it a plain
+subfolder.
+
+Each layer folder owns the schema file that carries the description, tags and
+data tests for its models. It is whichever ``*.yml`` in that folder has a
+``models:`` key (``_staging__models.yml``, ``_oasis_lake__models.yml``,
+``_ofusion__models.yml``, ...); a layer folder without one gets
+``_<layer>__models.yml`` on first save. This module is the read/write layer the
+Models page drives.
 
 Two things it is careful about:
 
@@ -20,6 +29,8 @@ Two things it is careful about:
 * **Moving a layer moves both halves.** A model's layer is its folder, so
   changing it renames the ``.sql`` file *and* migrates its YAML block to the
   new layer's schema file. Doing only one leaves the project inconsistent.
+  A move stays inside the model's lake (and keeps its subfolder): the lake is
+  a database, and swapping layers must not also swap databases.
 
 Changing a layer does NOT change the model's relation name in ClickHouse: no
 ``+schema:`` is configured per layer in dbt_project.yml, precisely so that
@@ -28,6 +39,7 @@ reclassifying a model cannot break BI reports already pointed at it.
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +52,8 @@ LAYERS = ("staging", "intermediate", "marts")
 # Column-level generic tests the editor offers. Values are what gets written
 # into the YAML `data_tests:` list for a column.
 COLUMN_TESTS = ("not_null", "unique")
+
+_MODELS_KEY = re.compile(r"^models:", re.MULTILINE)
 
 
 def _flow(items: list[str]) -> Any:
@@ -71,14 +85,59 @@ def _root() -> Path:
     return dbt_config.dbt_dir().resolve()
 
 
-def schema_path(layer: str) -> Path:
-    if layer not in LAYERS:
-        raise ValueError(f"unknown layer {layer!r}; expected one of {LAYERS}")
-    return _root() / "models" / layer / f"_{layer}__models.yml"
+class Home:
+    """Where a model lives: ``models/[<lake>/]<layer>/[<sub>/]<name>.sql``."""
+
+    def __init__(self, lake: tuple[str, ...], layer: str, sub: tuple[str, ...], name: str):
+        if layer not in LAYERS:
+            raise ValueError(f"unknown layer {layer!r}; expected one of {LAYERS}")
+        self.lake, self.layer, self.sub, self.name = lake, layer, sub, name
+
+    @classmethod
+    def parse(cls, sql: Path) -> "Home | None":
+        """The home of a model file, or None when no folder above it is a layer."""
+        parts = sql.relative_to(_root() / "models").parts[:-1]
+        for i, part in enumerate(parts):
+            if part in LAYERS:
+                return cls(parts[:i], part, parts[i + 1:], sql.stem)
+        return None
+
+    def moved(self, layer: str) -> "Home":
+        return Home(self.lake, layer, self.sub, self.name)
+
+    @property
+    def layer_dir(self) -> Path:
+        return _root().joinpath("models", *self.lake, self.layer)
+
+    @property
+    def sql(self) -> Path:
+        return self.layer_dir.joinpath(*self.sub, f"{self.name}.sql")
+
+    def schema(self) -> Path:
+        """The layer folder's schema file: the one holding a ``models:`` key.
+
+        Found by a text scan for the top-level key rather than a YAML parse --
+        this runs for every model in the list, and round-trip parsing the big
+        lake schema files once per model takes seconds.
+        """
+        for yml in sorted(self.layer_dir.glob("*.yml")):
+            if _MODELS_KEY.search(yml.read_text(encoding="utf-8")):
+                return yml
+        return self.layer_dir / f"_{self.layer}__models.yml"
 
 
-def model_path(layer: str, name: str) -> Path:
-    return _root() / "models" / layer / f"{name}.sql"
+def _rel(path: Path) -> str:
+    return path.relative_to(_root()).as_posix()
+
+
+def _home_of(name: str) -> Home | None:
+    """Where ``name``.sql lives in a layer folder, or None if it has no file."""
+    models = _root() / "models"
+    for sql in sorted(models.rglob(f"{name}.sql")):
+        home = Home.parse(sql)
+        if home is not None:
+            return home
+    return None
 
 
 def _load(path: Path) -> Any:
@@ -95,14 +154,6 @@ def _dump(path: Path, doc: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(buf.getvalue(), encoding="utf-8")
     tmp.replace(path)
-
-
-def _layer_of(name: str) -> str | None:
-    """Which layer folder holds ``name``.sql, or None if the model has no file."""
-    for layer in LAYERS:
-        if model_path(layer, name).exists():
-            return layer
-    return None
 
 
 def _find_block(doc: Any, name: str) -> Any | None:
@@ -125,13 +176,27 @@ def _tags_of(block: Any) -> list[str]:
 
 def describe(name: str) -> dict[str, Any]:
     """Current metadata for one model, for the editor form."""
-    layer = _layer_of(name)
-    if layer is None:
+    home = _home_of(name)
+    if home is None:
         raise FileNotFoundError(f"no .sql file for model {name!r} in any layer folder")
 
-    block = _find_block(_load(schema_path(layer)), name)
+    # Where the model and its docs live now, and where a move to each layer
+    # would put them -- the editor previews a move from these, since a lake
+    # model's paths cannot be derived from its layer alone.
+    where = {
+        "name": name,
+        "layer": home.layer,
+        "lake": "/".join(home.lake),
+        "path": _rel(home.sql),
+        "schema_file": _rel(home.schema()),
+        "moves": {layer: {"path": _rel(home.moved(layer).sql),
+                          "schema_file": _rel(home.moved(layer).schema())}
+                  for layer in LAYERS},
+    }
+
+    block = _find_block(_load(home.schema()), name)
     if block is None:
-        return {"name": name, "layer": layer, "documented": False,
+        return {**where, "documented": False,
                 "description": "", "tags": [], "columns": [], "grain": []}
 
     columns = []
@@ -149,8 +214,7 @@ def describe(name: str) -> dict[str, Any]:
             grain = list(args.get("combination_of_columns") or [])
 
     return {
-        "name": name,
-        "layer": layer,
+        **where,
         "documented": True,
         "description": str(block.get("description") or "").strip(),
         "tags": _tags_of(block),
@@ -221,49 +285,48 @@ def save(name: str, meta: dict[str, Any]) -> dict[str, Any]:
     Returns the metadata as re-read from disk, so the caller sees exactly what
     was written rather than what it asked for.
     """
-    current = _layer_of(name)
-    if current is None:
+    home = _home_of(name)
+    if home is None:
         raise FileNotFoundError(f"no .sql file for model {name!r} in any layer folder")
 
-    target = str(meta.get("layer") or current)
-    if target not in LAYERS:
-        raise ValueError(f"unknown layer {target!r}; expected one of {LAYERS}")
-
-    src_doc = _load(schema_path(current))
+    target = home.moved(str(meta.get("layer") or home.layer))  # validates the layer
+    src_yml = home.schema()
+    src_doc = _load(src_yml)
     block = _find_block(src_doc, name)
 
-    if target != current:
+    if target.layer != home.layer:
         # Move the SQL file first: the layer IS the folder, and if this fails
         # we must not have already rewritten the schema files.
-        dst_sql = model_path(target, name)
+        dst_sql = target.sql
         dst_sql.parent.mkdir(parents=True, exist_ok=True)
         if dst_sql.exists():
-            raise ValueError(f"{dst_sql.relative_to(_root())} already exists")
-        model_path(current, name).rename(dst_sql)
+            raise ValueError(f"{_rel(dst_sql)} already exists")
+        home.sql.rename(dst_sql)
 
         # Detach the block from the old layer's schema file.
         if block is not None:
             src_doc["models"] = [m for m in src_doc["models"] if m.get("name") != name]
-            _dump(schema_path(current), src_doc)
+            _dump(src_yml, src_doc)
 
-        dst_doc = _load(schema_path(target))
+        dst_yml = target.schema()
+        dst_doc = _load(dst_yml)
         if block is None:
             block = {"name": name}
         dst_doc.setdefault("models", []).append(block)
         _apply(block, meta)
-        _dump(schema_path(target), dst_doc)
+        _dump(dst_yml, dst_doc)
     else:
         if block is None:
             block = {"name": name}
             src_doc.setdefault("models", []).append(block)
         _apply(block, meta)
-        _dump(schema_path(current), src_doc)
+        _dump(src_yml, src_doc)
 
     return describe(name)
 
 
 def forget(name: str) -> bool:
-    """Drop ``name``'s block from whichever layer schema file holds it.
+    """Drop ``name``'s block from whichever schema file holds it.
 
     Called when a model's .sql is deleted. Without it dbt keeps parsing the
     orphaned block and warns on every invocation ("Did not find matching node
@@ -271,9 +334,8 @@ def forget(name: str) -> bool:
     against a node that no longer exists.
     """
     removed = False
-    for layer in LAYERS:
-        path = schema_path(layer)
-        if not path.exists():
+    for path in sorted((_root() / "models").rglob("*.yml")):
+        if not _MODELS_KEY.search(path.read_text(encoding="utf-8")):
             continue
         doc = _load(path)
         models = doc.get("models") or []
@@ -312,24 +374,26 @@ def catalog_columns(name: str) -> list[dict[str, str]]:
 def overview() -> list[dict[str, Any]]:
     """Every model with its layer, tag and documentation status, for the list."""
     out = []
-    for layer in LAYERS:
-        doc = _load(schema_path(layer))
-        blocks = {m.get("name"): m for m in (doc.get("models") or [])}
-        folder = _root() / "models" / layer
-        if not folder.exists():
+    blocks: dict[Path, dict[str, Any]] = {}  # schema file -> {model name: block}
+    for sql in sorted((_root() / "models").rglob("*.sql")):
+        home = Home.parse(sql)
+        if home is None:
             continue
-        for sql in sorted(folder.glob("*.sql")):
-            block = blocks.get(sql.stem)
-            described = bool(block and str(block.get("description") or "").strip())
-            cols = (block.get("columns") if block else None) or []
-            tested = sum(1 for c in cols if c.get("data_tests"))
-            out.append({
-                "name": sql.stem,
-                "layer": layer,
-                "path": sql.relative_to(_root()).as_posix(),
-                "tags": _tags_of(block) if block else [],
-                "described": described,
-                "columns_documented": len(cols),
-                "columns_tested": tested,
-            })
+        yml = home.schema()
+        if yml not in blocks:
+            blocks[yml] = {m.get("name"): m for m in (_load(yml).get("models") or [])}
+        block = blocks[yml].get(sql.stem)
+        described = bool(block and str(block.get("description") or "").strip())
+        cols = (block.get("columns") if block else None) or []
+        tested = sum(1 for c in cols if c.get("data_tests"))
+        out.append({
+            "name": sql.stem,
+            "layer": home.layer,
+            "lake": "/".join(home.lake),
+            "path": _rel(sql),
+            "tags": _tags_of(block) if block else [],
+            "described": described,
+            "columns_documented": len(cols),
+            "columns_tested": tested,
+        })
     return out

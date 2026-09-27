@@ -543,11 +543,13 @@ function renderLayers() {
   const moving = metaLayer !== META.layer, mv = el("meta-move");
   mv.hidden = !moving;
   if (moving) {
-    mv.innerHTML = `Saving moves <span class="mono">models/${esc(META.layer)}/${esc(META.name)}.sql</span> →
-      <span class="mono">models/${esc(metaLayer)}/${esc(META.name)}.sql</span>. The ClickHouse table
+    // Paths come from the backend: a lake model (models/<lake>/<layer>/...)
+    // stays in its lake on a move, so they cannot be built from the layer alone.
+    mv.innerHTML = `Saving moves <span class="mono">${esc(META.path)}</span> →
+      <span class="mono">${esc(META.moves[metaLayer].path)}</span>. The ClickHouse table
       <span class="mono">${esc(META.name)}</span> keeps its name.`;
   }
-  el("meta-file").textContent = `models/${metaLayer}/_${metaLayer}__models.yml`;
+  el("meta-file").textContent = META.moves[metaLayer].schema_file;
   renderTags();  // the fixed layer chip follows the picked layer
 }
 
@@ -669,7 +671,7 @@ async function saveMeta(alsoSql) {
   const r = await apiPut("/api/dbt/meta", body);
   const m = r.meta;
   ok(moved ? `Saved — moved to ${m.layer}` : (alsoSql ? "Saved file and metadata" : "Metadata saved"));
-  if (moved) curFile = `models/${m.layer}/${m.name}.sql`;
+  if (moved) curFile = m.path;
   await Promise.all([loadMeta(m.name), loadLists(), loadTagPool()]);
   renderLists();
 }
