@@ -15,7 +15,7 @@ models:
       'D' to recover the document being discounted and sums the credit.
 
       Materialized as a VIEW, so it is computed at query time and always
-      reflects the current contents of fact_doc. Rows summing to exactly zero
+      reflects the current contents of oasis_lake's doc model. Rows summing to exactly zero
       are dropped by the HAVING clause -- a discount fully reversed by a later
       correction disappears rather than showing as 0.
     config:
@@ -27,7 +27,7 @@ models:
       - name: discount_doc_no
         description: >
           Original document number the discount applies to, derived by removing
-          the trailing 'D' from org_doc_no. Join this to fact_doc.doc_no.
+          the trailing 'D' from org_doc_no. Join this to doc.doc_no.
         data_tests: [not_null]
       - name: org_doc_no
         description: >

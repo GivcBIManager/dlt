@@ -5,7 +5,7 @@ SELECT
     doc_no AS org_doc_no,
     CAST(doc_date,'DATE') AS doc_date,
     sum(total_doc_price) AS discount
-FROM {{ ref('fact_doc') }}
+FROM {{ ref('doc') }}
 WHERE endsWith(doc_no,'D') and doc_type ='CREDITAR'
 GROUP BY ALL
 HAVING sum(total_doc_price) != 0

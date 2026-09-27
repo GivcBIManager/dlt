@@ -44,9 +44,6 @@ models:
     # under it. Those models read the Oracle Fusion warehouse and are new, so
     # nothing is pointed at them yet and they can have a database of their own.
     # ------------------------------------------------------------------
-    staging:
-      +tags: ["staging"]
-
     intermediate:
       +tags: ["intermediate"]
 
