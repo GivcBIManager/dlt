@@ -71,3 +71,25 @@ models:
 
       staging:
         +tags: ["staging"]
+
+    # ------------------------------------------------------------------
+    # The Oasis lake, staged 1:1 into a database of its own.
+    #
+    # Same shape as `fusion/` above, and for the same reason: nested LAKE-first
+    # so the single `+schema: oasis` covers every layer under it. The folder is
+    # `oasis_lake` rather than `oasis` because `oasis` is already the dbt
+    # PROJECT name -- the key this whole block nests under -- and a folder of
+    # that name reads as a typo here.
+    #
+    # This is NOT a second copy of `staging/` above. That layer hand-picks a
+    # few lake tables, reshapes them, and stays in `default` because the BI
+    # reports are already pointed there. This one is the whole lake, one model
+    # per table, 1:1. Nothing is pointed at `oasis`, so it is free to be a
+    # faithful rendering rather than a compatible one.
+    # ------------------------------------------------------------------
+    oasis_lake:
+      +schema: oasis
+      +tags: ["oasis_lake"]
+
+      staging:
+        +tags: ["staging"]

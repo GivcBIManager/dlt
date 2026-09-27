@@ -1,0 +1,683 @@
+version: 2
+
+# Grain tests for the Oasis lake staged into the `oasis` database.
+#
+# Every model here is ReplacingMergeTree(recorded_updated_at) + an appending
+# incremental, so its ORDER BY key IS its dedup key: rows sharing that key are
+# collapsed on merge, keeping the one with the highest recorded_updated_at.
+#
+# The test is `unique_grain_per_version`, NOT `unique_combination_final`. The
+# latter reads the model with FINAL, which collapses on the sorting key before
+# the assertion runs -- so on these models it is a tautology and passes no
+# matter how wrong the key is. See tests/generic/unique_grain_per_version.sql.
+#
+# Keys were measured against the live lake, not inferred. Three tables whose
+# declared unique_key turned out to be violated in the landed data carry a
+# widened key and a note in the model file.
+
+models:
+
+  - name: account_transactions
+    description: "OASIS.ACCOUNT_TRANSACTIONS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 1,520,938 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, account_transaction_no]
+
+  - name: admission_request
+    description: "OASIS.ADMISSION_REQUEST staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 41,720 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, admission_request_id]
+
+  - name: analysis_categories_data
+    description: "DEVDBA.ANALYSIS_CATEGORIES_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 163 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, category_id]
+
+  - name: analysis_codes_data
+    description: "DEVDBA.ANALYSIS_CODES_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 23,669 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, analysis_codes_id]
+
+  - name: api_communication_request
+    description: "DEVDBA.API_COMMUNICATION_REQUEST staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 345,770 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, api_trans_id]
+
+  - name: api_pre_approval_req
+    description: "DEVDBA.API_PRE_APPROVAL_REQ staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 2,526,543 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, api_trans_id]
+
+  - name: api_pre_approval_req_details
+    description: "DEVDBA.API_PRE_APPROVAL_REQ_DETAILS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 5,668,606 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, id]
+
+  - name: api_pre_approval_res
+    description: "DEVDBA.API_PRE_APPROVAL_RES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 4,899,307 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, id]
+
+  - name: api_pre_approval_res_details
+    description: "DEVDBA.API_PRE_APPROVAL_RES_DETAILS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 6,223,441 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, id]
+
+  - name: appointments
+    description: "OASIS.APPOINTMENTS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 425,387,542 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, appointment_id]
+
+  - name: ar_episode_invoices
+    description: "DEVDBA.AR_EPISODE_INVOICES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 3,626,586 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, invoice_no]
+
+  - name: ar_stat_of_invoices
+    description: "DEVDBA.AR_STAT_OF_INVOICES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 558,378 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, stat_invoice_no]
+
+  - name: authorisations
+    description: "OASIS.AUTHORISATIONS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 6,612,597 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, authorisation_no]
+
+  - name: authorisations_master
+    description: "OASIS.AUTHORISATIONS_MASTER staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 3,072,608 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, request_no]
+
+  - name: bed_class_master_data
+    description: "OASIS.BED_CLASS_MASTER_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 181 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, bed_class]
+
+  - name: bed_details
+    description: "OASIS.BED_DETAILS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 1,764,033 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, bed_detail_id]
+
+  - name: bed_slots_master
+    description: "OASIS.BED_SLOTS_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 4,776 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, bed_location]
+
+  - name: bintran
+    description: "DEVDBA.BINTRAN staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 5,154,555 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, bintran_id]
+
+  - name: cashiers_signon
+    description: "OASIS.CASHIERS_SIGNON staged 1:1 from the Oasis lake (master load). Grain: measured unique over 690,472 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, signon_id]
+
+  - name: claim_service_detail
+    description: "DEVDBA.CLAIM_SERVICE_DETAIL staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 23,074,619 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, visit_id, service_id, invoice_number, sequence_no]
+
+  - name: claim_visit_detail
+    description: "DEVDBA.CLAIM_VISIT_DETAIL staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 4,026,835 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, visit_id]
+
+  - name: codes_data
+    description: "OASIS.CODES_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 476,396 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, code]
+
+  - name: contract_rules
+    description: "OASIS.CONTRACT_RULES staged 1:1 from the Oasis lake (master load). Grain: widened: declared unique_key is violated in the lake."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, contract_no, rule_ios, term_id, rule_seq, applies_start, applies_end, amend_by_user, amend_last_date, price_total, units_total, rule_control_status, hospital_id, created_by_user, creation_date, recorded_updated_at]
+
+  - name: contracts
+    description: "OASIS.CONTRACTS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 681,392 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, contract_no]
+
+  - name: control_contexts_data
+    description: "DEVDBA.CONTROL_CONTEXTS_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 1,585 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, c_id]
+
+  - name: delivery_charge
+    description: "OASIS.DELIVERY_CHARGE staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 106,741,186 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, delivery_charge_id]
+
+  - name: delivery_lines
+    description: "OASIS.DELIVERY_LINES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 95,848,169 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, delivery_line]
+
+  - name: diagnosis_codes
+    description: "OASIS.DIAGNOSIS_CODES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 784,415 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, diag_code]
+
+  - name: diagnosis_desc
+    description: "OASIS.DIAGNOSIS_DESC staged 1:1 from the Oasis lake (master load). Grain: measured unique over 1,295,483 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, diag_code, language_id]
+
+  - name: doc
+    description: "DEVDBA.DOC staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 123,148,294 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, doc_id]
+
+  - name: docl
+    description: "DEVDBA.DOCL staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 159,794,439 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, line_id]
+
+  - name: docl_by_serial
+    description: "DEVDBA.DOCL_BY_SERIAL staged 1:1 from the Oasis lake (snapshot load). Grain: widened: declared unique_key is violated in the lake."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, product_code, bin_location, c_id, serial_no_1, adj_date, recorded_updated_at, cnt, qty_outstanding, qty_allocated, unit_price]
+
+  - name: eligibility_types
+    description: "OASIS.ELIGIBILITY_TYPES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 397 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, eligibility_type]
+
+  - name: er_priorities
+    description: "OASIS.ER_PRIORITIES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 40 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, priority]
+
+  - name: exchange_rates
+    description: "DEVDBA.EXCHANGE_RATES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 48,366 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, currency_code_convert_from, currency_code_convert_to]
+
+  - name: external_accounts_data
+    description: "DEVDBA.EXTERNAL_ACCOUNTS_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,886,926 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, account_code, account_type, c_id]
+
+  - name: generics
+    description: "OASIS.GENERICS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 46,304 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, generic_id]
+
+  - name: gl_code
+    description: "DEVDBA.GL_CODE staged 1:1 from the Oasis lake (master load). Grain: measured unique over 243,964 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, code, c_id]
+
+  - name: hnh_admission_reason_mapping
+    description: "APP_ADMIN.HNH_ADMISSION_REASON_MAPPING staged 1:1 from the Oasis lake (master load). Grain: measured unique over 55 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, moh_code]
+
+  - name: hnh_disacharge_mode_mapping
+    description: "APP_ADMIN.HNH_DISACHARGE_MODE_MAPPING staged 1:1 from the Oasis lake (master load). Grain: measured unique over 45 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, moh_code]
+
+  - name: hnh_internal_doctor_list
+    description: "DEVDBA.HNH_INTERNAL_DOCTOR_LIST staged 1:1 from the Oasis lake (master load). Grain: measured unique over 1,796 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_id]
+
+  - name: ios_main_data
+    description: "OASIS.IOS_MAIN_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 787,581 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios_main]
+
+  - name: ios_master_data
+    description: "OASIS.IOS_MASTER_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 982,649 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios]
+
+  - name: ios_prices
+    description: "OASIS.IOS_PRICES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 236,780 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios, applies_start, facility_id]
+
+  - name: item_barcode
+    description: "DEVDBA.ITEM_BARCODE staged 1:1 from the Oasis lake (master load). Grain: measured unique over 66,048 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, bar_code, product_code, account_code, c_id]
+
+  - name: lab_department_code
+    description: "OASIS.LAB_DEPARTMENT_CODE staged 1:1 from the Oasis lake (master load). Grain: measured unique over 72 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, lab_dept_no]
+
+  - name: lab_ios
+    description: "OASIS.LAB_IOS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 15,951 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios]
+
+  - name: maps006
+    description: "OASIS.MAPS006 staged 1:1 from the Oasis lake (master load). Grain: measured unique over 16,413 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, user_id]
+
+  - name: master_deliveries
+    description: "OASIS.MASTER_DELIVERIES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 25,714,810 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, master_delivery_no]
+
+  - name: order_lines
+    description: "OASIS.ORDER_LINES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 58,414,635 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, order_line]
+
+  - name: order_sets
+    description: "OASIS.ORDER_SETS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 1,158 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, order_set_id, hospital_id]
+
+  - name: orders_master
+    description: "OASIS.ORDERS_MASTER staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 23,402,601 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, master_order_no]
+
+  - name: patient_ad
+    description: "OASIS.PATIENT_AD staged 1:1 from the Oasis lake (master load). Grain: measured unique over 529,758 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, admission_no]
+
+  - name: patient_bill_agreements
+    description: "OASIS.PATIENT_BILL_AGREEMENTS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 40,340,226 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_id, episode_no, responsibility_seq]
+
+  - name: patient_contracts
+    description: "OASIS.PATIENT_CONTRACTS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,834,978 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, pat_contract_id]
+
+  - name: patient_diagnosis_notes
+    description: "OASIS.PATIENT_DIAGNOSIS_NOTES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 11,216,729 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_diagnosis_id]
+
+  - name: patient_eligibility
+    description: "OASIS.PATIENT_ELIGIBILITY staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 10,246,962 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_eligibility_id]
+
+  - name: patient_emergency_visit
+    description: "OASIS.PATIENT_EMERGENCY_VISIT staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 606,113 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, er_visit_id]
+
+  - name: patient_episode_packages
+    description: "OASIS.PATIENT_EPISODE_PACKAGES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 686,729 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, package_id]
+
+  - name: patient_episodes
+    description: "OASIS.PATIENT_EPISODES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 4,544,669 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_id, episode_no]
+
+  - name: patient_file_master
+    description: "OASIS.PATIENT_FILE_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,399,441 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, pat_file_id]
+
+  - name: patient_ids
+    description: "OASIS.PATIENT_IDS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,229,079 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_id_seq]
+
+  - name: patient_master_data
+    description: "OASIS.PATIENT_MASTER_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,537,038 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_id]
+
+  - name: patient_order_sets
+    description: "OASIS.PATIENT_ORDER_SETS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 49,444 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, patient_id, episode_no, encounter_id, order_set_id, hospital_id]
+
+  - name: personnel_documents
+    description: "OASIS.PERSONNEL_DOCUMENTS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 46,256 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, document_id]
+
+  - name: ph_cautionary_advisory_labels
+    description: "OASIS.PH_CAUTIONARY_ADVISORY_LABELS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 48 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, cautionary_id]
+
+  - name: ph_ios_medicine
+    description: "OASIS.PH_IOS_MEDICINE staged 1:1 from the Oasis lake (master load). Grain: measured unique over 55,473 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios_main]
+
+  - name: policies
+    description: "OASIS.POLICIES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 208,746 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, policy_code]
+
+  - name: policy_class_rules
+    description: "OASIS.POLICY_CLASS_RULES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 252,247 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, class_id, rule_ios, term_id]
+
+  - name: policy_classes
+    description: "OASIS.POLICY_CLASSES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 253,777 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, class_id]
+
+  - name: positions_data
+    description: "OASIS.POSITIONS_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,753 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, position_type]
+
+  - name: product_base
+    description: "DEVDBA.PRODUCT_BASE staged 1:1 from the Oasis lake (snapshot load). Grain: measured unique over 854,749,772 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, product_code, c_id]
+
+  - name: product_supply_detail
+    description: "DEVDBA.PRODUCT_SUPPLY_DETAIL staged 1:1 from the Oasis lake (master load). Grain: measured unique over 278,510 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, account_code, product_code, c_id]
+
+  - name: products_markup
+    description: "OASIS.PRODUCTS_MARKUP staged 1:1 from the Oasis lake (master load). Grain: measured unique over 72 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, detail_id]
+
+  - name: products_markup_master
+    description: "OASIS.PRODUCTS_MARKUP_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 10 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, master_seq_id]
+
+  - name: purchaser_ios_prices
+    description: "OASIS.PURCHASER_IOS_PRICES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 9,951,232 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, purchaser_code, ios, applies_start, price_list_id, facility_id]
+
+  - name: purchasers
+    description: "OASIS.PURCHASERS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,056 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, purchaser_code]
+
+  - name: room_master
+    description: "OASIS.ROOM_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,249 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, room_no]
+
+  - name: rule_master
+    description: "OASIS.RULE_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,848 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, rule_ios]
+
+  - name: service_dept_data
+    description: "OASIS.SERVICE_DEPT_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 458 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, service_dept]
+
+  - name: staff_contracts
+    description: "OASIS.STAFF_CONTRACTS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 34,000 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_contract_no]
+
+  - name: staff_master_data
+    description: "OASIS.STAFF_MASTER_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 23,469 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_id]
+
+  - name: staff_posts
+    description: "OASIS.STAFF_POSTS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 31,570 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, post_number, date_started]
+
+  - name: staff_type_classification
+    description: "punch.staff_type_classification staged 1:1 from the Oasis lake (master load). Grain: widened: declared unique_key is violated in the lake."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_type, type_desc]
+
+  - name: staff_types_data
+    description: "OASIS.STAFF_TYPES_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,258 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_type]
+
+  - name: staff_vacations
+    description: "OASIS.STAFF_VACATIONS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 96,347 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, staff_vacation_id]
+
+  - name: term_details
+    description: "OASIS.TERM_DETAILS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 4,539 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, term_id, sequence_no, applies_start]
+
+  - name: terms
+    description: "OASIS.TERMS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 3,645 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, term_id]
+
+  - name: time_periods
+    description: "DEVDBA.TIME_PERIODS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,340 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, sequence_no]
+
+  - name: transaction_types
+    description: "OASIS.TRANSACTION_TYPES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 354 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, transaction_type]
+
+  - name: transaction_types_master
+    description: "OASIS.TRANSACTION_TYPES_MASTER staged 1:1 from the Oasis lake (master load). Grain: measured unique over 266 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, transaction_type]
+
+  - name: vacation_types
+    description: "OASIS.VACATION_TYPES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 175 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, vacation_type_id]
+
+  - name: work_entities_data
+    description: "OASIS.WORK_ENTITIES_DATA staged 1:1 from the Oasis lake (master load). Grain: measured unique over 2,989 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, work_entity]
+
+  - name: xy_ios
+    description: "XY.XY_IOS staged 1:1 from the Oasis lake (master load). Grain: measured unique over 6,751 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, ios_main]
+
+  - name: xy_modalities
+    description: "XY.XY_MODALITIES staged 1:1 from the Oasis lake (master load). Grain: measured unique over 64 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, modality_id]
