@@ -429,8 +429,8 @@ sources:
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: hcm
-          run_stamp: 20260920T140015Z-944fce
-          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/dim_learning_item/20260920T140015Z-944fce
+          run_stamp: 20260925T230014Z-a16413
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/dim_learning_item/20260925T230014Z-a16413
 
       - name: dim_payroll
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -520,8 +520,8 @@ sources:
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: hcm
-          run_stamp: 20260921T070725Z-6d27cc
-          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_learning_record/20260921T070725Z-6d27cc
+          run_stamp: 20260925T233027Z-7088dc
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_learning_record/20260925T233027Z-7088dc
 
       - name: fact_payroll_balance
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
