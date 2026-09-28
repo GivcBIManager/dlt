@@ -112,24 +112,59 @@ def test_max_loaded_before_handles_date_columns_and_empty_input():
     assert _max_loaded_before(pa.array([], pa.timestamp("us")), pa.array([], LOADED)) is None
 
 
-class _FakeStore:
-    def __init__(self, data):
-        self.data = data
-        self.saved = 0
+def _row(table, branch, cdc, status="SUCCESS"):
+    return {"table_name": table, "branch_id": branch,
+            "last_cdc_value": cdc, "last_cdc_kind": "datetime",
+            "last_date_value": None, "last_date_kind": None,
+            "last_key_value": None, "last_key_kind": None,
+            "status": status, "row_count": 1, "duration_ms": 1, "last_run_at": "t0"}
 
-    def save(self):
-        self.saved += 1
+
+class _FakeMeta:
+    def __init__(self, rows):
+        self.rows = rows
+        self.upserts = []
+
+    def read_control_state(self):
+        return [dict(r) for r in self.rows]
+
+    def upsert_control_state(self, rows):
+        self.upserts.append(rows)
 
 
-def test_apply_marks_rewrites_only_the_named_field_and_saves_once():
-    store = _FakeStore({"staff_contracts": {"unaizah": {
-        "last_cdc": _mark("2029-03-06 17:06:13.000000"), "status": "SUCCESS"}}})
-    apply_marks(store, [("staff_contracts", "unaizah", "last_cdc",
-                         _mark("2026-08-23 07:48:46.000000"))])
-    entry = store.data["staff_contracts"]["unaizah"]
-    assert entry["last_cdc"] == _mark("2026-08-23 07:48:46.000000")
-    assert entry["status"] == "SUCCESS"
-    assert store.saved == 1
+class _ControlStore:
+    """What the CLI holds: the snapshot loaded at start, plus its MetaStore."""
+
+    def __init__(self, meta, snapshot):
+        self.store, self.data = meta, snapshot
+
+    def save(self):  # the whole-snapshot write apply_marks must not use
+        raise AssertionError("apply_marks must not upsert the whole start-of-CLI snapshot")
+
+
+def test_apply_marks_writes_only_touched_rows_from_a_fresh_read():
+    # The CLI loaded its snapshot, then scanned the lake for minutes; meanwhile a
+    # pipeline run advanced doc/abha. Only staff_contracts/unaizah may be written,
+    # and from the state as it is now, not as it was at CLI start.
+    meta = _FakeMeta([_row("staff_contracts", "unaizah", "2029-03-06 17:06:13.000000"),
+                      _row("doc", "abha", "2026-09-28 06:00:00.000000", status="RUN2")])
+    stale = {"doc": {"abha": {"last_cdc": _mark("2026-09-27 06:00:00.000000")}}}
+    meta.rows[0]["status"] = "RUN2"  # the run also touched the repaired unit's status
+    apply_marks(_ControlStore(meta, stale),
+                [("staff_contracts", "unaizah", "last_cdc", _mark("2026-07-21 10:46:56.000000"))])
+    (written,) = meta.upserts
+    assert [(r["table_name"], r["branch_id"]) for r in written] == [("staff_contracts", "unaizah")]
+    assert written[0]["last_cdc_value"] == "2026-07-21 10:46:56.000000"
+    assert written[0]["status"] == "RUN2"
+
+
+def test_apply_marks_sets_last_key_as_a_number_mark():
+    meta = _FakeMeta([_row("delivery_charge", "Muhayil", "2026-09-28 05:27:09.000000")])
+    apply_marks(_ControlStore(meta, {}),
+                [("delivery_charge", "Muhayil", "last_key", {"value": "1490269", "kind": "number"})])
+    (written,) = meta.upserts
+    assert (written[0]["last_key_value"], written[0]["last_key_kind"]) == ("1490269", "number")
+    assert written[0]["last_cdc_value"] == "2026-09-28 05:27:09.000000"
 
 
 # --- insert-key seeding (Task 7) --------------------------------------------- #

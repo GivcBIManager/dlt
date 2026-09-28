@@ -220,6 +220,13 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
         errs.append(f"{name}: 'insert_key_column' is not supported with 'incremental_cdc_only'")
     if ik and category == "snapshots":
         errs.append(f"{name}: 'insert_key_column' does not apply to snapshots")
+    if ik:
+        helper = entry.get("helper")
+        helper_cdc = (str(helper.get("cdc_column") or "").strip()
+                      if isinstance(helper, dict) else "")
+        if not str(entry.get("cdc_column") or "").strip() and not helper_cdc:
+            errs.append(f"{name}: 'insert_key_column' requires a CDC source "
+                        f"('cdc_column' or a helper)")
 
     for k in entry:
         if k not in KNOWN_KEYS:

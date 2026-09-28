@@ -135,16 +135,36 @@ def lake_max_real(settings, branches: dict) -> Callable[[str, str, str], Optiona
     return _lake_max
 
 
-def apply_marks(store, updates: list[tuple[str, str, str, dict]]) -> None:
-    """Write ``(table, branch, field, watermark_dict)`` updates and save once.
+_FIELD_COLUMNS = {
+    "last_cdc": ("last_cdc_value", "last_cdc_kind"),
+    "last_date": ("last_date_value", "last_date_kind"),
+    "last_key": ("last_key_value", "last_key_kind"),
+}
 
-    ``store`` is a loaded ``ControlStore``; its ``save()`` upserts every row, so
-    this must not run while a pipeline run is in flight (its own end-of-run
-    save would write the old values back).
+
+def apply_marks(store, updates: list[tuple[str, str, str, dict]]) -> None:
+    """Write ``(table, branch, field, watermark_dict)`` updates to control_state.
+
+    Only the touched rows are written, re-read from Postgres just before the
+    write: ``ControlStore.save()`` would upsert the whole snapshot taken when
+    the CLI started (minutes earlier, before the lake scans), rolling back
+    every watermark a pipeline run advanced in between. A run still in flight
+    will write its own in-memory values back at its next save, so this must
+    still not run during a pipeline run.
     """
+    meta = store.store
+    fresh = {(r["table_name"], str(r["branch_id"])): dict(r)
+             for r in meta.read_control_state()}
+    rows: dict[tuple[str, str], dict] = {}
     for table, branch, field, wm in updates:
-        store.data.setdefault(table, {}).setdefault(branch, {})[field] = wm
-    store.save()
+        row = rows.get((table, branch)) or fresh.get((table, branch))
+        if row is None:
+            raise KeyError(f"{table}/{branch}: no control_state row to update")
+        value_col, kind_col = _FIELD_COLUMNS[field]
+        row[value_col], row[kind_col] = wm["value"], wm["kind"]
+        rows[(table, branch)] = row
+    if rows:
+        meta.upsert_control_state(list(rows.values()))
 
 
 def min_key_since(keys, dates, since: dt.datetime) -> Optional[str]:

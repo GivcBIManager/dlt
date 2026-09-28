@@ -167,3 +167,10 @@ def test_insert_key_lookback_must_be_non_negative_int_with_a_column():
 def test_insert_key_not_with_cdc_only():
     assert _has(_errs(_doc(insert_key_column="ID", incremental_cdc_only=True)),
                 "not supported with 'incremental_cdc_only'")
+
+
+def test_insert_key_needs_a_cdc_source():
+    # Mirrors etl/config.load_table_defs: without own/helper CDC the ETL rejects
+    # the whole tables.json, so the GUI must not let it be saved.
+    assert _has(_errs(_doc(cdc_column=None, insert_key_column="ID")),
+                "'insert_key_column' requires a CDC source")
