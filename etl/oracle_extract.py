@@ -98,6 +98,7 @@ class ExtractResult:
     schema: Optional[pa.Schema] = None
     new_cdc: Watermark = field(default_factory=Watermark)
     new_date: Watermark = field(default_factory=Watermark)
+    new_key: Watermark = field(default_factory=Watermark)
 
     @property
     def table(self) -> str:
@@ -979,6 +980,19 @@ def _watermarks_from_parquet(path: Path, tdef: TableDef) -> tuple[Watermark, Wat
     return cdc, date
 
 
+def _key_watermark_from_parquet(path: Path, tdef: TableDef) -> Watermark:
+    """Max of ``tdef.insert_key_column`` in the staged parquet (the ``last_key`` mark)."""
+    col = tdef.insert_key_column
+    if not col:
+        return Watermark(value=None)
+    try:
+        if col not in pq.read_schema(path).names:
+            return Watermark(value=None)
+        return _column_max_watermark(pq.read_table(path, columns=[col]), col)
+    except Exception:  # noqa: BLE001 - watermark read is best-effort
+        return Watermark(value=None)
+
+
 # --------------------------------------------------------------------------- #
 # Single (branch, table) extraction with retry
 # --------------------------------------------------------------------------- #
@@ -1010,6 +1024,7 @@ def extract_table(
             # Capture watermarks from the source CDC/date columns (read back the
             # staged parquet so this works identically for both fetch paths).
             result.new_cdc, result.new_date = _watermarks_from_parquet(staged_path, tdef)
+            result.new_key = _key_watermark_from_parquet(staged_path, tdef)
             result.row_count = row_count
             result.schema = schema
             result.staged_path = staged_path

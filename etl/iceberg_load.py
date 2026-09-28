@@ -155,6 +155,8 @@ class ControlStore:
                              if r["last_cdc_value"] is not None else None),
                 "last_date": ({"value": r["last_date_value"], "kind": r["last_date_kind"]}
                               if r["last_date_value"] is not None else None),
+                "last_key": ({"value": r["last_key_value"], "kind": r["last_key_kind"]}
+                             if r.get("last_key_value") is not None else None),
                 "status": r["status"],
                 "row_count": r["row_count"],
                 "duration_ms": r["duration_ms"],
@@ -175,6 +177,7 @@ class ControlStore:
             cur = tbl.setdefault(result.branch, {})
             cur["last_cdc"] = _wm_advance(cur.get("last_cdc"), result.new_cdc)
             cur["last_date"] = _wm_advance(cur.get("last_date"), result.new_date)
+            cur["last_key"] = _wm_advance(cur.get("last_key"), result.new_key)
             cur["status"] = result.status
             cur["row_count"] = result.row_count
             cur["duration_ms"] = result.duration_ms
@@ -187,10 +190,12 @@ class ControlStore:
                 for branch, info in branches.items():
                     cdc = info.get("last_cdc") or {}
                     date = info.get("last_date") or {}
+                    key = info.get("last_key") or {}
                     rows.append({
                         "table_name": table, "branch_id": str(branch),
                         "last_cdc_value": cdc.get("value"), "last_cdc_kind": cdc.get("kind"),
                         "last_date_value": date.get("value"), "last_date_kind": date.get("kind"),
+                        "last_key_value": key.get("value"), "last_key_kind": key.get("kind"),
                         "status": info.get("status"), "row_count": info.get("row_count"),
                         "duration_ms": info.get("duration_ms"),
                         "last_run_at": info.get("last_run_at"),

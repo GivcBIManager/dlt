@@ -28,6 +28,7 @@ def _control_state_table(md: MetaData, schema: str) -> Table:
         Column("branch_id", String, primary_key=True),
         Column("last_cdc_value", String), Column("last_cdc_kind", String),
         Column("last_date_value", String), Column("last_date_kind", String),
+        Column("last_key_value", String), Column("last_key_kind", String),
         Column("status", String), Column("row_count", BigInteger),
         Column("duration_ms", BigInteger), Column("last_run_at", String),
         schema=schema,

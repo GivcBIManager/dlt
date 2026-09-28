@@ -22,6 +22,7 @@ class _Result:
         self.table, self.branch = table, branch
         self.new_cdc = Watermark(value=None)
         self.new_date = Watermark(value=None)
+        self.new_key = Watermark(value=None)
         self.status = "SUCCESS"
         self.row_count = 1
         self.duration_ms = 1
