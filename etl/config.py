@@ -135,6 +135,14 @@ class TableDef:
     # overhead. Requires a CDC source (own ``cdc_column`` or a helper); the
     # INITIAL load is unaffected.
     incremental_cdc_only: bool = False
+    # Monotonic child key (e.g. DELIVERY_CHARGE_ID) tracked as a third
+    # watermark (``last_key``). It adds a disjoint UNION ALL branch that
+    # selects rows whose key passed the mark but that neither the CDC nor the
+    # date branch picked -- rows inserted under a parent (helper) row whose CDC
+    # column never moved. ``insert_key_lookback`` re-reads that many keys below
+    # the mark each run, to absorb sequence values committed out of order.
+    insert_key_column: Optional[str] = None
+    insert_key_lookback: int = 0
 
     # ----- derived identifiers ------------------------------------------------
     @property
@@ -520,6 +528,8 @@ def load_table_defs(path: Path) -> list[TableDef]:
                 where_operator_max=entry.get("where_operator_max"),
                 name=entry.get("name"),
                 incremental_cdc_only=bool(entry.get("incremental_cdc_only", False)),
+                insert_key_column=entry.get("insert_key_column") or None,
+                insert_key_lookback=int(entry.get("insert_key_lookback") or 0),
             )
             if tdef.is_query and not (tdef.name or "").strip():
                 raise ValueError(
@@ -534,6 +544,28 @@ def load_table_defs(path: Path) -> list[TableDef]:
                     f"{tdef.table}: 'incremental_cdc_only' requires a "
                     f"'cdc_column' (or a helper supplying one)"
                 )
+            if tdef.insert_key_lookback < 0:
+                raise ValueError(
+                    f"{tdef.table}: 'insert_key_lookback' must be non-negative")
+            if tdef.insert_key_lookback and not tdef.insert_key_column:
+                raise ValueError(
+                    f"{tdef.table}: 'insert_key_lookback' requires 'insert_key_column'")
+            if tdef.insert_key_column:
+                if not _IDENT_RE.match(tdef.insert_key_column):
+                    raise ValueError(
+                        f"{tdef.table}: 'insert_key_column' must be a plain identifier")
+                if tdef.is_snapshot:
+                    raise ValueError(
+                        f"{tdef.table}: 'insert_key_column' does not apply to a snapshot table")
+                if tdef.incremental_cdc_only:
+                    raise ValueError(
+                        f"{tdef.table}: 'insert_key_column' is not supported with "
+                        f"'incremental_cdc_only'")
+                # The key branch rides the incremental path, which needs CDC.
+                if not tdef.cdc_capture_column:
+                    raise ValueError(
+                        f"{tdef.table}: 'insert_key_column' requires a CDC source "
+                        f"('cdc_column' or a helper)")
             defs.append(tdef)
     if not defs:
         raise ValueError(f"No table definitions found in {path}")

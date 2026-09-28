@@ -288,6 +288,12 @@ function applyEdit() {
     return err("CDC-only incremental needs a CDC column (own or helper)");
   }
 
+  // Keys the form has no inputs for: carry them over so an edit never drops them.
+  const orig = editing.index >= 0 ? ((DOC[editing.category] || [])[editing.index] || {}) : {};
+  for (const k of ["insert_key_column", "insert_key_lookback"]) {
+    if (orig[k] !== undefined && orig[k] !== null) e[k] = orig[k];
+  }
+
   const newCat = editing.category;
   DOC[newCat] = DOC[newCat] || [];
   if (editing.index >= 0 && newCat === editing.category) {

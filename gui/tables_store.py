@@ -102,6 +102,8 @@ KNOWN_KEYS = {
     "where_value_max",
     "where_operator_max",
     "incremental_cdc_only",
+    "insert_key_column",
+    "insert_key_lookback",
     "helper",
 }
 KNOWN_HELPER_KEYS = {"table", "join", "join_keys", "cdc_column", "where_date_column"}
@@ -203,6 +205,21 @@ def _validate_entry(entry: dict[str, Any], category: str, idx: int) -> list[str]
                 f"{name}: 'incremental_cdc_only' does not apply to snapshots "
                 f"(they are copied in full every run)"
             )
+
+    # Mirrors the insert-key checks in etl/config.load_table_defs.
+    ik = str(entry.get("insert_key_column") or "").strip()
+    lookback = entry.get("insert_key_lookback")
+    if ik and not _is_sql_identifier(ik):
+        errs.append(f"{name}: 'insert_key_column' must be a valid column identifier")
+    if lookback not in (None, ""):
+        if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback < 0:
+            errs.append(f"{name}: 'insert_key_lookback' must be a non-negative integer")
+        elif lookback and not ik:
+            errs.append(f"{name}: 'insert_key_lookback' requires 'insert_key_column'")
+    if ik and entry.get("incremental_cdc_only") is True:
+        errs.append(f"{name}: 'insert_key_column' is not supported with 'incremental_cdc_only'")
+    if ik and category == "snapshots":
+        errs.append(f"{name}: 'insert_key_column' does not apply to snapshots")
 
     for k in entry:
         if k not in KNOWN_KEYS:

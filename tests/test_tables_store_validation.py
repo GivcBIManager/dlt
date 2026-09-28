@@ -137,3 +137,33 @@ def test_non_colliding_query_and_plain_table_entries_stay_valid():
              "name": "visits_enriched", "unique_key": "VISIT_ID"}
     doc = {"masters": [plain], "transactions": [query], "snapshots": []}
     assert _errs(doc) == []
+
+
+# --- insert key (etl insert_key_column / insert_key_lookback) --------------- #
+def test_insert_key_ok():
+    assert _errs(_doc(insert_key_column="ID", insert_key_lookback=1000)) == []
+
+
+def _has(errs, text):
+    # Match the validator's own message, not the generic "unknown key" error
+    # (which also names the key and would pass these before the feature existed).
+    return any(text in e and "unknown key" not in e for e in errs)
+
+
+def test_insert_key_column_must_be_an_identifier():
+    assert _has(_errs(_doc(insert_key_column="ID; DROP TABLE X")),
+                "'insert_key_column' must be a valid column identifier")
+
+
+def test_insert_key_lookback_must_be_non_negative_int_with_a_column():
+    assert _has(_errs(_doc(insert_key_lookback=5)),
+                "'insert_key_lookback' requires 'insert_key_column'")
+    assert _has(_errs(_doc(insert_key_column="ID", insert_key_lookback=-1)),
+                "'insert_key_lookback' must be a non-negative integer")
+    assert _has(_errs(_doc(insert_key_column="ID", insert_key_lookback="10")),
+                "'insert_key_lookback' must be a non-negative integer")
+
+
+def test_insert_key_not_with_cdc_only():
+    assert _has(_errs(_doc(insert_key_column="ID", incremental_cdc_only=True)),
+                "not supported with 'incremental_cdc_only'")
