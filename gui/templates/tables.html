@@ -100,6 +100,12 @@
     </div>
     <div class="hint" id="f-cdconly-hint"></div>
 
+    <div class="form-row">
+      <div><label>Insert key column (optional)</label><input id="f-ikey" title="e.g. DELIVERY_CHARGE_ID"></div>
+      <div><label>Insert key lookback</label><input id="f-ikey-lb" type="number" min="0" step="1" title="e.g. 1000"></div>
+    </div>
+    <div class="hint" id="f-ikey-hint"></div>
+
     <fieldset>
       <legend>Helper (borrowed CDC — optional)</legend>
       <div class="form-row">
@@ -147,6 +153,8 @@ function summarize(e) {
   if (e.where_value_of_initial_run) bits.push(`from ${e.where_operator||""} ${e.where_value_of_initial_run}`);
   if (e.where_value_max) bits.push(`max ${e.where_operator_max||"<="} ${e.where_value_max}`);
   if (e.incremental_cdc_only) bits.push("cdc-only");
+  if (e.insert_key_column) bits.push(`insert-key=${e.insert_key_column}` +
+    (e.insert_key_lookback ? ` (lookback ${e.insert_key_lookback})` : ""));
   if (e.helper) bits.push(`helper=${e.helper.table}`);
   return bits.join(" · ");
 }
@@ -191,6 +199,10 @@ const CDCONLY_HINT =
   "as updates. Needs a CDC column (own or helper); the initial load is unaffected.";
 const CDCONLY_HINT_NA =
   "Not applicable to snapshots \u2014 they are copied in full every run.";
+const IKEY_HINT =
+  "A monotonically increasing ID (e.g. DELIVERY_CHARGE_ID). Catches rows inserted " +
+  "under a parent whose CDC column never moves. Lookback re-reads that many IDs " +
+  "below the mark each run. Needs a CDC column (own or helper); not with CDC-only.";
 
 function dateFieldSetMode(id, mode) {
   const input = el(id), toggle = el(id + "-toggle");
@@ -239,6 +251,10 @@ function openEdit(category, index) {
   el("f-cdconly").checked = !cdcOnlyNA && !!e.incremental_cdc_only;
   el("f-cdconly").disabled = cdcOnlyNA;
   el("f-cdconly-hint").textContent = cdcOnlyNA ? CDCONLY_HINT_NA : CDCONLY_HINT;
+  el("f-ikey").value = e.insert_key_column || "";
+  el("f-ikey-lb").value = e.insert_key_lookback != null ? e.insert_key_lookback : "";
+  el("f-ikey").disabled = el("f-ikey-lb").disabled = cdcOnlyNA;
+  el("f-ikey-hint").textContent = cdcOnlyNA ? CDCONLY_HINT_NA : IKEY_HINT;
   const hp = e.helper || {};
   el("f-h-table").value = hp.table || "";
   el("f-h-cdc").value = hp.cdc_column || "";
@@ -288,10 +304,19 @@ function applyEdit() {
     return err("CDC-only incremental needs a CDC column (own or helper)");
   }
 
-  // Keys the form has no inputs for: carry them over so an edit never drops them.
-  const orig = editing.index >= 0 ? ((DOC[editing.category] || [])[editing.index] || {}) : {};
-  for (const k of ["insert_key_column", "insert_key_lookback"]) {
-    if (orig[k] !== undefined && orig[k] !== null) e[k] = orig[k];
+  // Insert key: mirrors the checks in gui/tables_store.py / etl/config.py.
+  const ikey = el("f-ikey").value.trim();
+  const ikeyLb = el("f-ikey-lb").value.trim();
+  if (ikey) e.insert_key_column = ikey;
+  if (ikeyLb !== "") {
+    const n = Number(ikeyLb);
+    if (!Number.isInteger(n) || n < 0) return err("Insert key lookback must be a whole number ≥ 0");
+    if (n && !ikey) return err("Insert key lookback needs an insert key column");
+    if (ikey) e.insert_key_lookback = n;
+  }
+  if (ikey && e.incremental_cdc_only) return err("Insert key is not supported with CDC-only incremental");
+  if (ikey && !cdc && !(e.helper || {}).cdc_column) {
+    return err("Insert key needs a CDC column (own or helper)");
   }
 
   const newCat = editing.category;
