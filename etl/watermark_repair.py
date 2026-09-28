@@ -145,3 +145,20 @@ def apply_marks(store, updates: list[tuple[str, str, str, dict]]) -> None:
     for table, branch, field, wm in updates:
         store.data.setdefault(table, {}).setdefault(branch, {})[field] = wm
     store.save()
+
+
+def min_key_since(keys, dates, since: dt.datetime) -> Optional[str]:
+    """Smallest insert key whose row date is on/after ``since`` (as a mark string)."""
+    dates = _as_naive(dates)
+    if len(keys) == 0:
+        return None
+    mask = pc.fill_null(pc.greater_equal(dates, pa.scalar(since, pa.timestamp("us"))), False)
+    kept = pc.drop_null(pc.filter(keys, mask))
+    if len(kept) == 0:
+        return None
+    return str(pc.min(kept).as_py())
+
+
+def seed_key_mark(value: str) -> dict:
+    """``last_key`` entry for a seeded insert-key watermark."""
+    return {"value": value, "kind": "number"}

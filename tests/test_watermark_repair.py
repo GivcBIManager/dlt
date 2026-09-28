@@ -130,3 +130,25 @@ def test_apply_marks_rewrites_only_the_named_field_and_saves_once():
     assert entry["last_cdc"] == _mark("2026-08-23 07:48:46.000000")
     assert entry["status"] == "SUCCESS"
     assert store.saved == 1
+
+
+# --- insert-key seeding (Task 7) --------------------------------------------- #
+from etl.watermark_repair import min_key_since, seed_key_mark  # noqa: E402
+
+
+def test_min_key_since_uses_wall_clock_dates_and_ignores_nulls():
+    keys = pa.array([1490400.0, 1492547.0, 1505159.0, None], pa.float64())
+    dates = pa.array([dt.datetime(2026, 8, 31, 23, 0), dt.datetime(2026, 9, 2, 21, 30),
+                      dt.datetime(2026, 9, 1, 19, 48), dt.datetime(2026, 9, 5)],
+                     pa.timestamp("us", tz="UTC"))
+    assert min_key_since(keys, dates, dt.datetime(2026, 9, 1)) == "1492547.0"
+
+
+def test_min_key_since_none_when_nothing_qualifies():
+    keys = pa.array([1.0], pa.float64())
+    dates = pa.array([dt.datetime(2026, 1, 1)], pa.timestamp("us"))
+    assert min_key_since(keys, dates, dt.datetime(2026, 9, 1)) is None
+
+
+def test_seed_key_mark_is_a_number_watermark():
+    assert seed_key_mark("1492547.0") == {"value": "1492547.0", "kind": "number"}
