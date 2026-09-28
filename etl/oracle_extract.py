@@ -223,6 +223,7 @@ def build_query(
     settings: Settings,
     cdc_wm: Watermark,
     date_wm: Watermark,
+    key_wm: Optional[Watermark] = None,
 ) -> str:
     """Construct the SELECT for a table given the load mode + watermarks."""
     if tdef.is_snapshot:
@@ -242,7 +243,10 @@ def build_query(
     if incremental_ready:
         if tdef.incremental_cdc_only:
             return _build_cdc_only_query(shape, base, cdc_wm)
-        return _build_incremental_query(shape, base, cdc_wm, date_wm, ceiling_pred)
+        query = _build_incremental_query(shape, base, cdc_wm, date_wm, ceiling_pred)
+        key_branch = _insert_key_branch(
+            tdef, shape, base, cdc_wm, date_wm, key_wm or Watermark(value=None))
+        return f"{query}\nUNION ALL\n{key_branch}" if key_branch else query
 
     # INITIAL (or INCREMENTAL with no prior watermark -> behave as initial).
     # Masters: full load. Transactions: configured range filter applied to the
@@ -352,6 +356,37 @@ def _build_incremental_query(
         f"{base} WHERE {cdc_pred} AND {shape.date_ref} < {date_wm_sql}"
     )
     return f"{new_rows}\nUNION ALL\n{updated_old}"
+
+
+def _insert_key_branch(
+    tdef: TableDef,
+    shape: _QueryShape,
+    base: str,
+    cdc_wm: Watermark,
+    date_wm: Watermark,
+    key_wm: Watermark,
+) -> Optional[str]:
+    """The disjoint third branch for ``TableDef.insert_key_column``.
+
+    Selects rows whose monotonic key passed the ``last_key`` mark (less the
+    configured lookback) but that neither other branch selected: rows inserted
+    under a parent whose CDC column never moved (a DELIVERY_CHARGE added to an
+    already-loaded DELIVERY_LINE). ``LNNVL(p)`` is TRUE when ``p`` is FALSE *or
+    UNKNOWN*, so it is the exact complement of each branch's predicate: a row
+    with a NULL helper CDC -- selected by neither branch -- still qualifies,
+    which ``NOT (p)`` would drop. Keeps UNION ALL duplicate-free, like the
+    other two branches.
+    """
+    if not tdef.insert_key_column or key_wm.value is None or shape.cdc_ref is None:
+        return None
+    floor = Decimal(str(key_wm.value)) - tdef.insert_key_lookback
+    preds = [
+        f"t.{tdef.insert_key_column} > {format(floor, 'f')}",
+        f"LNNVL({shape.cdc_ref} > {format_watermark(cdc_wm)})",
+    ]
+    if shape.date_ref is not None and date_wm.value is not None:
+        preds.append(f"LNNVL({shape.date_ref} >= {format_watermark(date_wm)})")
+    return f"{base} WHERE " + " AND ".join(preds)
 
 
 # --------------------------------------------------------------------------- #
@@ -959,7 +994,8 @@ def extract_table(
 
     cdc_wm = Watermark.from_dict(watermarks.get("last_cdc"))
     date_wm = Watermark.from_dict(watermarks.get("last_date"))
-    query = build_query(tdef, settings, cdc_wm, date_wm)
+    key_wm = Watermark.from_dict(watermarks.get("last_key"))
+    query = build_query(tdef, settings, cdc_wm, date_wm, key_wm)
     log.debug("[%s/%s] query: %s", branch.key, tdef.dataset_table_name, query)
 
     for attempt in range(1, settings.max_retries + 1):
