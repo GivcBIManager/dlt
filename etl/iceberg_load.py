@@ -89,11 +89,34 @@ def _naive_ts_hint() -> dict:
 # --------------------------------------------------------------------------- #
 # Control state (authoritative local watermark store)
 # --------------------------------------------------------------------------- #
+def _is_future_mark(wm: Optional[dict]) -> bool:
+    """True for a stored datetime watermark later than now.
+
+    Captures are clamped to now (``oracle_extract._clamp_future_watermark``), so
+    a stored future mark can only be a bad source row that predates the clamp.
+    """
+    if not wm or wm.get("value") is None or wm.get("kind", "datetime") != "datetime":
+        return False
+    try:
+        stored = dt.datetime.strptime(str(wm["value"]), "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return False
+    return stored > now_local()
+
+
 def _wm_advance(old: Optional[dict], new: Watermark) -> Optional[dict]:
-    """Return the greater of an existing stored watermark and a fresh one."""
+    """Return the greater of an existing stored watermark and a fresh one.
+
+    A stored mark in the future never wins: it would otherwise pin the branch
+    past every real row forever (the fresh capture is already clamped to now).
+    """
     if new.value is None:
         return old
     if old is None:
+        return new.to_dict()
+    if _is_future_mark(old):
+        log.warning("stored watermark %s is in the future; replacing it with %s",
+                    old["value"], new.value)
         return new.to_dict()
     try:
         if new.kind == "number":
