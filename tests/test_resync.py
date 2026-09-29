@@ -82,8 +82,23 @@ def test_resync_excludes_rows_the_insert_key_branch_takes():
             insert_key_column="DELIVERY_CHARGE_ID", insert_key_lookback=1000)
     parts = _q(t, key="1505160.0").split("\nUNION ALL\n")
     assert len(parts) == 4
-    assert "h.AMEND_LAST_DATE >= TRUNC(SYSDATE) - 60" in parts[3]
-    assert parts[3].endswith("AND LNNVL(t.DELIVERY_CHARGE_ID > 1504160.0)")
+    base = parts[0].split(" WHERE ")[0]
+    # Windowed on the charge's OWN date (a charge changed under a line untouched
+    # for > N days is still re-read), kept disjoint from the new-rows branch by
+    # LNNVL of its helper-date predicate since the two date columns differ.
+    assert parts[3] == (f"{base} WHERE t.DELIVERY_DATE >= TRUNC(SYSDATE) - 60"
+                        f" AND LNNVL(h.AMEND_LAST_DATE >= {LIT})"
+                        f" AND LNNVL(h.AMEND_LAST_DATE > {LIT})"
+                        f" AND LNNVL(t.DELIVERY_CHARGE_ID > 1504160.0)")
+
+
+def test_helper_table_without_its_own_date_windows_on_the_helper_date():
+    helper = HelperJoin(table="DEVDBA.CLAIM_VISIT_DETAIL", join_keys=(("VISIT_ID", "VISIT_ID"),),
+                        cdc_column="AMEND_LAST_DATE", where_date_column="STAT_END_DATE")
+    t = _ol(table="DEVDBA.CLAIM_SERVICE_DETAIL", unique_key="VISIT_ID,SERVICE_ID", cdc_column=None,
+            where_date_column=None, helper=helper)
+    last = _q(t).split("\nUNION ALL\n")[-1]
+    assert f"WHERE h.STAT_END_DATE >= TRUNC(SYSDATE) - 60 AND h.STAT_END_DATE < {LIT}" in last
 
 
 def test_julian_date_watermark_gets_a_julian_bound():

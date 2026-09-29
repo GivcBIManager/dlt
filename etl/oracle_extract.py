@@ -421,13 +421,24 @@ def _resync_branch(
     """
     if not days or shape.date_ref is None or date_wm.value is None or shape.cdc_ref is None:
         return None
-    lower = (f"TO_NUMBER(TO_CHAR(TRUNC(SYSDATE) - {int(days)}, 'J'))"
-             if date_wm.kind == "number" else f"TRUNC(SYSDATE) - {int(days)}")
-    preds = [
-        f"{shape.date_ref} >= {lower}",
-        f"{shape.date_ref} < {format_watermark(date_wm)}",
-        f"LNNVL({shape.cdc_ref} > {format_watermark(cdc_wm)})",
-    ]
+    # A helper-driven table with a date column of its own (DELIVERY_CHARGE's
+    # DELIVERY_DATE, DOCL's DOC_DATE) is windowed on the ROW's date: the helper
+    # date may be the parent's CDC column (DELIVERY_LINES.AMEND_LAST_DATE),
+    # which would re-read children of recently-touched parents and still miss a
+    # child changed under a parent untouched for > N days -- the C1 case.
+    own = f"t.{tdef.where_date_column}" if (tdef.is_helper_driven
+                                            and tdef.where_date_column) else None
+    date_wm_sql = format_watermark(date_wm)
+    if own is None:
+        lower = (f"TO_NUMBER(TO_CHAR(TRUNC(SYSDATE) - {int(days)}, 'J'))"
+                 if date_wm.kind == "number" else f"TRUNC(SYSDATE) - {int(days)}")
+        preds = [f"{shape.date_ref} >= {lower}", f"{shape.date_ref} < {date_wm_sql}"]
+    else:
+        # Different columns, so exclude the new-rows branch by the exact
+        # complement of its predicate (LNNVL keeps a NULL helper date in).
+        preds = [f"{own} >= TRUNC(SYSDATE) - {int(days)}",
+                 f"LNNVL({shape.date_ref} >= {date_wm_sql})"]
+    preds.append(f"LNNVL({shape.cdc_ref} > {format_watermark(cdc_wm)})")
     floor = _insert_key_floor(tdef, key_wm)
     if floor is not None:
         preds.append(f"LNNVL(t.{tdef.insert_key_column} > {floor})")
