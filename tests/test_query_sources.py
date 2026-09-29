@@ -112,8 +112,9 @@ def test_build_query_incremental_union_uses_inline_view():
     cdc_wm = Watermark(value="2026-07-01 00:00:00.000000", kind="datetime")
     date_wm = Watermark(value="2026-07-01 00:00:00.000000", kind="datetime")
     q = build_query(tdef, settings, cdc_wm, date_wm)
-    # both UNION ALL branches select from the inline view
-    assert q.count(f"FROM {QUERY} t") == 2
+    # every UNION ALL branch (new, updated, and the resync_days re-read)
+    # selects from the inline view
+    assert q.count(f"FROM {QUERY} t") == q.count("UNION ALL") + 1 == 3
     assert "UNION ALL" in q
     assert "t.AMEND_LAST_DATE >" in q
     assert "t.VISIT_DATE >=" in q

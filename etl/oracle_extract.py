@@ -244,10 +244,13 @@ def build_query(
     if incremental_ready:
         if tdef.incremental_cdc_only:
             return _build_cdc_only_query(shape, base, cdc_wm)
-        query = _build_incremental_query(shape, base, cdc_wm, date_wm, ceiling_pred)
-        key_branch = _insert_key_branch(
-            tdef, shape, base, cdc_wm, date_wm, key_wm or Watermark(value=None))
-        return f"{query}\nUNION ALL\n{key_branch}" if key_branch else query
+        key_wm = key_wm or Watermark(value=None)
+        parts = [_build_incremental_query(shape, base, cdc_wm, date_wm, ceiling_pred)]
+        parts += [b for b in (
+            _insert_key_branch(tdef, shape, base, cdc_wm, date_wm, key_wm),
+            _resync_branch(settings.resync_days, tdef, shape, base, cdc_wm, date_wm, key_wm),
+        ) if b]
+        return "\nUNION ALL\n".join(parts)
 
     # INITIAL (or INCREMENTAL with no prior watermark -> behave as initial).
     # Masters: full load. Transactions: configured range filter applied to the
@@ -378,15 +381,56 @@ def _insert_key_branch(
     which ``NOT (p)`` would drop. Keeps UNION ALL duplicate-free, like the
     other two branches.
     """
-    if not tdef.insert_key_column or key_wm.value is None or shape.cdc_ref is None:
+    floor = _insert_key_floor(tdef, key_wm)
+    if floor is None or shape.cdc_ref is None:
         return None
-    floor = Decimal(str(key_wm.value)) - tdef.insert_key_lookback
     preds = [
-        f"t.{tdef.insert_key_column} > {format(floor, 'f')}",
+        f"t.{tdef.insert_key_column} > {floor}",
         f"LNNVL({shape.cdc_ref} > {format_watermark(cdc_wm)})",
     ]
     if shape.date_ref is not None and date_wm.value is not None:
         preds.append(f"LNNVL({shape.date_ref} >= {format_watermark(date_wm)})")
+    return f"{base} WHERE " + " AND ".join(preds)
+
+
+def _insert_key_floor(tdef: TableDef, key_wm: Watermark) -> Optional[str]:
+    """``last_key - lookback`` as a plain decimal literal, or None when inactive."""
+    if not tdef.insert_key_column or key_wm.value is None:
+        return None
+    return format(Decimal(str(key_wm.value)) - tdef.insert_key_lookback, "f")
+
+
+def _resync_branch(
+    days: int,
+    tdef: TableDef,
+    shape: _QueryShape,
+    base: str,
+    cdc_wm: Watermark,
+    date_wm: Watermark,
+    key_wm: Watermark,
+) -> Optional[str]:
+    """Re-read rows dated within the last ``days`` that no other branch took.
+
+    Catches rows Oracle changes without moving the CDC column (the ``[etl]
+    resync_days`` window); the merge then commits only rows whose content
+    changed. Disjoint from every other branch: ``date < date_wm`` excludes the
+    new-rows branch, ``LNNVL(cdc > cdc_wm)`` the updated-rows branch, and
+    ``LNNVL(key > floor)`` the insert-key branch -- LNNVL keeps NULLs in, as
+    in ``_insert_key_branch``. A ``number`` date watermark is a Julian day
+    (APPOINTMENTS.JULIAN_DATE), so the bound is rendered as one.
+    """
+    if not days or shape.date_ref is None or date_wm.value is None or shape.cdc_ref is None:
+        return None
+    lower = (f"TO_NUMBER(TO_CHAR(TRUNC(SYSDATE) - {int(days)}, 'J'))"
+             if date_wm.kind == "number" else f"TRUNC(SYSDATE) - {int(days)}")
+    preds = [
+        f"{shape.date_ref} >= {lower}",
+        f"{shape.date_ref} < {format_watermark(date_wm)}",
+        f"LNNVL({shape.cdc_ref} > {format_watermark(cdc_wm)})",
+    ]
+    floor = _insert_key_floor(tdef, key_wm)
+    if floor is not None:
+        preds.append(f"LNNVL(t.{tdef.insert_key_column} > {floor})")
     return f"{base} WHERE " + " AND ".join(preds)
 
 

@@ -78,7 +78,7 @@ def _dc(**over) -> TableDef:
 
 def _q(tdef, key="1505160.0", date=WM, mode=MODE_INCREMENTAL):
     return build_query(
-        tdef, Settings(mode=mode),
+        tdef, Settings(mode=mode, resync_days=0),  # insert-key shape only; resync covered in test_resync
         Watermark(value=WM, kind="datetime"),
         Watermark(value=date, kind="datetime") if date else Watermark(value=None),
         Watermark(value=key, kind="number") if key else None,
