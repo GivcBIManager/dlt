@@ -182,4 +182,7 @@ def test_hash_ready_merge_ignores_the_recorded_stamp(tmp_path, monkeypatch):
     monkeypatch.setattr(iceberg_load, "_upsert_in_memory_lookup", recorder)
     delta = iceberg_load._append_merge_hash(_rows([0], ["seed"]), ["id", "branch_id"], hash_col)
     _merge_iceberg_single_commit(t, delta, _schema(), "m")
-    assert seen == {"join_col": hash_col, "ignore_cols": frozenset({"recorded_updated_at"})}
+    # insert_at is ETL bookkeeping too: if its carry-forward is unavailable every
+    # re-read row arrives with insert_at=now, which must not rewrite the window.
+    assert seen == {"join_col": hash_col,
+                    "ignore_cols": frozenset({"recorded_updated_at", "insert_at"})}

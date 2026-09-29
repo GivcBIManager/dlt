@@ -2127,18 +2127,21 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
     # filter has different, pre-existing costs -- and they disappear as tables
     # become hash-ready).
     if len(join_cols) == 1:
-        # The ETL stamp is not content: a re-read row identical in every other
-        # column must be elided, not rewritten with a fresh stamp.
+        # The ETL stamps are not content: a re-read row identical in every other
+        # column must be elided, not rewritten with a fresh recorded_updated_at
+        # -- nor with insert_at=now when the carry-forward was unavailable,
+        # which would also overwrite the true first-load time.
         from dlt.common.normalizers.naming.snake_case import (
             NamingConvention as SnakeCaseNamingConvention,
         )
 
-        stamp_col = SnakeCaseNamingConvention().normalize_identifier(
-            Settings().recorded_ts_column)
+        naming, cfg = SnakeCaseNamingConvention(), Settings()
+        etl_stamps = frozenset(naming.normalize_identifier(c) for c in
+                               (cfg.recorded_ts_column, cfg.inserted_ts_column))
         _upsert_in_memory_lookup(
             table, normalized, join_cols[0],
             update_matched=(strategy == "upsert"), label=load_table_name,
-            ignore_cols=frozenset({stamp_col}))
+            ignore_cols=etl_stamps)
         return
 
     table.upsert(
