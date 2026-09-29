@@ -1710,8 +1710,14 @@ def _delta_partition_filter(table, data: pa.Table):
     return expr
 
 
-def _rows_to_update(source: pa.Table, target: pa.Table, join_col: str) -> pa.Table:
+def _rows_to_update(source: pa.Table, target: pa.Table, join_col: str,
+                    ignore_cols: frozenset = frozenset()) -> pa.Table:
     """Vectorized drop-in for ``upsert_util.get_rows_to_update`` (single key).
+
+    ``ignore_cols`` are left out of the comparison: the ETL stamp
+    ``recorded_updated_at`` differs on every re-read of an unchanged row, so
+    counting it would rewrite every re-read row (and re-stamp it). A row that
+    differs in a real column is still returned whole, new stamp included.
 
     pyiceberg compares matched rows in a pure-Python loop: per matched row it
     slices BOTH tables to one row and calls ``.as_py()`` on every non-key column
@@ -1737,7 +1743,7 @@ def _rows_to_update(source: pa.Table, target: pa.Table, join_col: str) -> pa.Tab
     if target.num_rows == 0 or source.num_rows == 0:
         return empty
 
-    non_key = [c for c in source.column_names if c != join_col]
+    non_key = [c for c in source.column_names if c != join_col and c not in ignore_cols]
     if not non_key:
         return empty  # nothing outside the key can differ
 
@@ -1789,6 +1795,7 @@ def _rows_to_update(source: pa.Table, target: pa.Table, join_col: str) -> pa.Tab
 
 def _upsert_in_memory_lookup(
     table, data: pa.Table, join_col: str, update_matched: bool, label: str = "",
+    ignore_cols: frozenset = frozenset(),
 ) -> None:
     """Single-key upsert whose matched-rows lookup runs in memory, not in a scan.
 
@@ -1964,7 +1971,7 @@ def _upsert_in_memory_lookup(
                                   matched_rows.column(join_col).type)
             src_subset = data.filter(
                 pc.is_in(src_keys, value_set=matched_rows.column(join_col)))
-            upd = _rows_to_update(src_subset, matched_rows, join_col)
+            upd = _rows_to_update(src_subset, matched_rows, join_col, ignore_cols)
             if upd.num_rows == 0:
                 continue  # every matched row is unchanged: do not rewrite the file
 
@@ -2120,9 +2127,18 @@ def _merge_iceberg_single_commit(table, data, schema, load_table_name: str) -> N
     # filter has different, pre-existing costs -- and they disappear as tables
     # become hash-ready).
     if len(join_cols) == 1:
+        # The ETL stamp is not content: a re-read row identical in every other
+        # column must be elided, not rewritten with a fresh stamp.
+        from dlt.common.normalizers.naming.snake_case import (
+            NamingConvention as SnakeCaseNamingConvention,
+        )
+
+        stamp_col = SnakeCaseNamingConvention().normalize_identifier(
+            Settings().recorded_ts_column)
         _upsert_in_memory_lookup(
             table, normalized, join_cols[0],
-            update_matched=(strategy == "upsert"), label=load_table_name)
+            update_matched=(strategy == "upsert"), label=load_table_name,
+            ignore_cols=frozenset({stamp_col}))
         return
 
     table.upsert(

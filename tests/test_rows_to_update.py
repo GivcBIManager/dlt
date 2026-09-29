@@ -183,3 +183,31 @@ def test_large_random_delta_matches_pyiceberg():
 
     out = _assert_same(source, target)
     assert 0 < out.num_rows < n  # a meaningful mix, not all-or-nothing
+
+
+# --- ETL stamp columns are not content (C1 rolling re-sync) ------------------ #
+def test_ignored_column_alone_is_not_a_change():
+    source = pa.table({KEY: [1, 2], "v": ["a", "b"], "recorded_updated_at": [9, 9]})
+    target = pa.table({KEY: [1, 2], "v": ["a", "b"], "recorded_updated_at": [1, 1]})
+    out = _rows_to_update(source, target, KEY, ignore_cols=frozenset({"recorded_updated_at"}))
+    assert out.num_rows == 0
+
+
+def test_real_change_is_returned_with_the_new_stamp():
+    source = pa.table({KEY: [1, 2], "v": ["a", "CHANGED"], "recorded_updated_at": [9, 9]})
+    target = pa.table({KEY: [1, 2], "v": ["a", "b"], "recorded_updated_at": [1, 1]})
+    out = _rows_to_update(source, target, KEY, ignore_cols=frozenset({"recorded_updated_at"}))
+    assert out.to_pylist() == [{KEY: 2, "v": "CHANGED", "recorded_updated_at": 9}]
+
+
+def test_default_still_compares_every_column():
+    source = pa.table({KEY: [1], "v": ["a"], "recorded_updated_at": [9]})
+    target = pa.table({KEY: [1], "v": ["a"], "recorded_updated_at": [1]})
+    assert _rows_to_update(source, target, KEY).num_rows == 1
+
+
+def test_only_ignored_columns_besides_the_key_means_nothing_to_compare():
+    source = pa.table({KEY: [1], "recorded_updated_at": [9]})
+    target = pa.table({KEY: [1], "recorded_updated_at": [1]})
+    assert _rows_to_update(source, target, KEY,
+                           ignore_cols=frozenset({"recorded_updated_at"})).num_rows == 0

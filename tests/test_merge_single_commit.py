@@ -163,3 +163,23 @@ def test_installer_replaces_dlt_merge_idempotently():
         assert ice.merge_iceberg_table is _merge_iceberg_single_commit
     finally:
         ice.merge_iceberg_table = original
+
+
+def test_hash_ready_merge_ignores_the_recorded_stamp(tmp_path, monkeypatch):
+    # The single-key (hash-ready) path must tell the upsert that the ETL stamp
+    # recorded_updated_at is not content, so re-read unchanged rows are elided.
+    from etl import iceberg_load
+    from etl.config import Settings
+
+    hash_col = Settings().merge_hash_column
+    seed = iceberg_load._append_merge_hash(_rows([0], ["seed"]), ["id", "branch_id"], hash_col)
+    t = _make_table(tmp_path, "stamp", seed=seed)
+    seen = {}
+
+    def recorder(table, data, join_col, update_matched, label="", ignore_cols=frozenset()):
+        seen.update(join_col=join_col, ignore_cols=ignore_cols)
+
+    monkeypatch.setattr(iceberg_load, "_upsert_in_memory_lookup", recorder)
+    delta = iceberg_load._append_merge_hash(_rows([0], ["seed"]), ["id", "branch_id"], hash_col)
+    _merge_iceberg_single_commit(t, delta, _schema(), "m")
+    assert seen == {"join_col": hash_col, "ignore_cols": frozenset({"recorded_updated_at"})}

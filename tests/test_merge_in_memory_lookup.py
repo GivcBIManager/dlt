@@ -180,3 +180,27 @@ def test_duplicate_stored_keys_abort_the_upsert(tmp_path):
     t = _seed(tmp_path, "dupstored", _rows([0], ["seed"]), _rows([0], ["seed2"]))
     with pytest.raises(ValueError, match="duplicate"):
         _upsert_in_memory_lookup(t, _rows([0], ["u0"]), HASH, update_matched=True)
+
+
+def _stamped(ids, names, stamp):
+    t = _rows(ids, names)
+    return t.append_column("recorded_updated_at", pa.array([stamp] * len(ids), pa.int64()))
+
+
+def test_reread_unchanged_rows_commit_nothing_and_keep_their_stamp(tmp_path):
+    t = _seed(tmp_path, "stamp", _stamped([0, 1], ["a", "b"], 1))
+    before = len(list(t.metadata.snapshots))
+    _upsert_in_memory_lookup(t, _stamped([0, 1], ["a", "b"], 2), HASH, update_matched=True,
+                             ignore_cols=frozenset({"recorded_updated_at"}))
+    t.refresh()
+    assert len(list(t.metadata.snapshots)) == before
+    assert set(t.scan().to_arrow().column("recorded_updated_at").to_pylist()) == {1}
+
+
+def test_reread_changed_row_is_written_with_the_new_stamp(tmp_path):
+    t = _seed(tmp_path, "stamp2", _stamped([0, 1], ["a", "b"], 1))
+    _upsert_in_memory_lookup(t, _stamped([0, 1], ["a", "CHANGED"], 2), HASH, update_matched=True,
+                             ignore_cols=frozenset({"recorded_updated_at"}))
+    t.refresh()
+    got = {r["id"]: (r["name"], r["recorded_updated_at"]) for r in t.scan().to_arrow().to_pylist()}
+    assert got == {0: ("a", 1), 1: ("CHANGED", 2)}
