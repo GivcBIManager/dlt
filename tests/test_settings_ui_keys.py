@@ -145,3 +145,33 @@ def test_unknown_key_still_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
     with pytest.raises(ValueError, match="Not editable"):
         workspace.update_etl_settings({"nope": 1})
+
+
+def test_invalid_resync_days_is_refused_before_writing(tmp_path, monkeypatch):
+    # A value load_settings would reject must never reach config.toml: it would
+    # fail every pipeline run (and the maintenance page) until hand-fixed.
+    import pytest
+
+    cfg = _cfg_file(tmp_path, "resync_days = 60\n")
+    monkeypatch.setattr(workspace, "CONFIG_TOML", cfg)
+    monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
+    for bad in (1.5, -5, "abc", True):
+        with pytest.raises(ValueError, match="resync_days"):
+            workspace.update_etl_settings({"resync_days": bad})
+    assert "resync_days = 60" in cfg.read_text(encoding="utf-8")
+
+
+def test_resync_days_from_the_page_is_written_as_an_integer(tmp_path, monkeypatch):
+    cfg = _cfg_file(tmp_path, "resync_days = 60\n")
+    monkeypatch.setattr(workspace, "CONFIG_TOML", cfg)
+    monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
+    workspace.update_etl_settings({"resync_days": 30.0})   # the page sends Number(value)
+    assert "resync_days = 30\n" in cfg.read_text(encoding="utf-8")
+
+
+def test_resync_days_input_only_offers_whole_non_negative_days():
+    import re
+
+    assert re.search(r'resync_days[^\n]*', SETTINGS_HTML)
+    assert 'data-k="resync_days"' not in SETTINGS_HTML   # rows are rendered by JS
+    assert "INT_KEYS" in SETTINGS_HTML and '"resync_days"' in SETTINGS_HTML.split("INT_KEYS", 1)[1][:200]

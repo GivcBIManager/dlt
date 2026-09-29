@@ -194,8 +194,27 @@ def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
     every other line (comments, other sections) is preserved verbatim. Keeps a
     timestamped backup and validates the result by re-parsing.
     """
-    return _update_toml_block("etl", EDITABLE_ETL_KEYS, updates,
+    return _update_toml_block("etl", EDITABLE_ETL_KEYS, _validate_etl_updates(updates),
                               insertable=frozenset(ETL_KEY_DEFAULTS))
+
+
+def _validate_etl_updates(updates: dict[str, Any]) -> dict[str, Any]:
+    """Refuse values the pipeline itself would reject, before anything is written.
+
+    ``resync_days`` is parsed strictly by ``etl.config.load_settings``: a value
+    it rejects in config.toml would fail every pipeline run until hand-fixed, so
+    the same parser vets it here. The page submits ``Number(value)``, so a whole
+    float (``30.0``) is accepted as its integer.
+    """
+    out = dict(updates)
+    if "resync_days" in out:
+        from etl.config import _parse_resync_days
+
+        value = out["resync_days"]
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        out["resync_days"] = _parse_resync_days(value)
+    return out
 
 
 # --------------------------------------------------------------------------- #

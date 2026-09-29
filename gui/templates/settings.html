@@ -37,6 +37,8 @@ const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min"
   "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep",
   "progress_interval_s","load_batch_rows","load_group_max_bytes","load_commit_timeout_s","load_workers",
   "dq_hash_delta_tolerance_pct","resync_days"]);
+// Whole, non-negative numbers only (the server rejects anything else too).
+const INT_KEYS = new Set(["resync_days"]);
 
 const GROUPS = [
   { icon: "fa-tag", title: "Pipeline identity", blurb: "What the pipeline is called and where it writes.",
@@ -129,7 +131,8 @@ function renderRow(meta) {
         meta.options.map(o => `<option ${o === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("") + `</select>`;
     } else {
       const type = SET_NUMERIC.has(k) ? "number" : "text";
-      valueHtml = `<input class="set-input" data-k="${esc(k)}" type="${type}" ${type === "number" ? 'step="any"' : ""} value="${esc(v)}">`;
+      const numAttrs = INT_KEYS.has(k) ? 'min="0" step="1"' : 'step="any"';
+      valueHtml = `<input class="set-input" data-k="${esc(k)}" type="${type}" ${type === "number" ? numAttrs : ""} value="${esc(v)}">`;
     }
   } else {
     valueHtml = `<span class="setting-value${meta.mono ? " mono" : ""}">${fmtValue(k, v, meta)}</span>`;
