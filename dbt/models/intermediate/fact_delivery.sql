@@ -58,12 +58,19 @@ dc.branch_id branch_id
 ,dc.patient_share_type 
 ,status_reason_code cancellation_reason_code
 ,take_home
-,dc.recorded_updated_at recorded_updated_at
-FROM 
+-- The latest ETL stamp of the three sources: a delivery line / master change no
+-- longer re-stamps its (unchanged) charges, so the charge stamp alone would miss
+-- edits to the dl/md columns selected above.
+,greatest(ifNull(dc.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6)),
+          ifNull(dl.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6)),
+          ifNull(md.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6))) recorded_updated_at
+FROM
 {{ iceberg_source('delivery_charge') }} dc 
 INNER JOIN {{ iceberg_source('delivery_lines') }} dl ON dc.delivery_line::decimal = dl.delivery_line  and dc.branch_id = dl.branch_id
 INNER JOIN {{ iceberg_source('master_deliveries') }}  md ON dl.master_delivery_no::decimal = md.master_delivery_no and dc.branch_id =  md.branch_id
 {% if is_incremental() %}
   {%- set wm = run_query("select max(recorded_updated_at) from " ~ this).columns[0][0] -%}
-  WHERE dc.recorded_updated_at > toDateTime64('{{ wm }}', 6)
+  WHERE greatest(ifNull(dc.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6)),
+                 ifNull(dl.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6)),
+                 ifNull(md.recorded_updated_at, toDateTime64('1970-01-01 00:00:00', 6))) > toDateTime64('{{ wm }}', 6)
 {% endif %}
