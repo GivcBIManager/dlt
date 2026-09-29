@@ -36,6 +36,7 @@ select
 ,NATIONAL_IDENTIFIER_TYPE    as national_identifier_type
 ,WORKER_TYPE                 as worker_type
 ,RELIGION                    as religion
+,NATIONALITY                 as nationality
 ,HIRE_DATE                   as hire_date
 ,ACTUAL_TERMINATION_DATE     as actual_termination_date
 ,LAST_WORKING_DATE           as last_working_date

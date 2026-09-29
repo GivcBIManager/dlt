@@ -102,10 +102,6 @@ sources:
 
       - name: dim_date
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
-        meta:
-          domain: conformed
-          run_stamp: 20260921T230005Z-648373
-          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_date/20260921T230005Z-648373
 
       - name: dim_department
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -118,8 +114,8 @@ sources:
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: conformed
-          run_stamp: 20260920T140015Z-944fce
-          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_employee/20260920T140015Z-944fce
+          run_stamp: 20260928T122022Z-a6c83e
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_employee/20260928T122022Z-a6c83e
 
       - name: dim_exchange_rate
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
