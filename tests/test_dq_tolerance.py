@@ -76,10 +76,14 @@ def test_zero_tolerance_keeps_any_drift_a_mismatch():
         0, 1000, _hash(matched=999, oo=1, ora=1000, ice=1000), 0.0)[0] == "MISMATCH"
 
 
-def test_zero_oracle_rows_with_delta_is_mismatch():
-    status, _, pct = classify_status(0, 0, _hash(oi=50, ora=0, ice=50), 10.0)
-    assert status == "MISMATCH"
-    assert pct is None
+def test_zero_oracle_rows_with_only_lake_rows_is_not_drift():
+    # Was MISMATCH (undefined ratio). With 0 Oracle rows the only possible hash
+    # difference is lake-only rows -- deleted in Oracle -- which are no longer
+    # drift. The undefined-ratio rule still holds for count drift (next test).
+    # (row-count delta = oracle - iceberg = 0 - 50, as check_unit computes it)
+    status, _, pct = classify_status(-50, 0, _hash(oi=50, ora=0, ice=50), 10.0)
+    assert status == "OK"
+    assert pct == 0.0
 
 
 def test_zero_oracle_rows_with_count_delta_is_mismatch():
@@ -129,3 +133,51 @@ def test_result_rows_includes_both_pcts():
 def test_dq_hints_has_pct_doubles():
     assert dq_check._DQ_HINTS["hash_delta_pct"] == {"data_type": "double"}
     assert dq_check._DQ_HINTS["row_count_delta_pct"] == {"data_type": "double"}
+
+# --- rows only in Iceberg are not drift ---------------------------------------- #
+# The load never deletes: a row deleted in Oracle stays in the lake by design, so
+# lake-only rows are reported (hash_only_in_iceberg, hash_total_delta) but do not
+# count toward the status -- neither through the hash delta nor through the
+# row-count delta they cause.
+def test_lake_only_rows_alone_are_ok():
+    status, cnt_pct, pct = classify_status(
+        -50, 1000, _hash(matched=1000, oi=50, ora=1000, ice=1050), 10.0)
+    assert (status, cnt_pct, pct) == ("OK", 0.0, 0.0)
+
+
+def test_lake_only_rows_do_not_inflate_real_drift():
+    status, _, pct = classify_status(
+        0, 1000, _hash(matched=850, mm=150, oi=500, ora=1000, ice=1500), 10.0)
+    assert status == "MISMATCH"
+    assert round(pct, 2) == 15.0            # 150 changed, not 650
+
+
+def test_count_delta_from_lake_only_rows_is_discounted():
+    # 50 missing from the lake, 500 deleted in Oracle: count delta -450 is
+    # really +50 once the deleted rows are set aside -> 5% -> within 10%.
+    status, cnt_pct, pct = classify_status(
+        -450, 1000, _hash(matched=950, oo=50, oi=500, ora=1000, ice=1450), 10.0)
+    assert status == "WITHIN_TOLERANCE"
+    assert round(cnt_pct, 2) == 5.0 and round(pct, 2) == 5.0
+
+
+def test_only_deleted_rows_and_no_oracle_rows_is_ok():
+    # ar_stat_of_invoices/abha: Oracle 0 rows in the window, lake 1 (deleted).
+    assert classify_status(-1, 0, _hash(oi=1, ora=0, ice=1), 10.0)[0] == "OK"
+
+
+def test_lake_duplicates_still_count():
+    # Duplicated lake rows are not lake-only keys (keys are deduped before the
+    # compare), so the surplus stays a count drift.
+    status, cnt_pct, _ = classify_status(
+        -150, 1000, _hash(matched=1000, ora=1000, ice=1150), 10.0)
+    assert status == "MISMATCH" and round(cnt_pct, 2) == 15.0
+
+
+def test_counts_only_mode_is_unchanged():
+    # Without the hash pass lake-only rows cannot be told apart from duplicates.
+    assert classify_status(-500, 1000, None, 10.0)[0] == "MISMATCH"
+
+
+def test_reported_total_delta_still_includes_lake_only_rows():
+    assert _hash(oo=1, oi=2, mm=3).total_delta == 6

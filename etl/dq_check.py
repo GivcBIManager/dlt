@@ -253,7 +253,18 @@ class HashDelta:
 
     @property
     def total_delta(self) -> int:
+        """Every non-matching row (reported as hash_total_delta)."""
         return self.only_in_oracle + self.only_in_iceberg + self.mismatch
+
+    @property
+    def drift_delta(self) -> int:
+        """Non-matching rows that count toward the status.
+
+        Rows only in Iceberg are excluded: the load never deletes, so a row
+        deleted in Oracle stays in the lake by design. They are still reported
+        (``only_in_iceberg`` / ``total_delta``), just not treated as drift.
+        """
+        return self.only_in_oracle + self.mismatch
 
 
 def _delta_pct(delta: Optional[int], base: Optional[int]) -> Optional[float]:
@@ -273,10 +284,13 @@ def _delta_pct(delta: Optional[int], base: Optional[int]) -> Optional[float]:
 
 
 def _hash_delta_pct(hash: Optional[HashDelta]) -> Optional[float]:
-    """Percent of Oracle hashed rows that diverged (None when undefined)."""
+    """Percent of Oracle hashed rows that drifted (None when undefined).
+
+    Measured on ``drift_delta``: rows only in Iceberg are not drift.
+    """
     if hash is None:
         return None
-    return _delta_pct(hash.total_delta, hash.oracle_rows)
+    return _delta_pct(hash.drift_delta, hash.oracle_rows)
 
 
 def classify_status(
@@ -292,12 +306,20 @@ def classify_status(
     rows and tolerated up to ``tolerance_pct`` -> WITHIN_TOLERANCE; whichever is
     larger decides, and either one above the tolerance is a MISMATCH. A drift
     whose ratio is undefined (Oracle contributed 0 rows) is always a MISMATCH.
+
+    Rows only in Iceberg (deleted in Oracle; the load never deletes) are not
+    drift: they are left out of the hash drift, and when the hash pass ran, the
+    row-count delta is measured without them too (``oracle - (iceberg -
+    only_in_iceberg)``). Without the hash pass they cannot be told apart from
+    duplicated lake rows, so the raw count delta stands.
     """
+    if hash is not None and row_count_delta is not None:
+        row_count_delta = row_count_delta + hash.only_in_iceberg
     count_pct = _delta_pct(row_count_delta, oracle_row_count)
     hash_pct = _hash_delta_pct(hash)
     # None/0 deltas are not drift: a missing count leaves that side unmeasured.
     drifts = ([count_pct] if row_count_delta else []) + (
-        [hash_pct] if hash is not None and hash.total_delta else [])
+        [hash_pct] if hash is not None and hash.drift_delta else [])
     if not drifts:
         return STATUS_OK, count_pct, hash_pct
     if any(p is None for p in drifts):  # base 0 with a delta -> undefined ratio
