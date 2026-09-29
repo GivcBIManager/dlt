@@ -12,7 +12,7 @@ import re
 import shutil
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import security
 from config import (
@@ -63,8 +63,17 @@ def etl_settings() -> dict[str, Any]:
         .get("bucket_url")
     )
     etl["_bucket_url"] = bucket
+    # Keys added after config.toml was written: show the pipeline's default so
+    # the page can render (and edit) them before the file has a line for them.
+    for key, default in ETL_KEY_DEFAULTS.items():
+        etl.setdefault(key, default)
     return etl
 
+
+# Defaults of editable [etl] keys newer than most deployed config.toml files;
+# must match etl.config.Settings. config.toml is git-ignored live config, so
+# these keys are usually absent until the first save from the Settings page.
+ETL_KEY_DEFAULTS = {"resync_days": 60}
 
 # Keys the dashboard lets you edit (a write allowlist; ``_bucket_url`` and any
 # other derived/destination keys are intentionally excluded).
@@ -78,7 +87,7 @@ EDITABLE_ETL_KEYS = {
     "load_batch_rows", "load_group_max_bytes", "load_commit_timeout_s",
     "load_workers",
     "cleanup_staging_after_load", "dsn_mode",
-    "dq_hash_delta_tolerance_pct",
+    "dq_hash_delta_tolerance_pct", "resync_days",
     # thick_mode / oracle_client_lib_dir stay view-only: host-specific values
     # that differ between the Windows dev box and the Linux server.
 }
@@ -110,12 +119,15 @@ def _looks_numeric(s: str) -> bool:
         return False
 
 
-def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any]) -> dict[str, Any]:
+def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any],
+                       insertable: frozenset = frozenset()) -> dict[str, Any]:
     """Edit scalar keys inside ``[section]`` of config.toml in place.
 
-    Only keys already present in the block and on ``allowlist`` are touched;
-    every other line is preserved verbatim. Keeps a timestamped backup and
-    validates by re-parsing.
+    Only keys on ``allowlist`` are touched; every other line is preserved
+    verbatim. A key must already be present in the block, except keys in
+    ``insertable`` (newer settings the deployed file may predate), which are
+    appended after the block's last key when absent. Keeps a timestamped
+    backup and validates by re-parsing.
     """
     bad = [k for k in updates if k not in allowlist]
     if bad:
@@ -125,6 +137,7 @@ def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any
 
     lines = CONFIG_TOML.read_text(encoding="utf-8").splitlines()
     in_block = False
+    last_kv: Optional[int] = None   # index of the block's last key line
     applied: dict[str, Any] = {}
     for i, line in enumerate(lines):
         header = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
@@ -136,11 +149,19 @@ def _update_toml_block(section: str, allowlist: set[str], updates: dict[str, Any
         m = _ETL_KV_RE.match(line)
         if not m:
             continue
+        last_kv = i
         key = m.group(2)
         if key in updates:
             new_raw = _fmt_toml_scalar(m.group(4), updates[key])
             lines[i] = f"{m.group(1)}{key}{m.group(3)}{new_raw}{m.group(5)}"
             applied[key] = updates[key]
+
+    to_insert = [k for k in updates if k not in applied and k in insertable]
+    if to_insert and last_kv is not None:
+        # "0" as the template literal: numbers render bare, strings quoted.
+        new_lines = [f"{k} = {_fmt_toml_scalar('0', updates[k])}" for k in to_insert]
+        lines[last_kv + 1:last_kv + 1] = new_lines
+        applied.update({k: updates[k] for k in to_insert})
 
     missing = [k for k in updates if k not in applied]
     if missing:
@@ -173,7 +194,8 @@ def update_etl_settings(updates: dict[str, Any]) -> dict[str, Any]:
     every other line (comments, other sections) is preserved verbatim. Keeps a
     timestamped backup and validates the result by re-parsing.
     """
-    return _update_toml_block("etl", EDITABLE_ETL_KEYS, updates)
+    return _update_toml_block("etl", EDITABLE_ETL_KEYS, updates,
+                              insertable=frozenset(ETL_KEY_DEFAULTS))
 
 
 # --------------------------------------------------------------------------- #

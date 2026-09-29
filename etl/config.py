@@ -433,6 +433,13 @@ class Settings:
     # of the two decides. (0 = strict / no tolerance.)
     dq_hash_delta_tolerance_pct: float = 10.0
 
+    # Re-read rows dated within the last N days on every incremental run (0
+    # disables), for every table with a date column and a CDC column. Catches
+    # rows Oracle changes without moving the CDC column; the merge commits only
+    # rows whose content changed, so unchanged re-reads cost a read, not a write.
+    # The longest measured edit tail is 45 days (ar_episode_invoices).
+    resync_days: int = 60
+
     # local working state
     staging_dir: Path = field(default_factory=lambda: Path("_staging"))
 
@@ -621,6 +628,22 @@ def _cfg(key: str, default: Any) -> Any:
     return default if val is None else val
 
 
+def _parse_resync_days(raw: Any) -> int:
+    """``[etl] resync_days`` as a whole number of days >= 0 (0 disables).
+
+    TOML yields an int; an environment override may arrive as a digit string.
+    Anything else -- a bool, a fraction, a negative -- is a config error, not a
+    value to coerce: a silently truncated or negative window would re-read the
+    wrong rows every run.
+    """
+    if isinstance(raw, str) and raw.strip().isdigit():
+        raw = int(raw.strip())
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise ValueError(
+            f"[etl] resync_days must be a whole number of days (0 disables), got {raw!r}")
+    return raw
+
+
 # --------------------------------------------------------------------------- #
 # Cross-platform path/location resolution (Windows <-> Linux)
 # --------------------------------------------------------------------------- #
@@ -708,6 +731,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         load_workers=int(_cfg("etl.load_workers", 2)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
         cleanup_staging_after_load=bool(_cfg("etl.cleanup_staging_after_load", True)),
+        resync_days=_parse_resync_days(_cfg("etl.resync_days", 60)),
     )
 
     s.postgres = load_postgres_config()

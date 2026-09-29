@@ -31,12 +31,12 @@ const SET_EDITABLE = new Set(["dataset_name","pipeline_name","max_branch_workers
   "max_retries","retry_interval_s","snapshot_maintenance","snapshot_expire_days","snapshot_min_to_keep",
   "progress_enabled","progress_interval_s","load_batch_rows","load_group_max_bytes",
   "load_commit_timeout_s","load_workers","cleanup_staging_after_load","dsn_mode",
-  "dq_hash_delta_tolerance_pct"]);
+  "dq_hash_delta_tolerance_pct","resync_days"]);
 const SET_NUMERIC = new Set(["max_branch_workers","max_table_workers","pool_min","pool_max","pool_increment",
   "pool_acquire_timeout_s","pool_acquire_attempts","pool_backoff_base_s","pool_backoff_cap_s",
   "max_retries","retry_interval_s","snapshot_expire_days","snapshot_min_to_keep",
   "progress_interval_s","load_batch_rows","load_group_max_bytes","load_commit_timeout_s","load_workers",
-  "dq_hash_delta_tolerance_pct"]);
+  "dq_hash_delta_tolerance_pct","resync_days"]);
 
 const GROUPS = [
   { icon: "fa-tag", title: "Pipeline identity", blurb: "What the pipeline is called and where it writes.",
@@ -93,6 +93,11 @@ const GROUPS = [
     keys: [
       { k: "progress_enabled",    label: "Heartbeat", options: ["true", "false"], help: "Periodic PROGRESS log lines during extraction and load." },
       { k: "progress_interval_s", label: "Interval",  unit: "s", help: "Seconds between PROGRESS lines." },
+    ]},
+  { icon: "fa-arrows-rotate", title: "Change capture", blurb: "Catch rows Oracle changes without updating AMEND_LAST_DATE.",
+    keys: [
+      { k: "resync_days", label: "Re-read window", unit: "days",
+        help: "Every incremental run re-reads rows dated within the last N days (tables with a date and a CDC column) and commits only rows whose content changed. 0 disables. Longest measured edit tail: 45 days." },
     ]},
   { icon: "fa-scale-balanced", title: "Data quality", blurb: "Oracle ↔ Iceberg reconciliation tolerance.",
     keys: [

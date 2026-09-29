@@ -26,6 +26,7 @@ UI_EDITABLE = {
     "load_batch_rows", "load_group_max_bytes", "load_commit_timeout_s",
     "load_workers",
     "cleanup_staging_after_load", "dq_hash_delta_tolerance_pct",
+    "resync_days",
 }
 
 # Host-specific: shown on the page but locked (edit the file directly).
@@ -47,7 +48,8 @@ def test_settings_page_curates_new_load_keys():
     for key in ("load_group_max_bytes", "load_batch_rows", "load_commit_timeout_s",
                 "load_workers",
                 "cleanup_staging_after_load", "progress_enabled",
-                "progress_interval_s", "pool_backoff_base_s", "pool_backoff_cap_s"):
+                "progress_interval_s", "pool_backoff_base_s", "pool_backoff_cap_s",
+                "resync_days"):
         assert f'k: "{key}"' in SETTINGS_HTML, f"{key} has no curated row"
 
 
@@ -105,3 +107,41 @@ def test_host_specific_keys_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
     with pytest.raises(ValueError, match="Not editable"):
         workspace.update_etl_settings({"thick_mode": "false"})
+
+
+def test_missing_key_shows_default_and_is_inserted_on_save(tmp_path, monkeypatch):
+    # config.toml is live, git-ignored config: production has no resync_days
+    # line, so the page must show the default and the first save must add it.
+    import tomllib
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[etl]\nload_workers = 2\n\n[destination.filesystem]\nbucket_url = "x"\n',
+                   encoding="utf-8")
+    monkeypatch.setattr(workspace, "CONFIG_TOML", cfg)
+    monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
+    assert workspace.etl_settings()["resync_days"] == 60
+    res = workspace.update_etl_settings({"resync_days": 30})
+    assert res["applied"] == {"resync_days": 30}
+    parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    assert parsed["etl"] == {"load_workers": 2, "resync_days": 30}
+    assert parsed["destination"]["filesystem"]["bucket_url"] == "x"
+    assert workspace.etl_settings()["resync_days"] == 30
+
+
+def test_existing_key_is_rewritten_in_place(tmp_path, monkeypatch):
+    cfg = _cfg_file(tmp_path, "resync_days = 60\nload_workers = 2\n")
+    monkeypatch.setattr(workspace, "CONFIG_TOML", cfg)
+    monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
+    workspace.update_etl_settings({"resync_days": 0})
+    text = cfg.read_text(encoding="utf-8")
+    assert text.count("resync_days") == 1 and "resync_days = 0" in text
+
+
+def test_unknown_key_still_rejected(tmp_path, monkeypatch):
+    import pytest
+
+    cfg = _cfg_file(tmp_path, "load_workers = 2\n")
+    monkeypatch.setattr(workspace, "CONFIG_TOML", cfg)
+    monkeypatch.setattr(workspace, "STATE_DIR", tmp_path)
+    with pytest.raises(ValueError, match="Not editable"):
+        workspace.update_etl_settings({"nope": 1})
