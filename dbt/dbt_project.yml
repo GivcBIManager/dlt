@@ -44,11 +44,13 @@ models:
     # under it. Those models read the Oracle Fusion warehouse and are new, so
     # nothing is pointed at them yet and they can have a database of their own.
     # ------------------------------------------------------------------
-    intermediate:
-      +tags: ["intermediate"]
-
-    marts:
-      +tags: ["marts"]
+    # intermediate/ and marts/ currently have no models (dbt warns about a
+    # configuration path that matches no resource). When a layer gets its first
+    # model again, add its block back:
+    #   intermediate:
+    #     +tags: ["intermediate"]
+    #   marts:
+    #     +tags: ["marts"]
 
     # ------------------------------------------------------------------
     # The Oracle Fusion lake, read through the `ofusion_source` macro.
