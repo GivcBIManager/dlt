@@ -22,6 +22,13 @@ version: 2
 
 models:
 
+  - name: bridge_user_data_access
+    description: "conformed.bridge_user_data_access -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 4,591 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [user_role_data_assignment_id]
+
   - name: dim_absence_type
     description: "conformed.dim_absence_type -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 20 source rows."
     data_tests:
@@ -183,12 +190,26 @@ models:
           arguments:
             combination_of_columns: [location_id, valid_from]
 
+  - name: dim_lookup_value
+    description: "conformed.dim_lookup_value -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 120,612 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [lookup_type, lookup_code, view_application_id, set_id]
+
   - name: dim_organization
     description: "conformed.dim_organization -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 2,222 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
             combination_of_columns: [organization_id, valid_from]
+
+  - name: dim_party_tax_profile
+    description: "conformed.dim_party_tax_profile -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 1,889 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [party_tax_profile_id]
 
   - name: dim_payroll_element
     description: "conformed.dim_payroll_element -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 1,985 source rows."
@@ -225,12 +246,26 @@ models:
           arguments:
             combination_of_columns: [task_id]
 
+  - name: dim_territory
+    description: "conformed.dim_territory -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 251 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [territory_code]
+
   - name: dim_uom
     description: "conformed.dim_uom -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 288 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
             combination_of_columns: [uom_code]
+
+  - name: dim_user
+    description: "conformed.dim_user -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 5,133 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [user_id]
 
   - name: bridge_gl_import_reference
     description: "finance.bridge_gl_import_reference -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 1,418,289 source rows."
@@ -245,6 +280,13 @@ models:
       - unique_combination_final:
           arguments:
             combination_of_columns: [application_id, event_id, ae_header_id, ae_line_num, temp_line_num, source_distribution_type, source_distribution_id_num_1]
+
+  - name: dim_ar_transaction_type
+    description: "finance.dim_ar_transaction_type -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 27 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [cust_trx_type_seq_id]
 
   - name: dim_fa_asset
     description: "finance.dim_fa_asset -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 19,114 source rows."
@@ -273,6 +315,20 @@ models:
       - unique_combination_final:
           arguments:
             combination_of_columns: [invoice_id]
+
+  - name: fact_ar_adjustment
+    description: "finance.fact_ar_adjustment -- Oracle Fusion warehouse, staged 1:1. Grain: UNVERIFIED -- warehouse table is empty; key inferred, not measured."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [adjustment_id]
+
+  - name: fact_ar_cash_receipt
+    description: "finance.fact_ar_cash_receipt -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 126 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [cash_receipt_id]
 
   - name: fact_ar_invoice_line
     description: "finance.fact_ar_invoice_line -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 893 source rows."
@@ -379,12 +435,33 @@ models:
           arguments:
             combination_of_columns: [tax_line_id]
 
+  - name: bridge_assignment_payroll
+    description: "hcm.bridge_assignment_payroll -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 4,746 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [assigned_payroll_id]
+
   - name: dim_absence_plan
     description: "hcm.dim_absence_plan -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 6 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
             combination_of_columns: [absence_plan_id]
+
+  - name: dim_absence_plan_enrollment
+    description: "hcm.dim_absence_plan_enrollment -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 8,238 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [per_plan_enrt_id]
+
+  - name: dim_contract
+    description: "hcm.dim_contract -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 7,237 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [contract_id, valid_from]
 
   - name: dim_cost_allocation_account
     description: "hcm.dim_cost_allocation_account -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 3,894 source rows."
@@ -463,12 +540,26 @@ models:
           arguments:
             combination_of_columns: [per_accrual_entry_dtl_id]
 
+  - name: fact_absence_balance
+    description: "hcm.fact_absence_balance -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 65,372 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [per_accrual_entry_id]
+
   - name: fact_absence_entry
     description: "hcm.fact_absence_entry -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 3,054 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
             combination_of_columns: [per_absence_entry_id]
+
+  - name: fact_area_of_responsibility
+    description: "hcm.fact_area_of_responsibility -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 195 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [asg_responsibility_id]
 
   - name: fact_assignment_work_measure
     description: "hcm.fact_assignment_work_measure -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 3,055 source rows."
@@ -575,6 +666,13 @@ models:
           arguments:
             combination_of_columns: [transaction_type_id]
 
+  - name: dim_item_relationship
+    description: "scm.dim_item_relationship -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 2,061 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [item_relationship_id]
+
   - name: dim_locator
     description: "scm.dim_locator -- Oracle Fusion warehouse, staged 1:1. Grain: UNVERIFIED -- warehouse table is empty; key inferred, not measured."
     data_tests:
@@ -589,12 +687,26 @@ models:
           arguments:
             combination_of_columns: [inventory_item_id, organization_id, lot_number]
 
+  - name: dim_po_line_type
+    description: "scm.dim_po_line_type -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 4 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [line_type_id]
+
   - name: dim_subinventory
     description: "scm.dim_subinventory -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 926 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
             combination_of_columns: [secondary_inventory_name, organization_id]
+
+  - name: dim_uom_conversion
+    description: "scm.dim_uom_conversion -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 273 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [conversion_id]
 
   - name: dim_valuation_unit
     description: "scm.dim_valuation_unit -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 96 source rows."
@@ -623,6 +735,13 @@ models:
       - unique_combination_final:
           arguments:
             combination_of_columns: [transaction_id]
+
+  - name: fact_inventory_transaction_lot
+    description: "scm.fact_inventory_transaction_lot -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 947,678 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [transaction_id, lot_number]
 
   - name: fact_inventory_valuation
     description: "scm.fact_inventory_valuation -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 903,183 source rows."
@@ -658,3 +777,10 @@ models:
       - unique_combination_final:
           arguments:
             combination_of_columns: [distribution_id]
+
+  - name: fact_transfer_order_line
+    description: "scm.fact_transfer_order_line -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 237 source rows."
+    data_tests:
+      - unique_combination_final:
+          arguments:
+            combination_of_columns: [transfer_order_line_id]

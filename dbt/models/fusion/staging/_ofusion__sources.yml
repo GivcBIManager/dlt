@@ -30,6 +30,13 @@ sources:
     tags: [source, iceberg, ofusion, conformed]
     tables:
 
+      - name: bridge_user_data_access
+        description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: conformed
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/bridge_user_data_access/20260930T072330Z-7433ee
+
       - name: dim_absence_type
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
@@ -194,12 +201,26 @@ sources:
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_location/20260920T140015Z-944fce
 
+      - name: dim_lookup_value
+        description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: conformed
+          run_stamp: 20260930T074900Z-ab93d9
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_lookup_value/20260930T074900Z-ab93d9
+
       - name: dim_organization
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: conformed
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_organization/20260920T140015Z-944fce
+
+      - name: dim_party_tax_profile
+        description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: conformed
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_party_tax_profile/20260930T072204Z-965952
 
       - name: dim_payroll_element
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -236,12 +257,26 @@ sources:
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_task/20260920T140015Z-944fce
 
+      - name: dim_territory
+        description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: conformed
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_territory/20260930T072204Z-965952
+
       - name: dim_uom
         description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: conformed
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_uom/20260920T140015Z-944fce
+
+      - name: dim_user
+        description: Oracle Fusion conformed table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: conformed
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/conformed/dim_user/20260930T072204Z-965952
 
   - name: ofusion_finance
     description: Oracle Fusion finance subject area, landed as Apache Iceberg on the ClickHouse host by the ofusion pipeline and read via icebergLocal().
@@ -261,6 +296,13 @@ sources:
           domain: finance
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/finance/bridge_sla_distribution_link/20260921T070725Z-6d27cc
+
+      - name: dim_ar_transaction_type
+        description: Oracle Fusion finance table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: finance
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/finance/dim_ar_transaction_type/20260930T072204Z-965952
 
       - name: dim_fa_asset
         description: Oracle Fusion finance table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -289,6 +331,20 @@ sources:
           domain: finance
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/finance/fact_ap_payment_schedule/20260921T070725Z-6d27cc
+
+      - name: fact_ar_adjustment
+        description: Oracle Fusion finance table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: finance
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/finance/fact_ar_adjustment/20260930T072330Z-7433ee
+
+      - name: fact_ar_cash_receipt
+        description: Oracle Fusion finance table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: finance
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/finance/fact_ar_cash_receipt/20260930T072330Z-7433ee
 
       - name: fact_ar_invoice_line
         description: Oracle Fusion finance table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -400,12 +456,33 @@ sources:
     tags: [source, iceberg, ofusion, hcm]
     tables:
 
+      - name: bridge_assignment_payroll
+        description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: hcm
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/bridge_assignment_payroll/20260930T072330Z-7433ee
+
       - name: dim_absence_plan
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: hcm
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/dim_absence_plan/20260920T140015Z-944fce
+
+      - name: dim_absence_plan_enrollment
+        description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: hcm
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/dim_absence_plan_enrollment/20260930T072204Z-965952
+
+      - name: dim_contract
+        description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: hcm
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/dim_contract/20260930T072204Z-965952
 
       - name: dim_cost_allocation_account
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -484,12 +561,26 @@ sources:
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_absence_accrual/20260921T070725Z-6d27cc
 
+      - name: fact_absence_balance
+        description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: hcm
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_absence_balance/20260930T072330Z-7433ee
+
       - name: fact_absence_entry
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: hcm
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_absence_entry/20260921T070725Z-6d27cc
+
+      - name: fact_area_of_responsibility
+        description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: hcm
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/hcm/fact_area_of_responsibility/20260930T072330Z-7433ee
 
       - name: fact_assignment_work_measure
         description: Oracle Fusion hcm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -601,6 +692,13 @@ sources:
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_inv_transaction_type/20260920T140015Z-944fce
 
+      - name: dim_item_relationship
+        description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: scm
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_item_relationship/20260930T072204Z-965952
+
       - name: dim_locator
         description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
@@ -615,12 +713,26 @@ sources:
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_lot/20260920T140015Z-944fce
 
+      - name: dim_po_line_type
+        description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: scm
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_po_line_type/20260930T072204Z-965952
+
       - name: dim_subinventory
         description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
         meta:
           domain: scm
           run_stamp: 20260920T140015Z-944fce
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_subinventory/20260920T140015Z-944fce
+
+      - name: dim_uom_conversion
+        description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: scm
+          run_stamp: 20260930T072204Z-965952
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/dim_uom_conversion/20260930T072204Z-965952
 
       - name: dim_valuation_unit
         description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -649,6 +761,13 @@ sources:
           domain: scm
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/fact_inventory_transaction/20260921T070725Z-6d27cc
+
+      - name: fact_inventory_transaction_lot
+        description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: scm
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/fact_inventory_transaction_lot/20260930T072330Z-7433ee
 
       - name: fact_inventory_valuation
         description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
@@ -684,3 +803,10 @@ sources:
           domain: scm
           run_stamp: 20260921T070725Z-6d27cc
           iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/fact_requisition_distribution/20260921T070725Z-6d27cc
+
+      - name: fact_transfer_order_line
+        description: Oracle Fusion scm table, landed as Iceberg by the ofusion pipeline. Not yet documented.
+        meta:
+          domain: scm
+          run_stamp: 20260930T072330Z-7433ee
+          iceberg_path: /var/lib/clickhouse/user_files/ofusion_output/scm/fact_transfer_order_line/20260930T072330Z-7433ee
