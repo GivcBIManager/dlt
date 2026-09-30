@@ -41,6 +41,8 @@ select
 ,EXPIRATION_ACTION_DATE_KEY  as expiration_action_date_key
 ,STATUS_ID                   as status_id
 ,GRADE_CODE                  as grade_code
+,ATTRIBUTE_CATEGORY          as attribute_category
+,ATTRIBUTE_NUMBER1           as attribute_number1
 ,ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
 from {{ ofusion_source('dim_lot', 'scm') }}
 {% if is_incremental() %}

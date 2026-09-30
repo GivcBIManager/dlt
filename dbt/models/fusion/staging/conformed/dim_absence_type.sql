@@ -28,6 +28,7 @@ select
 ,ABSENCE_PLAN_ID    as absence_plan_id
 ,ABSENCE_PLAN_NAME  as absence_plan_name
 ,PLAN_TYPE          as plan_type
+,PLAN_PERIOD_TYPE   as plan_period_type
 ,VALID_FROM         as valid_from
 ,VALID_TO           as valid_to
 ,IS_CURRENT         as is_current

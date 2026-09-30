@@ -25,6 +25,7 @@ select
 ,ACCOUNT_NUMBER     as account_number
 ,PARTY_ID           as party_id
 ,PARTY_NAME         as party_name
+,PARTY_NUMBER       as party_number
 ,ifNull(PARTY_TYPE, '') as party_type
 ,ifNull(CUST_ACCT_SITE_ID, 0) as cust_acct_site_id
 ,SITE_USE_ID        as site_use_id

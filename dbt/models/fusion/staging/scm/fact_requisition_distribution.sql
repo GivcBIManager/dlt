@@ -61,6 +61,9 @@ select
 ,LINE_LIFECYCLE_SECONDARY_STATUS  as line_lifecycle_secondary_status
 ,CANCEL_FLAG                      as cancel_flag
 ,SOURCE_TYPE_CODE                 as source_type_code
+,SOURCE_SUBINVENTORY              as source_subinventory
+,REQS_IN_POOL_FLAG                as reqs_in_pool_flag
+,ORCHESTRATION_CODE               as orchestration_code
 ,DESTINATION_TYPE_CODE            as destination_type_code
 ,ORDER_TYPE_LOOKUP_CODE           as order_type_lookup_code
 ,PURCHASE_BASIS                   as purchase_basis

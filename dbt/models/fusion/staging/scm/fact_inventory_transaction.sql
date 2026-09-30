@@ -39,6 +39,7 @@ select
 ,TRANSACTION_SOURCE_TYPE_ID      as transaction_source_type_id
 ,TRANSACTION_SOURCE_ID           as transaction_source_id
 ,TRANSACTION_SOURCE_NAME         as transaction_source_name
+,TRX_SOURCE_LINE_ID              as trx_source_line_id
 ,TRANSACTION_REFERENCE           as transaction_reference
 ,REASON_ID                       as reason_id
 ,COST_GROUP_ID                   as cost_group_id

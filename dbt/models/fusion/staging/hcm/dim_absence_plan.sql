@@ -25,6 +25,7 @@ select
 ,ABSENCE_PLAN_NAME         as absence_plan_name
 ,ABSENCE_PLAN_DESCRIPTION  as absence_plan_description
 ,PLAN_TYPE                 as plan_type
+,PLAN_PERIOD_TYPE          as plan_period_type
 ,LEGISLATION_CODE          as legislation_code
 ,VALID_FROM                as valid_from
 ,VALID_TO                  as valid_to

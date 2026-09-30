@@ -2,7 +2,7 @@
     materialized='incremental',
     incremental_strategy='append',
     engine='ReplacingMergeTree(last_update_date)',
-    order_by='(code_combination_id, period_name)'
+    order_by='(budget_ccid, period_name)'
 ) }}
 
 -- finance.fact_budgetary_control_balance -- Oracle Fusion warehouse, staged 1:1 into `fusion`.
@@ -11,7 +11,7 @@
 -- it is an ordinary model. Edit it freely; nothing regenerates it. (The source
 -- declaration and the Iceberg path ARE regenerated -- see gui/ofusion_sources.py.)
 --
--- Grain: code_combination_id, period_name (measured unique over today's data)
+-- Grain: budget_ccid, period_name (measured unique over today's data)
 -- Columns arrive Nullable, so the sorting-key columns are coalesced here:
 -- ClickHouse rejects a MergeTree sorting key over nullable columns.
 --
@@ -22,7 +22,7 @@
 
 select
  CONTROL_BUDGET_ID           as control_budget_id
-,ifNull(CODE_COMBINATION_ID, 0) as code_combination_id
+,ifNull(BUDGET_CCID, 0)      as budget_ccid
 ,PERIOD_SET_NAME             as period_set_name
 ,PERIOD_TYPE                 as period_type
 ,ifNull(PERIOD_NAME, '')     as period_name

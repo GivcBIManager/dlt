@@ -30,6 +30,8 @@ select
 ,TRANSACTION_SOURCE_TYPE_ID      as transaction_source_type_id
 ,TRANSACTION_SOURCE_ID           as transaction_source_id
 ,TRANSACTION_SOURCE_NAME         as transaction_source_name
+,PRODUCT_CODE                    as product_code
+,PRODUCT_TRANSACTION_ID          as product_transaction_id
 ,TRANSACTION_QUANTITY            as transaction_quantity
 ,PRIMARY_QUANTITY                as primary_quantity
 ,SECONDARY_TRANSACTION_QUANTITY  as secondary_transaction_quantity

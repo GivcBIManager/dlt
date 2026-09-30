@@ -59,6 +59,8 @@ select
 ,DESTINATION_TYPE_CODE        as destination_type_code
 ,ACCRUE_ON_RECEIPT_FLAG       as accrue_on_receipt_flag
 ,MATCHING_BASIS               as matching_basis
+,SCHEDULE_MATCHING_BASIS      as schedule_matching_basis
+,ORDER_TYPE_LOOKUP_CODE       as order_type_lookup_code
 ,PO_CREATION_DATE             as po_creation_date
 ,PO_CREATION_DATE_KEY         as po_creation_date_key
 ,APPROVED_DATE                as approved_date
@@ -89,6 +91,8 @@ select
 ,AMOUNT_DELIVERED             as amount_delivered
 ,AMOUNT_BILLED                as amount_billed
 ,AMOUNT_CANCELLED             as amount_cancelled
+,AMOUNT_OPEN_FOR_DELIVERY     as amount_open_for_delivery
+,AMOUNT_OPEN_FOR_BILLING      as amount_open_for_billing
 ,RATE                         as rate
 ,RATE_TYPE                    as rate_type
 ,ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date

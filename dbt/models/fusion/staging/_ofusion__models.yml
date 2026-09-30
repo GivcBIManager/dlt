@@ -233,11 +233,11 @@ models:
             combination_of_columns: [project_id]
 
   - name: dim_supplier
-    description: "conformed.dim_supplier -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 17,278 source rows."
+    description: "conformed.dim_supplier -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 20,369 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
-            combination_of_columns: [vendor_site_id]
+            combination_of_columns: [vendor_id, vendor_site_id]
 
   - name: dim_task
     description: "conformed.dim_task -- Oracle Fusion warehouse, staged 1:1. Grain: UNVERIFIED -- warehouse table is empty; key inferred, not measured."
@@ -359,14 +359,14 @@ models:
             combination_of_columns: [statement_line_id]
 
   - name: fact_budgetary_control_balance
-    description: "finance.fact_budgetary_control_balance -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 14,826 source rows."
+    description: "finance.fact_budgetary_control_balance -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 15,288 source rows."
     data_tests:
       - unique_combination_final:
           arguments:
-            combination_of_columns: [code_combination_id, period_name]
+            combination_of_columns: [budget_ccid, period_name]
 
   - name: fact_expense_item
-    description: "finance.fact_expense_item -- Oracle Fusion warehouse, staged 1:1. Grain: measured unique over 2 source rows."
+    description: "finance.fact_expense_item -- Oracle Fusion warehouse, staged 1:1. Grain: UNVERIFIED -- warehouse table is empty again; key last measured unique over 2 source rows."
     data_tests:
       - unique_combination_final:
           arguments:

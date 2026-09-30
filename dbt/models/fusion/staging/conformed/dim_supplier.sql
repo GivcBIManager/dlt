@@ -2,7 +2,7 @@
     materialized='incremental',
     incremental_strategy='append',
     engine='ReplacingMergeTree(last_update_date)',
-    order_by='(vendor_site_id)'
+    order_by='(vendor_id, vendor_site_id)'
 ) }}
 
 -- conformed.dim_supplier -- Oracle Fusion warehouse, staged 1:1 into `fusion`.
@@ -11,7 +11,9 @@
 -- it is an ordinary model. Edit it freely; nothing regenerates it. (The source
 -- declaration and the Iceberg path ARE regenerated -- see gui/ofusion_sources.py.)
 --
--- Grain: vendor_site_id (measured unique over today's data)
+-- Grain: vendor_id, vendor_site_id (measured unique over today's data)
+-- vendor_site_id alone is NOT unique: a supplier with no site arrives with
+-- VENDOR_SITE_ID = -1, and keying on the site would collapse them all into one row.
 -- Columns arrive Nullable, so the sorting-key columns are coalesced here:
 -- ClickHouse rejects a MergeTree sorting key over nullable columns.
 --
@@ -21,7 +23,7 @@
 -- loads on the first full build and is not picked up by later runs.
 
 select
- VENDOR_ID         as vendor_id
+ ifNull(VENDOR_ID, 0) as vendor_id
 ,VENDOR_NUMBER     as vendor_number
 ,VENDOR_NAME       as vendor_name
 ,PARTY_ID          as party_id

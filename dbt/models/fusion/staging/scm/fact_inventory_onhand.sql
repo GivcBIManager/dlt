@@ -48,6 +48,7 @@ select
 ,AGING_ONSET_DATE_KEY            as aging_onset_date_key
 ,AGING_EXPIRATION_DATE           as aging_expiration_date
 ,AGING_EXPIRATION_DATE_KEY       as aging_expiration_date_key
+,IS_CONSIGNED                    as is_consigned
 ,ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
 from {{ ofusion_source('fact_inventory_onhand', 'scm') }}
 {% if is_incremental() %}

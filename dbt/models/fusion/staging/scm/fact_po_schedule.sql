@@ -41,6 +41,10 @@ select
 ,DOCUMENT_STATUS                as document_status
 ,TYPE_LOOKUP_CODE               as type_lookup_code
 ,REVISION_NUM                   as revision_num
+,AGENT_ID                       as agent_id
+,LINE_TYPE_ID                   as line_type_id
+,NOTE_TO_RECEIVER               as note_to_receiver
+,SCHEDULE_NOTE_TO_RECEIVER      as schedule_note_to_receiver
 ,LINE_STATUS                    as line_status
 ,SCHEDULE_STATUS                as schedule_status
 ,SHIPMENT_TYPE                  as shipment_type

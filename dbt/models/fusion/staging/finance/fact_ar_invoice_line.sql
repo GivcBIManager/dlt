@@ -24,10 +24,12 @@ select
  ifNull(CUSTOMER_TRX_LINE_ID, 0) as customer_trx_line_id
 ,CUSTOMER_TRX_ID        as customer_trx_id
 ,TRX_NUMBER             as trx_number
+,DOC_SEQUENCE_VALUE     as doc_sequence_value
 ,LINE_NUMBER            as line_number
 ,LINE_TYPE              as line_type
 ,COMPLETE_FLAG          as complete_flag
 ,STATUS_TRX             as status_trx
+,CUST_TRX_TYPE_SEQ_ID   as cust_trx_type_seq_id
 ,BILL_TO_CUSTOMER_ID    as bill_to_customer_id
 ,BILL_TO_SITE_USE_ID    as bill_to_site_use_id
 ,BUSINESS_UNIT_ID       as business_unit_id
