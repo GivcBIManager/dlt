@@ -34,7 +34,7 @@ MODEL_TEMPLATE = """\
 -- icebergLocal() directly: the macro emits the same table function AND
 -- registers the table as a dbt source, which is what puts this model on the
 -- lineage graph. The table must be declared in
--- models/staging/_oasis_lake__sources.yml first.
+-- models/oasis_lake/staging/_oasis_lake__sources.yml first.
 --
 -- Document this model (description, tags, column tests) in
 -- models/{layer}/_{layer}__models.yml, or via the Metadata panel on this page.

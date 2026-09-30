@@ -19,7 +19,7 @@ def test_ensure_dbt_profiles_survives_step_worker_sys_path_reset(monkeypatch):
     import dbt_sources
     monkeypatch.setattr(dbt_config, "write_profiles", lambda: None)
     # Likewise the lake -> sources sync, which would otherwise rewrite the real
-    # dbt/models/staging/_oasis_lake__sources.yml from inside the test run.
+    # dbt/models/oasis_lake/staging/_oasis_lake__sources.yml from inside the test run.
     synced = []
     monkeypatch.setattr(dbt_sources, "sync_safe", lambda: synced.append(1))
 

@@ -2,7 +2,7 @@
 
 Every table the dlt pipeline lands under the lake root (``config.ICEBERG_ROOT``)
 is declared as a table of the ``oasis_lake`` dbt source in
-``models/staging/_oasis_lake__sources.yml``. Models read the lake through the
+``models/oasis_lake/staging/_oasis_lake__sources.yml``. Models read the lake through the
 ``iceberg_source()`` macro, which calls ``source()``, and dbt refuses to parse a
 project in which any model names an undeclared table -- so a new lake table has
 to be declared before a model can use it, or every dbt command breaks.
@@ -45,7 +45,7 @@ import tables_store
 log = logging.getLogger(__name__)
 
 SOURCE_NAME = "oasis_lake"
-REL_PATH = Path("models") / "staging" / "_oasis_lake__sources.yml"
+REL_PATH = Path("models") / "oasis_lake" / "staging" / "_oasis_lake__sources.yml"
 
 # tables.json section -> load type recorded on the source table.
 _LOAD_TYPES = {"masters": "master", "transactions": "transaction", "snapshots": "snapshot"}
