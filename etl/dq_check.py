@@ -835,9 +835,28 @@ def _oracle_where_all(tdef: TableDef, win: _Window, coverage: list[str]) -> str:
     return " AND ".join(parts)
 
 
+def _join_hint(tdef: TableDef, win: _Window) -> str:
+    """Optimizer hint for a helper-driven table compared over its OWN date window.
+
+    DQ carries the pipeline's initial floor on the helper (``h.<date> >=
+    2022-01-01``) so it compares only what the pipeline can load. Where the
+    helper's date statistics are skewed by a bad row (DOC on alrabwah holds one
+    dated year 0018), the optimizer reads that floor as highly selective and
+    drives from the parent: every document since 2022, one block at a time --
+    ~11 hours for a month of DOCL. ``LEADING(t) USE_NL(h)`` forces the plan the
+    healthy branches choose unaided: the child's window first, then each parent
+    by key. ``LEADING(t)`` alone still hash-joins against the full parent walk.
+
+    Only with a child window: a full compare has no child range to lead with.
+    """
+    if tdef.is_helper_driven and win.date_col:
+        return "/*+ LEADING(t) USE_NL(h) */ "
+    return ""
+
+
 def _oracle_select(tdef: TableDef, win: _Window, coverage: list[str] = ()) -> str:
     shape = _source_shape(tdef)
-    base = f"SELECT {shape.select} FROM {shape.frm}"
+    base = f"SELECT {_join_hint(tdef, win)}{shape.select} FROM {shape.frm}"
     where = _oracle_where_all(tdef, win, list(coverage))
     return base + (f" WHERE {where}" if where else "")
 
@@ -845,7 +864,8 @@ def _oracle_select(tdef: TableDef, win: _Window, coverage: list[str] = ()) -> st
 def _oracle_count_sql(tdef: TableDef, win: _Window, coverage: list[str] = ()) -> str:
     shape = _source_shape(tdef)
     where = _oracle_where_all(tdef, win, list(coverage))
-    return f"SELECT COUNT(*) FROM {shape.frm}" + (f" WHERE {where}" if where else "")
+    return (f"SELECT {_join_hint(tdef, win)}COUNT(*) FROM {shape.frm}"
+            + (f" WHERE {where}" if where else ""))
 
 
 def _oracle_business_norms(conn, query: str, injected: set[str]) -> tuple[set[str], list[str]]:
