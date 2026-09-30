@@ -1243,6 +1243,17 @@ class _DqProgress:
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
+def _conn_alive(conn) -> bool:
+    """True when the Oracle connection still answers a ping."""
+    if conn is None:
+        return False
+    try:
+        conn.ping()
+        return True
+    except Exception:  # noqa: BLE001 - any failure to ping means it is gone
+        return False
+
+
 def run_dq(
     tables: list[TableDef],
     branches: list[BranchConfig],
@@ -1280,22 +1291,53 @@ def run_dq(
         enabled=settings.progress_enabled,
     ).start()
 
+    def _connect(branch: BranchConfig):
+        import oracledb
+
+        return oracledb.connect(
+            user=branch.username, password=branch.password,
+            dsn=branch.dsn(settings.dsn_mode),
+            tcp_connect_timeout=settings.pool_acquire_timeout_s)
+
     def run_branch(branch: BranchConfig) -> list[DqResult]:
         conn = None
         try:
             if not self_test:
-                import oracledb
-
-                conn = oracledb.connect(
-                    user=branch.username, password=branch.password,
-                    dsn=branch.dsn(settings.dsn_mode),
-                    tcp_connect_timeout=settings.pool_acquire_timeout_s)
+                conn = _connect(branch)
             out = []
+            dead: Optional[str] = None   # why the branch can no longer be reached
             for tdef in tables:
+                if dead is not None:
+                    # The database is down and a reconnect already failed: fail
+                    # the rest fast instead of paying a connect timeout per table.
+                    res_u = DqResult(table=tdef.dataset_table_name, source_table=tdef.table,
+                                     branch=branch.key, status="ERROR", error=dead)
+                    progress.record(res_u)
+                    out.append(res_u)
+                    continue
                 entry = (control.get(tdef.dataset_table_name, {}) or {}).get(branch.key, {})
-                res_u = check_unit(
-                    tdef, branch, settings, lake[tdef.dataset_table_name], entry,
-                    since, until, do_hash, conn=conn, self_test=self_test)
+
+                def _check(c):
+                    return check_unit(
+                        tdef, branch, settings, lake[tdef.dataset_table_name], entry,
+                        since, until, do_hash, conn=c, self_test=self_test)
+
+                res_u = _check(conn)
+                # A unit that failed because the connection itself died (database
+                # restart, killed session, network drop) gets ONE reconnect and
+                # ONE retry, so a single incident no longer fails every remaining
+                # table of the branch with "not connected".
+                if res_u.status == "ERROR" and not self_test and not _conn_alive(conn):
+                    try:
+                        conn = _connect(branch)
+                    except Exception as exc:  # noqa: BLE001 - database still unreachable
+                        dead = (f"connection lost ({res_u.error}); reconnect failed: "
+                                f"{type(exc).__name__}: {exc}")
+                        log.error("[%s] %s", branch.key, dead)
+                    else:
+                        log.warning("[%s/%s] connection lost (%s); reconnected, retrying once",
+                                    tdef.dataset_table_name, branch.key, res_u.error)
+                        res_u = _check(conn)
                 progress.record(res_u)
                 out.append(res_u)
             return out
