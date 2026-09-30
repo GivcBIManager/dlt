@@ -14,9 +14,6 @@
 -- Grain: assignment_record_id (UNVERIFIED -- table is empty)
 -- Columns arrive Nullable, so the sorting-key columns are coalesced here:
 -- ClickHouse rejects a MergeTree sorting key over nullable columns.
--- LAST_UPDATE_DATE also arrives as a STRING from this (empty) table, and
--- ReplacingMergeTree will not take a String version column, so it is parsed to
--- DateTime64(6) here -- the same type the populated models already expose.
 --
 -- The warehouse table is STILL EMPTY, so this grain could not be measured: the
 -- sorting key is inferred from the Fusion table's natural key, and is chosen
@@ -31,7 +28,7 @@
 -- loads on the first full build and is not picked up by later runs.
 
 select
- ifNull(ASSIGNMENT_RECORD_ID, '') as assignment_record_id
+ ifNull(ASSIGNMENT_RECORD_ID, 0) as assignment_record_id
 ,ASSIGNMENT_RECORD_NUMBER  as assignment_record_number
 ,LEARNER_PERSON_ID         as learner_person_id
 ,LEARNING_ITEM_ID          as learning_item_id
@@ -63,8 +60,8 @@ select
 ,TOTAL_ACTUAL_EFFORT       as total_actual_effort
 ,EFFORT_UOM                as effort_uom
 ,RECORD_COUNT              as record_count
-,ifNull(parseDateTime64BestEffortOrNull(LAST_UPDATE_DATE, 6, 'UTC'), toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
+,ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
 from {{ ofusion_source('fact_learning_record', 'hcm') }}
 {% if is_incremental() %}
-where ifNull(parseDateTime64BestEffortOrNull(LAST_UPDATE_DATE, 6, 'UTC'), toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) > (select max(last_update_date) from {{ this }})
+where ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) > (select max(last_update_date) from {{ this }})
 {% endif %}

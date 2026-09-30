@@ -14,9 +14,6 @@
 -- Grain: learning_item_id, valid_from (UNVERIFIED -- table is empty)
 -- Columns arrive Nullable, so the sorting-key columns are coalesced here:
 -- ClickHouse rejects a MergeTree sorting key over nullable columns.
--- LAST_UPDATE_DATE also arrives as a STRING from this (empty) table, and
--- ReplacingMergeTree will not take a String version column, so it is parsed to
--- DateTime64(6) here -- the same type the populated models already expose.
 --
 -- The warehouse table is STILL EMPTY, so this grain could not be measured: the
 -- sorting key is inferred from the Fusion table's natural key, and is chosen
@@ -31,7 +28,7 @@
 -- loads on the first full build and is not picked up by later runs.
 
 select
- ifNull(LEARNING_ITEM_ID, '') as learning_item_id
+ ifNull(LEARNING_ITEM_ID, 0) as learning_item_id
 ,LEARNING_ITEM_NUMBER    as learning_item_number
 ,LEARNING_ITEM_TYPE      as learning_item_type
 ,LEARNING_ITEM_SUB_TYPE  as learning_item_sub_type
@@ -42,11 +39,11 @@ select
 ,DURATION                as duration
 ,DURATION_UOM            as duration_uom
 ,LANGUAGE_CODE           as language_code
-,ifNull(VALID_FROM, '')  as valid_from
+,ifNull(VALID_FROM, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as valid_from
 ,VALID_TO                as valid_to
 ,IS_CURRENT              as is_current
-,ifNull(parseDateTime64BestEffortOrNull(LAST_UPDATE_DATE, 6, 'UTC'), toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
+,ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) as last_update_date
 from {{ ofusion_source('dim_learning_item', 'hcm') }}
 {% if is_incremental() %}
-where ifNull(parseDateTime64BestEffortOrNull(LAST_UPDATE_DATE, 6, 'UTC'), toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) > (select max(last_update_date) from {{ this }})
+where ifNull(LAST_UPDATE_DATE, toDateTime64('1970-01-01 00:00:00', 6, 'UTC')) > (select max(last_update_date) from {{ this }})
 {% endif %}
