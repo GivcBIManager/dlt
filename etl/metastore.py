@@ -99,6 +99,8 @@ def _etl_dq_results_table(md: MetaData, schema: str) -> Table:
         Column("hash_total_delta", BigInteger), Column("hash_delta_pct", Float),
         Column("columns_only_in_oracle", String), Column("columns_only_in_iceberg", String),
         Column("status", String), Column("error_details", String),
+        # Keys Oracle changed after the last load, left out of the hash compare.
+        Column("rows_after_load", BigInteger),
         schema=schema,
     )
 

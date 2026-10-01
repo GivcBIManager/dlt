@@ -11,10 +11,11 @@ table ``etl_dq_results`` in the app metastore and prints a summary:
   table's unique key, bucketed into matched / only-in-oracle / only-in-iceberg /
   hash-mismatch.
 
-The window is the same for both checks: from ``--since`` (default the 1st of the
-current month) up to each ``(table, branch)``'s last-run watermark from the
+The window is the same for both checks: from ``--since`` (default ``[etl] dq_window_days``,
+30, before today) up to each ``(table, branch)``'s last-run watermark from the
 Postgres ``control_state`` table (via ``ControlStore``/``MetaStore``)
-(override with ``--until``).
+(override with ``--until``). Rows Oracle changed after the last load are
+left out of the hash compare on both sides (``rows_after_load``).
 
 Examples
 --------
@@ -99,7 +100,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--tables-file", default="tables.json", help="path to tables.json")
 
     p.add_argument("--since", help="window lower bound YYYY-MM-DD "
-                                   "(default: the 1st of the current month)")
+                                   "(default: [etl] dq_window_days before today, 30)")
     p.add_argument("--until", help="window upper bound YYYY-MM-DD "
                                    "(default: each table+branch's last-run watermark)")
     p.add_argument("--year", type=int,
@@ -125,16 +126,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _default_since(year: int | None, today: dt.date | None = None) -> dt.date:
-    """Window lower bound when ``--since`` is absent: the 1st of this month.
+def _default_since(year: int | None, today: dt.date | None = None,
+                   days: int = 30) -> dt.date:
+    """Window lower bound when ``--since`` is absent: ``days`` before today.
 
-    A month-to-date window keeps the routine run cheap -- the compare cost is
-    driven almost entirely by how many rows fall inside it. ``--year`` still
-    selects that year's Jan 1, so a full year-to-date sweep stays one flag away.
+    A bounded window keeps the routine run cheap -- the compare cost is driven
+    almost entirely by how many rows fall inside it -- and a *rolling* one keeps
+    that row base the same size every day. (Month-to-date collapsed to a few
+    hours on the 1st, where a handful of rows tripped the percent tolerance.)
+    ``--year`` still selects that year's Jan 1, so a full year-to-date sweep
+    stays one flag away.
     """
     if year:
         return dt.date(year, 1, 1)
-    return (today or datetime.now().date()).replace(day=1)
+    return (today or datetime.now().date()) - dt.timedelta(days=days)
 
 
 def main(argv: list[str]) -> int:
@@ -177,7 +182,8 @@ def main(argv: list[str]) -> int:
                   sorted(categories), sorted(table_filter) or "(all)")
         return 2
 
-    since = _parse_date(args.since) or _default_since(args.year)
+    since = _parse_date(args.since) or _default_since(
+        args.year, days=settings.dq_window_days)
     until = _parse_date(args.until)
 
     from etl.metastore import MetaStore

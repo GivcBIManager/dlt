@@ -11,14 +11,17 @@ Two checks are run for every ``(table, branch)`` over **one shared window**:
   ``only_in_iceberg`` / ``hash_mismatch``. This catches content drift that a bare
   count would miss.
 
-The window is **month-to-date .. last run**: from the 1st of the current month
-(the ``--since`` default) up to each ``(table, branch)``'s last-run watermark in the
+The window is **rolling .. last run**: from ``[etl] dq_window_days`` (30) before
+today (the ``--since`` default) up to each ``(table, branch)``'s last-run watermark in the
 Postgres ``control_state`` table (via ``ControlStore``/``MetaStore``) (the
 ``--until`` default). Both checks use the *same*
 window so the count delta and the hash delta describe the same row set. Master
 tables (no date column) are compared in full; helper-driven tables whose
 watermark column differs from their own date column skip the upper bound (see
-``_make_window``).
+``_make_window``). Rows Oracle changed after the last load -- stamped past its
+watermarks -- are left out of the hash compare on both sides and counted in
+``rows_after_load`` (see ``_after_load_mask``): the lake is a snapshot of the
+load, and those rows are drift only until the next run picks them up.
 
 Results are written to the Iceberg table ``etl_dq_results`` (append) in the same
 dataset as the pipeline output -- alongside ``etl_control`` / ``etl_run_log`` --
@@ -466,7 +469,7 @@ def _make_window(
 ) -> _Window:
     """Resolve the shared [since .. until] window for one (table, branch).
 
-    Lower bound: ``since`` (default the 1st of this month). Upper bound: ``until`` if
+    Lower bound: ``since`` (default ``dq_window_days`` before today). Upper bound: ``until`` if
     given, else the branch's last-run date watermark from the Postgres
     ``control_state`` table (via ``ControlStore``/``MetaStore``), in either case
     capped by the table's configured ``where_value_max`` ceiling
@@ -970,6 +973,9 @@ class DqResult:
     cols_only_iceberg: list[str] = field(default_factory=list)
     status: str = "OK"
     error: Optional[str] = None
+    # Keys Oracle changed after the last load, left out of both sides of the
+    # hash compare (see ``_after_load_mask``). None when the hash pass didn't run.
+    rows_after_load: Optional[int] = None
 
     @property
     def row_count_delta(self) -> Optional[int]:
@@ -1005,6 +1011,97 @@ def _accumulate_kh(
         return empty, 0
     kh = pa.table({"k": pa.chunked_array(key_parts), "h": pa.chunked_array(hash_parts)})
     return kh, rows
+
+
+def _wm_python(wm: Optional[dict]):
+    """A stored watermark as a Python value comparable to its Arrow column."""
+    if not wm or wm.get("value") is None:
+        return None
+    value, kind = wm["value"], wm.get("kind", "datetime")
+    try:
+        if kind == "number":
+            return float(value)
+        return dt.datetime.strptime(str(value), _WM_DT_FORMAT)
+    except ValueError:
+        return None
+
+
+def _after_load_mask(tbl: pa.Table, tdef: TableDef, control_entry: dict) -> pa.Array:
+    """Rows of an Oracle batch the last load could not have seen.
+
+    The lake is a snapshot taken at the load; Oracle keeps moving. A row stamped
+    past the load's edge is drift only until the next run picks it up, so it is
+    left out of the compare rather than reported. The edge, per stamp the row has:
+
+    * its own CDC column past the branch's ``last_cdc`` watermark (edited or
+      inserted after the load);
+    * for a helper-driven table, its own date column past the *helper's*
+      ``last_cdc`` watermark -- that watermark is the load's edge in time, and
+      the child has no CDC of its own;
+    * its insert key above ``last_key`` (inserted after the load).
+
+    A NULL stamp can't be placed in time, so that row stays in the compare. A
+    stamp whose column or watermark can't be compared is skipped, not guessed.
+    """
+    entry = control_entry or {}
+    cdc_wm = _wm_python(entry.get("last_cdc"))
+    criteria: list[tuple[str, object]] = []
+    if tdef.is_helper_driven:
+        if tdef.where_date_column:
+            criteria.append((tdef.where_date_column, cdc_wm))
+    elif tdef.cdc_column:
+        criteria.append((tdef.cdc_column, cdc_wm))
+    if tdef.insert_key_column:
+        criteria.append((tdef.insert_key_column, _wm_python(entry.get("last_key"))))
+
+    mask = pa.array([False] * tbl.num_rows, pa.bool_())
+    for col_name, edge in criteria:
+        actual = _resolve_actual(tbl.column_names, _norm(col_name))
+        if actual is None or edge is None:
+            continue
+        col = tbl.column(actual)
+        if isinstance(col, pa.ChunkedArray):
+            col = col.combine_chunks()
+        if pa.types.is_timestamp(col.type) and col.type.tz is not None:
+            col = col.cast(pa.timestamp("us"))
+        try:
+            past = pc.greater(col, pa.scalar(edge, type=col.type))
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, TypeError):
+            log.debug("[%s] %s not comparable to its watermark %r; not used as a "
+                      "load edge", tdef.dataset_table_name, col_name, edge)
+            continue
+        mask = pc.or_(mask, pc.fill_null(past, False))
+    return mask
+
+
+def _drop_after_load(batches: Iterator[pa.Table], tdef: TableDef, control_entry: dict,
+                     key_norm: list[str], dropped: set[str]) -> Iterator[pa.Table]:
+    """Oracle batches without their post-load rows; those rows' keys go to ``dropped``."""
+    for batch in batches:
+        mask = _after_load_mask(batch, tdef, control_entry)
+        if pc.any(mask).as_py():
+            key_actual = [_resolve_actual(batch.column_names, k) for k in key_norm]
+            if all(k is not None for k in key_actual):
+                dropped.update(_fingerprint(batch.filter(mask), key_actual).to_pylist())
+            batch = batch.filter(pc.invert(mask))
+        yield batch
+
+
+def _drop_keys(batches: Iterator[pa.Table], key_norm: list[str],
+               keys: set[str]) -> Iterator[pa.Table]:
+    """Lake batches without the rows whose key Oracle changed after the load.
+
+    The lake still holds the pre-edit version of an edited row; comparing it to
+    nothing would read as a row deleted in Oracle.
+    """
+    drop = pa.array(list(keys), pa.string()) if keys else None
+    for batch in batches:
+        if drop is not None and batch.num_rows:
+            key_actual = [_resolve_actual(batch.column_names, k) for k in key_norm]
+            if all(k is not None for k in key_actual):
+                fp = _fingerprint(batch, key_actual)
+                batch = batch.filter(pc.invert(pc.is_in(fp, value_set=drop)))
+        yield batch
 
 
 def _warn_on_normalizer_drift(res: "DqResult", tdef: TableDef,
@@ -1104,7 +1201,11 @@ def check_unit(
             else:
                 src_batches = _oracle_batches(
                     conn, _oracle_select(tdef, win, coverage), branch.fetch_batch_size)
+            after_load: set[str] = set()
+            src_batches = _drop_after_load(src_batches, tdef, control_entry,
+                                           key_norm, after_load)
             src_kh, src_rows = _accumulate_kh(src_batches, key_norm, common)
+            res.rows_after_load = len(after_load)
             # The windowed hash SELECT returns exactly the windowed COUNT(*) row
             # set, so take the count from the rows pulled (one fewer full scan)
             # and keep it consistent with the rows actually hashed.
@@ -1118,6 +1219,7 @@ def check_unit(
                 ice_batches = (_apply_window_arrow(b, win)
                                for b in _lake_scan_batches(static_table, branch.id,
                                                            scan_actual, snapshot, win))
+                ice_batches = _drop_keys(ice_batches, key_norm, after_load)
                 ice_kh, ice_rows = _accumulate_kh(ice_batches, key_norm, common)
             else:
                 ice_kh, ice_rows = pa.table(
@@ -1399,6 +1501,7 @@ def _result_rows(results: list[DqResult], settings: Settings, run_id: str) -> li
             "hash_delta_pct": r.hash_delta_pct,
             "columns_only_in_oracle": ",".join(r.cols_only_oracle) or None,
             "columns_only_in_iceberg": ",".join(r.cols_only_iceberg) or None,
+            "rows_after_load": r.rows_after_load,
             "status": r.status,
             "error_details": r.error,
         })
@@ -1436,6 +1539,7 @@ _DQ_HINTS = {
     "hash_delta_pct": {"data_type": "double"},
     "columns_only_in_oracle": {"data_type": "text"},
     "columns_only_in_iceberg": {"data_type": "text"},
+    "rows_after_load": {"data_type": "bigint"},
     "status": {"data_type": "text"},
     "error_details": {"data_type": "text"},
 }

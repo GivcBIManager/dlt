@@ -432,6 +432,8 @@ class Settings:
     # Applies to both measured deltas -- row-count and row-hash -- and the larger
     # of the two decides. (0 = strict / no tolerance.)
     dq_hash_delta_tolerance_pct: float = 10.0
+    # DQ window lower bound when --since is absent: this many days before today.
+    dq_window_days: int = 30
 
     # Re-read rows dated within the last N days on every incremental run (0
     # disables), for every table with a date column and a CDC column. Catches
@@ -730,6 +732,7 @@ def load_settings(overrides: Optional[dict[str, Any]] = None) -> Settings:
         load_commit_timeout_s=int(_cfg("etl.load_commit_timeout_s", 900)),
         load_workers=int(_cfg("etl.load_workers", 2)),
         dq_hash_delta_tolerance_pct=float(_cfg("etl.dq_hash_delta_tolerance_pct", 10.0)),
+        dq_window_days=int(_cfg("etl.dq_window_days", 30)),
         cleanup_staging_after_load=bool(_cfg("etl.cleanup_staging_after_load", True)),
         resync_days=_parse_resync_days(_cfg("etl.resync_days", 60)),
     )

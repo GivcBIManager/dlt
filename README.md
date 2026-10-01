@@ -403,9 +403,9 @@ Set the tolerance to `0` for strict reconciliation, where any drift at all is a
 `MISMATCH`. Note that most real drift moves **both** numbers: rows missing from
 the lake widen the count delta *and* land in `only_in_oracle`.
 
-### Window: month-to-date → last run
+### Window: rolling → last run
 
-The window runs from `--since` (default **the 1st of the current month** — MTD; `--year N` widens it to that year's Jan 1) up to
+The window runs from `--since` (default **`[etl] dq_window_days` before today**, 30 — a rolling window, so the row base is the same size every day; `--year N` widens it to that year's Jan 1) up to
 each `(table, branch)`'s **last-run watermark** in the Postgres
 `etl_meta.control_state` table (`--until` overrides it). Both checks use this
 same window.
@@ -416,6 +416,15 @@ same window.
   units — the result row's `window_note` records this.
 - Numeric/Julian date columns (e.g. `APPOINTMENTS.JULIAN_DATE`) are windowed with
   the equivalent Julian-day literal on both sides.
+- **Rows changed after the last load** are left out of the hash compare on both
+  sides and counted in `rows_after_load`: a row whose CDC column is past the
+  branch's `last_cdc` watermark, whose insert key is above `last_key`, or — for a
+  helper-driven table — whose own date column is past the helper's `last_cdc`.
+  The lake is a snapshot of the load, so these are drift only until the next run
+  picks them up. Rows with a NULL stamp stay in the compare. Edits that don't bump
+  any stamp can't be placed in time and still show until the re-read window
+  (`resync_days`) reloads them. The counts-only mode (`--no-hash`) doesn't apply
+  this exclusion.
 
 ### How the hash stays comparable across engines
 
