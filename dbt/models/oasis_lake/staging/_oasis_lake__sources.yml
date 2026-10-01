@@ -497,6 +497,24 @@ sources:
           unique_key: "MASTER_DELIVERY_NO"
           cdc_column: "AMEND_LAST_DATE"
 
+      - name: operating_diary_slots
+        description: Oracle OASIS.OPERATING_DIARY_SLOTS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.OPERATING_DIARY_SLOTS
+          load_type: transaction
+          unique_key: OPERATING_SLOT_CODE
+          cdc_column: AMEND_LAST_DATE
+
+      - name: operating_slot_details
+        description: Oracle OASIS.OPERATING_SLOT_DETAILS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: OASIS.OPERATING_SLOT_DETAILS
+          load_type: transaction
+          unique_key: OPERATING_SLOT_CODE,OPERATION_SEQ
+          cdc_column: AMEND_LAST_DATE
+
       - name: order_lines
         description: Oracle OASIS.ORDER_LINES, loaded by the dlt pipeline as a transaction table. Not yet documented.
         tags: [transaction]

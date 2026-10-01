@@ -360,6 +360,20 @@ models:
           arguments:
             combination_of_columns: [branch_id, master_delivery_no]
 
+  - name: operating_diary_slots
+    description: "OASIS.OPERATING_DIARY_SLOTS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 3,390,336 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, operating_slot_code]
+
+  - name: operating_slot_details
+    description: "OASIS.OPERATING_SLOT_DETAILS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 160,396 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, operating_slot_code, operation_seq]
+
   - name: order_lines
     description: "OASIS.ORDER_LINES staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 58,414,635 lake rows."
     data_tests:
