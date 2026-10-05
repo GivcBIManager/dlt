@@ -80,6 +80,13 @@ models:
           arguments:
             combination_of_columns: [branch_id, id]
 
+  - name: api_pull_response_details
+    description: "DEVDBA.API_PULL_RESPONSE_DETAILS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 7,265,658 lake rows."
+    data_tests:
+      - unique_grain_per_version:
+          arguments:
+            combination_of_columns: [branch_id, response_id]
+
   - name: appointments
     description: "OASIS.APPOINTMENTS staged 1:1 from the Oasis lake (transaction load). Grain: measured unique over 425,387,542 lake rows."
     data_tests:

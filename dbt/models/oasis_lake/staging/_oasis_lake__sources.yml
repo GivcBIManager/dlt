@@ -107,6 +107,15 @@ sources:
           unique_key: ID
           cdc_column: AMEND_LAST_DATE
 
+      - name: api_pull_response_details
+        description: Oracle DEVDBA.API_PULL_RESPONSE_DETAILS, loaded by the dlt pipeline as a transaction table. Not yet documented.
+        tags: [transaction]
+        meta:
+          oracle_table: DEVDBA.API_PULL_RESPONSE_DETAILS
+          load_type: transaction
+          unique_key: RESPONSE_ID
+          cdc_column: AMEND_LAST_DATE
+
       - name: appointments
         description: >
           Outpatient appointment bookings; one row per appointment slot, including future (scheduled) bookings.
